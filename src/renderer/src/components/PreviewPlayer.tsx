@@ -1,20 +1,21 @@
 /**
- * PreviewPlayer — HTML5 `<video>` scrubbing of the SOURCE video, seeked to the
- * selected clip's effective bounds (TIMELINE spine, plan E.5 / PRD §6.6 / §11.1
- * center column). NO FFmpeg — pure renderer scrubbing of the original file,
- * loaded over the privileged `openclip-media://` scheme (PRD §6.6 "HTML5 <video>
- * on a registered file:-safe protocol").
+ * PreviewPlayer — WYSIWYG preview (Part K, Step 3). HTML5 `<video>` scrubbing of
+ * the SOURCE (over the privileged `openclip-media://` scheme), now CSS-CROPPED to
+ * the target aspect column and overlaid with LIVE karaoke captions in the selected
+ * template — so the preview shows (approximately) what the export will burn,
+ * instead of the raw letterboxed source.
  *
- * Behaviour:
- *   - loads the source via `sourceMediaUrl(project.sourceVideo.path)`,
- *   - clamps playback to the selected clip's `resolveBounds` (editedStart/End ??
- *     startTime/endTime) — seeking to the IN point on clip change and pausing at
- *     the OUT point so the preview shows exactly the clip the timeline trims,
- *   - play / pause (wired to the shared `isPlaying` so the timeline Space key
- *     drives it too),
- *   - a current-time + clip-span readout,
- *   - keeps the store `playhead` in sync on `timeupdate` so the Timeline playhead
- *     marker tracks playback.
+ * Crop: the frame is an aspect-ratio box with `overflow:hidden`; the video fills
+ * the frame HEIGHT and is centered horizontally (`left:50%` + `translateX(-50%)`),
+ * which is exactly a horizontal center-crop for any source aspect (matches the
+ * static export `crop`). Face-follow ('auto'/'split') is computed at export time
+ * in the main process (YuNet), so the preview shows the center-crop framing plus
+ * an "auto-reframe on export" badge (LOCKED decision — no proxy render, no IPC).
+ *
+ * Captions: `useKaraokeCaption` reuses the SAME shared layout + annotation the
+ * burn uses, so line breaks / keyword emphasis / emoji match. DOM `currentTime`
+ * isn't frame-accurate, so the active word uses a ~100ms tolerance (approximation;
+ * the burn is libass-exact). Transport / seek / playhead-sync are unchanged.
  */
 
 import { useCallback, useEffect, useMemo, useRef } from 'react'
@@ -22,6 +23,10 @@ import { useProjectStore } from '@renderer/stores/projectStore'
 import { resolveBounds } from '@shared/clip-bounds'
 import { sourceMediaUrl } from '@renderer/components/source-media'
 import { formatTime } from '@renderer/components/timeline-math'
+import { resolveEffectiveCaptionStyle } from '@renderer/components/captionPresets'
+import { cssAspectRatio } from '@renderer/components/preview-crop'
+import { captionContainerStyle, captionWordStyle } from '@renderer/components/caption-css'
+import { useKaraokeCaption } from '@renderer/components/useKaraokeCaption'
 import { Button } from '@renderer/components/ui/button'
 import { Play, Pause } from 'lucide-react'
 
@@ -35,24 +40,45 @@ export function PreviewPlayer(): React.JSX.Element {
   const setPlaying = useProjectStore((s) => s.setPlaying)
   const setPlayhead = useProjectStore((s) => s.setPlayhead)
   const playhead = useProjectStore((s) => s.playhead)
+  const transcript = useProjectStore((s) => s.transcript)
+  // Part K: shared preview/compose selection (single source with ExportPanel).
+  const aspectOverride = useProjectStore((s) => s.aspectOverride)
+  const reframeMode = useProjectStore((s) => s.reframeMode)
+  const captionsPreviewEnabled = useProjectStore((s) => s.captionsPreviewEnabled)
 
   const sourceVideo = currentProject?.sourceVideo ?? null
   const src = sourceMediaUrl(sourceVideo?.path ?? null)
 
   const clip = clips.find((c) => c.id === selectedClipId) ?? clips[0] ?? null
-  // With no clip yet (right after an import), fall back to the FULL source span so
-  // the imported video is immediately playable/scrubbable. Otherwise `bounds` is
-  // null → the transport is disabled and the preview looks "not playable" (G.1).
-  // Memoized so the object identity is stable across renders (keeps the
-  // useCallback deps below from changing every render).
   const bounds = useMemo(
     () =>
       clip ? resolveBounds(clip) : sourceVideo ? { start: 0, end: sourceVideo.duration } : null,
     [clip, sourceVideo]
   )
 
-  // On clip change, seek the <video> to the clip's IN point so the preview
-  // starts at the trimmed span (PRD §6.6).
+  const aspect = aspectOverride ?? currentProject?.settings.aspectRatio ?? '9:16'
+  const captionTemplateId = currentProject?.settings.captionTemplateId ?? ''
+  const captionStyle = useMemo(
+    () => resolveEffectiveCaptionStyle(captionTemplateId),
+    [captionTemplateId]
+  )
+  const words = useMemo(
+    () => transcript?.words ?? currentProject?.transcript.words ?? [],
+    [transcript, currentProject]
+  )
+
+  // Live active caption line at the current playhead (rebased + annotated like the burn).
+  const active = useKaraokeCaption({
+    words,
+    clipStart: bounds?.start ?? 0,
+    clipEnd: bounds?.end ?? 0,
+    style: captionStyle,
+    playhead,
+    keywords: clip?.keywords
+  })
+  const showCaptions = captionsPreviewEnabled && words.length > 0 && active !== null
+
+  // On clip change, seek to the IN point (unchanged behaviour).
   useEffect(() => {
     const v = videoRef.current
     if (!v || !bounds) return
@@ -60,13 +86,9 @@ export function PreviewPlayer(): React.JSX.Element {
       v.currentTime = bounds.start
     }
     setPlayhead(bounds.start)
-    // Only re-seek when the selected clip's IN point changes (a retrim of the
-    // in-handle), not on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clip?.id, bounds?.start])
 
-  // Drive play/pause from the shared `isPlaying` (so the Timeline Space key and
-  // the button stay in sync).
   useEffect(() => {
     const v = videoRef.current
     if (!v || !src) return
@@ -74,8 +96,6 @@ export function PreviewPlayer(): React.JSX.Element {
     else v.pause()
   }, [isPlaying, src, setPlaying])
 
-  // Keep the store playhead in sync; pause + clamp at the OUT point so preview
-  // never runs past the trimmed span.
   const handleTimeUpdate = useCallback((): void => {
     const v = videoRef.current
     if (!v) return
@@ -92,7 +112,6 @@ export function PreviewPlayer(): React.JSX.Element {
   const togglePlay = useCallback((): void => {
     const v = videoRef.current
     if (!v || !bounds) return
-    // Restart from the IN point if we're parked at/after the OUT point.
     if (!isPlaying && v.currentTime >= bounds.end - 0.01) {
       v.currentTime = bounds.start
     }
@@ -101,23 +120,68 @@ export function PreviewPlayer(): React.JSX.Element {
 
   return (
     <div data-testid="preview-player" className="flex flex-col gap-2">
-      <div className="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-md bg-black/80">
-        {src ? (
-          <video
-            ref={videoRef}
-            data-testid="preview-video"
-            src={src}
-            className="h-full w-full object-contain"
-            onTimeUpdate={handleTimeUpdate}
-            onPlay={() => setPlaying(true)}
-            onPause={() => setPlaying(false)}
-            preload="metadata"
-          />
-        ) : (
-          <span className="text-sm text-white/60" data-testid="preview-empty">
-            No source video — import a video to preview.
-          </span>
-        )}
+      {/* The aspect-cropped frame: container-type drives caption `cqw` font sizing. */}
+      <div className="flex w-full items-center justify-center">
+        <div
+          data-testid="preview-frame"
+          className="relative h-[60vh] max-h-[640px] overflow-hidden rounded-md bg-black"
+          style={{ aspectRatio: cssAspectRatio(aspect), containerType: 'inline-size' }}
+        >
+          {src ? (
+            <>
+              <video
+                ref={videoRef}
+                data-testid="preview-video"
+                src={src}
+                // Center-crop: fill the frame height, center horizontally, clip sides.
+                style={{
+                  position: 'absolute',
+                  height: '100%',
+                  width: 'auto',
+                  maxWidth: 'none',
+                  left: '50%',
+                  transform: 'translateX(-50%)'
+                }}
+                onTimeUpdate={handleTimeUpdate}
+                onPlay={() => setPlaying(true)}
+                onPause={() => setPlaying(false)}
+                preload="metadata"
+              />
+              {showCaptions && active && (
+                <div data-testid="preview-captions" style={captionContainerStyle(captionStyle)}>
+                  {active.words.map((w, i) => (
+                    <span
+                      key={i}
+                      style={captionWordStyle(captionStyle, {
+                        active: i === active.activeIndex,
+                        keyword: w.isKeyword
+                      })}
+                    >
+                      {i > 0 ? ' ' : ''}
+                      {w.word}
+                      {w.emoji ? ` ${w.emoji}` : ''}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {reframeMode !== 'off' && (
+                <span
+                  data-testid="reframe-badge"
+                  className="absolute right-1.5 top-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-white/90"
+                >
+                  Auto-reframe on export
+                </span>
+              )}
+            </>
+          ) : (
+            <span
+              className="flex h-full w-full items-center justify-center text-sm text-white/60"
+              data-testid="preview-empty"
+            >
+              No source video — import a video to preview.
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Transport + readout (PRD §6.6: play/pause + current-time display). */}

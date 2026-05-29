@@ -55,6 +55,10 @@ export function ExportPanel(): React.JSX.Element {
   const composeProject = useProjectStore((s) => s.composeProject)
   const addExportRecord = useProjectStore((s) => s.addExportRecord)
   const setProjectSettings = useProjectStore((s) => s.setProjectSettings)
+  // Part K: reframe lives in the shared previewSlice so the preview badge + the
+  // export use one source of truth.
+  const reframe = useProjectStore((s) => s.reframeMode)
+  const setReframe = useProjectStore((s) => s.setReframeMode)
 
   const transcript = useProjectStore((s) => s.transcript)
 
@@ -67,8 +71,6 @@ export function ExportPanel(): React.JSX.Element {
   const [captionsEnabled, setCaptionsEnabled] = useState(true)
   // Remove long silences via jump-cuts (Part I.4, opt-in, default off).
   const [removeSilence, setRemoveSilence] = useState(false)
-  // Auto-reframe (Part J, opt-in, default off): follow the speaker / split-screen.
-  const [reframe, setReframe] = useState<'off' | 'auto' | 'split'>('off')
 
   const words = transcript?.words ?? currentProject?.transcript.words ?? []
   const hasWords = words.length > 0

@@ -124,7 +124,14 @@ describe('whisper-parse — segment grouping edge cases', () => {
 
   it('handles empty transcription without throwing', () => {
     const out = parseWhisperJson({ transcription: [] })
-    expect(out).toEqual({ language: 'en', words: [], segments: [] })
+    expect(out).toEqual({ language: 'auto', words: [], segments: [] })
+  })
+
+  it('labels a missing result.language as "auto", never a wrong "en" (Part I)', () => {
+    // whisper omitting the detected language must NOT silently become English —
+    // that mislabeled non-English transcripts (the cross-language bug).
+    expect(parseWhisperJson({ transcription: [] }).language).toBe('auto')
+    expect(parseWhisperJson({ result: {}, transcription: [] }).language).toBe('auto')
   })
 })
 

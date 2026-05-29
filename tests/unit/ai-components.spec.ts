@@ -23,7 +23,9 @@ import {
   PROVIDERS,
   filterModels,
   partitionRecommended,
-  formatModelPrice
+  formatModelPrice,
+  LANGUAGES,
+  languageLabel
 } from '@renderer/components/settingsView'
 import { clipsFixture } from '../fixtures/contract'
 import type { Clip } from '@shared/schema'
@@ -129,5 +131,21 @@ describe('model-picker helpers (Part H — OpenRouter)', () => {
     )
     expect(formatModelPrice(mk({ id: 'b', pricePerMTokIn: 0, pricePerMTokOut: 0 }))).toBe('Free')
     expect(formatModelPrice(mk({ id: 'c' }))).toBe('')
+  })
+})
+
+describe('transcription language helpers (Part I — cross-language)', () => {
+  it('LANGUAGES leads with Auto-detect (empty code) and includes Indonesian', () => {
+    expect(LANGUAGES[0]).toEqual({ code: '', label: 'Auto-detect' })
+    expect(LANGUAGES.find((l) => l.code === 'id')?.label).toBe('Indonesian')
+  })
+
+  it('languageLabel maps undefined/empty → Auto-detect, known → label, unknown → uppercased code', () => {
+    expect(languageLabel(undefined)).toBe('Auto-detect')
+    expect(languageLabel('')).toBe('Auto-detect')
+    expect(languageLabel('  ')).toBe('Auto-detect')
+    expect(languageLabel('id')).toBe('Indonesian')
+    expect(languageLabel('en')).toBe('English')
+    expect(languageLabel('sw')).toBe('SW') // unknown ISO code rendered verbatim, uppercased
   })
 })

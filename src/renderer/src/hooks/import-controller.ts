@@ -81,6 +81,14 @@ export interface ImportControllerDeps {
    * for URL imports (the downloaded file is app-owned); file imports skip it.
    */
   adoptSource?(projectId: string, filePath: string): Promise<{ path: string }>
+  /**
+   * Source transcription language (PRD §6.2 / Part I cross-language). Read LAZILY
+   * at import time so the latest Settings value is used without rebuilding the
+   * controller (mirrors the `onNeedModel` ref pattern in `useImportController`).
+   * Returns undefined/'' ⇒ whisper auto-detect (no `-l` flag); an ISO-639-1 code
+   * ⇒ whisper transcribes in that language.
+   */
+  getLanguage?(): string | undefined
   /** Injectable pipeline fns (default the real ones) so the core is testable headless. */
   runImportPipeline?: typeof defaultRunImportPipeline
   runUrlDownload?: typeof defaultRunUrlDownload
@@ -169,6 +177,9 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
       filePath: sourcePath,
       projectId,
       model,
+      // Source language for whisper (undefined/'' ⇒ auto-detect). Read lazily so
+      // the latest Settings value applies without rebuilding the controller.
+      language: deps.getLanguage?.(),
       onProgress: (p, s) => {
         const scaled = base + Math.round((p / 100) * span)
         set({ pct: scaled, stage: s })

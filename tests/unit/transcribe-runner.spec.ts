@@ -107,3 +107,45 @@ describe('transcribe-runner: missing model surfaces a typed input error', () => 
     ).rejects.toThrow(/model.*not installed|not installed/i)
   })
 })
+
+describe('transcribe-runner: requested language is authoritative (Part I cross-language)', () => {
+  const ctx = { signal: new AbortController().signal, trackPid: () => {}, jobId: 'j1' }
+  const emit = { progress: () => {}, partial: () => {}, done: () => {}, error: () => {} }
+
+  it('passes the requested language to whisper (-l) and uses it over the detected label', async () => {
+    let passedLang: string | undefined = 'UNSET'
+    const runner = createTranscribeRunner({
+      resolveModelPath: () => '/m.bin',
+      isModelInstalled: () => true,
+      runWhisper: async (o) => {
+        passedLang = o.language
+        return {
+          language: 'en', // whisper guessed wrong / reported English
+          words: transcriptFixture.words,
+          segments: transcriptFixture.segments
+        }
+      }
+    })
+    const result = await runner(
+      { projectId: 'p1', wavPath: '/a.wav', model: 'base', language: 'id' },
+      emit,
+      ctx
+    )
+    expect(passedLang).toBe('id') // `-l id` reached whisper
+    expect(result.language).toBe('id') // the requested language wins over 'en'
+  })
+
+  it('falls back to the detected language when none was requested (auto-detect)', async () => {
+    const runner = createTranscribeRunner({
+      resolveModelPath: () => '/m.bin',
+      isModelInstalled: () => true,
+      runWhisper: async () => ({
+        language: 'fr',
+        words: transcriptFixture.words,
+        segments: transcriptFixture.segments
+      })
+    })
+    const result = await runner({ projectId: 'p1', wavPath: '/a.wav', model: 'base' }, emit, ctx)
+    expect(result.language).toBe('fr')
+  })
+})

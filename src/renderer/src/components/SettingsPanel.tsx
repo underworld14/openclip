@@ -30,9 +30,15 @@ import {
   PROVIDERS,
   filterModels,
   partitionRecommended,
-  formatModelPrice
+  formatModelPrice,
+  LANGUAGES,
+  languageLabel
 } from '@renderer/components/settingsView'
 import type { ModelInfo } from '@shared/channels'
+
+/** Radix Select forbids an empty-string item value, so Auto-detect uses this
+ * sentinel in the picker and maps to `Settings.language = undefined` on save. */
+const AUTO_LANG = 'auto'
 
 /** A labelled group of model rows in the OpenRouter picker (Part H). */
 function ModelGroup(props: {
@@ -90,6 +96,12 @@ export function SettingsPanel(): React.JSX.Element {
 
   const provider = settings.aiProvider
   const status = keyStatus[provider]
+
+  // Transcription language (Part I): the Select shows the curated list (Auto-detect
+  // via the AUTO_LANG sentinel); a custom ISO code lives in the free-text field
+  // below and is reflected when the stored code isn't one of the listed options.
+  const langIsListed = LANGUAGES.some((l) => l.code === settings.language)
+  const langSelectValue = settings.language && langIsListed ? settings.language : AUTO_LANG
 
   // Auto-load the OpenRouter model list once per provider selection. Gate on
   // modelsFetchedAt (a positive "attempted" signal reset to null on provider
@@ -241,6 +253,36 @@ export function SettingsPanel(): React.JSX.Element {
         <p className="text-xs text-muted-foreground">
           The key is encrypted with the OS keychain (safeStorage) and used only on this device for
           outbound AI calls. It is never sent to OpenClip.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-1.5" data-testid="language-picker">
+        <Label htmlFor="transcribe-language">Transcription language</Label>
+        <Select
+          value={langSelectValue}
+          onValueChange={(v) => void save({ language: v === AUTO_LANG ? undefined : v })}
+        >
+          <SelectTrigger id="transcribe-language">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {LANGUAGES.map((l) => (
+              <SelectItem key={l.code || AUTO_LANG} value={l.code || AUTO_LANG}>
+                {l.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Input
+          aria-label="Custom language ISO code"
+          placeholder="Or a custom ISO-639-1 code, e.g. sw, fa, bn"
+          value={langIsListed ? '' : (settings.language ?? '')}
+          onChange={(e) => void save({ language: e.target.value.trim() || undefined })}
+        />
+        <p className="text-xs text-muted-foreground">
+          Transcribing in: <span className="font-medium">{languageLabel(settings.language)}</span>.
+          Auto-detect lets whisper guess the language; set it explicitly if detection picks the
+          wrong language (e.g. an Indonesian video transcribed as English).
         </p>
       </div>
     </div>

@@ -26,7 +26,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, statSync, openSync, readSync, closeSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -107,17 +107,47 @@ runVersion(bins['whisper-cli'], ['-h'], 'whisper-cli -h', /usage:|whisper|model/
 verifyYtDlpFromBundle(bins['yt-dlp'])
 
 /**
+ * True iff the file begins with a NATIVE-executable magic (Mach-O / ELF / PE) and
+ * is NOT a `#!`-shebang script. This is what makes the "no Python" guarantee real:
+ * a yt-dlp PYTHON ZIPAPP starts with `#!/usr/bin/env python3` and would otherwise
+ * run `--version` via the host's python3 (a false pass on any box with python3).
+ */
+function isNativeExecutable(bin) {
+  const fd = openSync(bin, 'r')
+  const buf = Buffer.alloc(4)
+  try {
+    readSync(fd, buf, 0, 4, 0)
+  } finally {
+    closeSync(fd)
+  }
+  if (buf[0] === 0x23 && buf[1] === 0x21) return false // '#!' shebang → script, reject
+  const be = buf.readUInt32BE(0)
+  const MACHO = [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca]
+  if (MACHO.includes(be)) return true // Mach-O (thin LE/BE + fat)
+  if (buf[0] === 0x7f && buf[1] === 0x45 && buf[2] === 0x4c && buf[3] === 0x46) return true // ELF
+  if (buf[0] === 0x4d && buf[1] === 0x5a) return true // 'MZ' PE
+  return false
+}
+
+/**
  * yt-dlp from the bundle (F.4 / G.6). We ship the SELF-CONTAINED standalone
- * release (no Python), so it MUST run `--version` DIRECTLY and emit a date-stamped
- * version line (e.g. "2026.03.17"). We deliberately do NOT fall back to a host
- * python interpreter — a binary that only runs under external Python is exactly
- * the fragile artifact this gate (and the bundle-time verifier) must reject.
+ * release (no Python). Assert it is a NATIVE executable (not a python zipapp —
+ * otherwise a host python3 would falsely satisfy --version), then that it runs
+ * `--version` directly and emits a date-stamped version (e.g. "2026.03.17").
  */
 function verifyYtDlpFromBundle(bin) {
+  if (!isNativeExecutable(bin)) {
+    fail(
+      `bundled yt-dlp is NOT a native standalone executable (looks like a #!/script ` +
+        `or unknown format). It must be the standalone yt-dlp release (no Python dependency).`
+    )
+  }
   const versionOk = (out) => /^\s*\d{4}\.\d{2}\.\d{2}\b/m.test(out)
   const direct = spawnSync(bin, ['--version'], { encoding: 'utf8' })
   if (!direct.error && direct.status === 0 && versionOk(direct.stdout ?? '')) {
-    log(`yt-dlp --version runs from bundle → ${(direct.stdout ?? '').trim().split('\n')[0]}`)
+    log(
+      `yt-dlp --version runs from bundle (native standalone) → ${(direct.stdout ?? '').trim().split('\n')[0]}`
+    )
     return
   }
   fail(

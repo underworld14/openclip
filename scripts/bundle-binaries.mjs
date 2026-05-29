@@ -223,6 +223,23 @@ function verifyPortable(bin, label) {
  * (e.g. "2026.03.17") — a Python traceback or empty output is a hard failure.
  */
 function verifyYtDlpRuns(bin) {
+  // Assert it's a NATIVE executable (Mach-O/ELF/PE), not a `#!` python zipapp —
+  // otherwise a host python3 would satisfy --version (a false pass on the "no
+  // Python" guarantee). Magic-byte check mirrors verify-package.mjs.
+  const head = readFileSync(bin).subarray(0, 4)
+  const be = head.length >= 4 ? head.readUInt32BE(0) : 0
+  const MACHO = [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca]
+  const isNative =
+    !(head[0] === 0x23 && head[1] === 0x21) && // not '#!'
+    (MACHO.includes(be) ||
+      (head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46) || // ELF
+      (head[0] === 0x4d && head[1] === 0x5a)) // 'MZ' PE
+  if (!isNative) {
+    fail(
+      `bundled yt-dlp is NOT a native standalone executable (looks like a #!/script). ` +
+        `It must be the standalone yt-dlp release (no Python).`
+    )
+  }
   const r = spawnSync(bin, ['--version'], { encoding: 'utf8' })
   const out = (r.stdout ?? '').trim()
   if (r.error || r.status !== 0 || !/^\d{4}\.\d{2}\.\d{2}/.test(out)) {
@@ -231,7 +248,7 @@ function verifyYtDlpRuns(bin) {
         `status=${r.status}). It must be the standalone yt-dlp release (no Python).`
     )
   }
-  log(`yt-dlp OK: self-contained, runs (--version → ${out.split('\n')[0]})`)
+  log(`yt-dlp OK: native standalone, runs (--version → ${out.split('\n')[0]})`)
 }
 
 function verifyWhisperRuns(bin) {
@@ -259,7 +276,15 @@ const dest = {
   ffmpeg: join(repoRoot, 'resources', 'ffmpeg', platArch, 'ffmpeg'),
   ffprobe: join(repoRoot, 'resources', 'ffmpeg', platArch, 'ffprobe'),
   whisper: join(repoRoot, 'resources', 'whisper', platArch, 'whisper-cli'),
-  ytdlp: join(repoRoot, 'resources', 'yt-dlp', platArch, 'yt-dlp')
+  // Keep the .exe on win32 so paths.ytDlpPath() (which appends .exe on Windows)
+  // resolves the staged binary — CreateProcess won't auto-append it (G.7/G.6).
+  ytdlp: join(
+    repoRoot,
+    'resources',
+    'yt-dlp',
+    platArch,
+    process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'
+  )
 }
 
 log(`target plat-arch: ${platArch}`)

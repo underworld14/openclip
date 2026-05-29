@@ -129,8 +129,16 @@ export function parseTitle(stdout: string): string | undefined {
   for (const raw of stdout.split(/\r?\n/)) {
     const line = raw.trim()
     if (line.startsWith(TITLE_PRINT_PREFIX)) {
-      const title = line.slice(TITLE_PRINT_PREFIX.length).trim()
-      if (title) return title
+      const rest = line.slice(TITLE_PRINT_PREFIX.length).trim()
+      if (!rest) continue
+      // Printed via %(title)j (JSON-encoded) so the title is always a single line
+      // even if it contains newlines/quotes; JSON.parse it. Tolerate a bare value.
+      try {
+        const parsed = JSON.parse(rest)
+        return typeof parsed === 'string' && parsed ? parsed : undefined
+      } catch {
+        return rest
+      }
     }
   }
   return undefined
@@ -221,13 +229,54 @@ export interface UrlDownloadResult {
   bytes: number
 }
 
+/** Options for an ffmpeg run / remux: pid registration + cancellation. */
+interface FfmpegRunOptions {
+  /** Register the spawned pid so the SidecarManager can SIGTERM→SIGKILL it on quit. */
+  onPid?: (pid: number) => void
+  /** Cancel: SIGKILL the ffmpeg child if this aborts. */
+  signal?: AbortSignal
+}
+
 /** Run ffmpeg with args; resolves true on a clean exit-0 (best-effort, never throws). */
-function runFfmpeg(ffmpegBin: string, args: string[]): Promise<boolean> {
+function runFfmpeg(
+  ffmpegBin: string,
+  args: string[],
+  opts: FfmpegRunOptions = {}
+): Promise<boolean> {
   return new Promise((resolve) => {
     const p = spawn(ffmpegBin, args, { stdio: 'ignore' })
-    p.on('error', () => resolve(false))
-    p.on('close', (code) => resolve(code === 0))
+    if (typeof p.pid === 'number') opts.onPid?.(p.pid)
+    const onAbort = (): void => {
+      try {
+        p.kill('SIGKILL')
+      } catch {
+        /* already gone */
+      }
+    }
+    opts.signal?.addEventListener('abort', onAbort, { once: true })
+    const done = (ok: boolean): void => {
+      opts.signal?.removeEventListener('abort', onAbort)
+      resolve(ok)
+    }
+    p.on('error', () => done(false))
+    p.on('close', (code) => done(code === 0))
   })
+}
+
+/** Injectable runner type (tests). */
+export type FfmpegRunner = (
+  bin: string,
+  args: string[],
+  opts?: FfmpegRunOptions
+) => Promise<boolean>
+
+export interface FaststartOptions {
+  /** Injectable ffmpeg runner (tests). Defaults to the real `runFfmpeg`. */
+  run?: FfmpegRunner
+  /** Register the ffmpeg pid (→ ctx.trackPid) so it's killed on quit (PRD §17). */
+  onPid?: (pid: number) => void
+  /** Cancel the remux on abort; also skips entirely if already aborted. */
+  signal?: AbortSignal
 }
 
 /**
@@ -235,31 +284,33 @@ function runFfmpeg(ffmpegBin: string, args: string[]): Promise<boolean> {
  * via `-c copy` (no re-encode → fast) so the preview `<video>` can start playing
  * and seeking without first downloading the whole file (G.1 — fixes the "long
  * wait to load"). Guaranteed for BOTH merged and single-file downloads. Best-
- * effort: on any failure the original file is left untouched (it still plays,
- * just slower). `run` is injectable for tests.
+ * effort: on any failure (or cancel) the original file is left untouched (it
+ * still plays, just slower). The ffmpeg child is pid-tracked + cancel-aware so a
+ * quit/cancel mid-remux never orphans it (PRD §17).
  */
 export async function faststartRemux(
   filePath: string,
   ffmpegBin: string,
-  run: (bin: string, args: string[]) => Promise<boolean> = runFfmpeg
+  opts: FaststartOptions = {}
 ): Promise<void> {
+  if (opts.signal?.aborted) return // don't start a remux for an already-cancelled job
+  const run = opts.run ?? runFfmpeg
   const tmp = `${filePath}.faststart.mp4`
   try {
-    const ok = await run(ffmpegBin, [
-      '-y',
-      '-i',
-      filePath,
-      '-c',
-      'copy',
-      '-movflags',
-      '+faststart',
-      tmp
-    ])
-    if (ok && existsSync(tmp)) {
-      renameSync(tmp, filePath)
-    } else if (existsSync(tmp)) {
-      rmSync(tmp, { force: true })
+    const ok = await run(
+      ffmpegBin,
+      ['-y', '-i', filePath, '-c', 'copy', '-movflags', '+faststart', tmp],
+      {
+        onPid: opts.onPid,
+        signal: opts.signal
+      }
+    )
+    // Cancelled mid-remux: discard the (possibly partial) tmp, keep the original.
+    if (opts.signal?.aborted || !ok) {
+      if (existsSync(tmp)) rmSync(tmp, { force: true })
+      return
     }
+    if (existsSync(tmp)) renameSync(tmp, filePath)
   } catch {
     try {
       if (existsSync(tmp)) rmSync(tmp, { force: true })
@@ -304,8 +355,9 @@ export function ytDlpFlags(outDir: string, ffmpegDir: string): Record<string, un
     noPlaylist: true, // a single video even if the URL is a playlist item
     ffmpegLocation: ffmpegDir, // use OUR bundled ffmpeg for the mux
     // Final merged path (plain abs path → parseFinalFilePath) + the human title
-    // (sentinel-prefixed → parseTitle); before_dl prints it before downloading.
-    print: ['after_move:filepath', `before_dl:${TITLE_PRINT_PREFIX}%(title)s`],
+    // (sentinel-prefixed, JSON-encoded via %(title)j so it stays on one line even
+    // with newlines/quotes → parseTitle); before_dl prints it before downloading.
+    print: ['after_move:filepath', `before_dl:${TITLE_PRINT_PREFIX}%(title)j`],
     restrictFilenames: true
   }
 }
@@ -369,9 +421,12 @@ export async function downloadUrl(opts: UrlDownloadOptions): Promise<UrlDownload
   }
 
   // Faststart-remux so the preview <video> plays/seeks without a full download
-  // (G.1). Best-effort + in place; defaults to our bundled ffmpeg.
+  // (G.1). Best-effort + in place; the ffmpeg child is pid-tracked + cancel-aware
+  // (via onPid/signal) so a quit/cancel mid-remux can't orphan it (PRD §17).
   const ffmpegBin = join(ffmpegDir, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')
-  const remux = opts.remux ?? ((fp: string) => faststartRemux(fp, ffmpegBin))
+  const remux =
+    opts.remux ??
+    ((fp: string) => faststartRemux(fp, ffmpegBin, { signal: opts.signal, onPid: opts.onPid }))
   await remux(filePath)
 
   let bytes = 0

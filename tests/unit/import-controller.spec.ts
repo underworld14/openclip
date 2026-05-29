@@ -202,10 +202,19 @@ describe('import-controller: progress banding', () => {
 })
 
 describe('import-controller: re-import data integrity (G.3)', () => {
-  it('flush-saves the open project BEFORE replacing it with the new import', async () => {
-    const existing = fakeProject('OLD-ID', 'Old Project')
+  it('flush-saves the COMPOSED open project (live clips) BEFORE replacing it', async () => {
+    const existing = fakeProject('OLD-ID', 'Old Project') // raw doc: clips: []
+    // The live clips slice has an approved clip that is NOT on the raw currentProject
+    // (clips live in their own slice — currentProject.clips is stale). composeProject
+    // is what carries them; the flush MUST save that, not the raw doc.
+    const composed: Project = {
+      ...existing,
+      clips: [{ id: 'c1', status: 'approved' } as unknown as Project['clips'][number]]
+    }
     const order: string[] = []
+    const saved: Project[] = []
     const saveProject = vi.fn(async (p: Project) => {
+      saved.push(p)
       order.push(`save:${p.id}`)
     })
     const setCurrentProject = vi.fn((p: Project) => {
@@ -214,6 +223,7 @@ describe('import-controller: re-import data integrity (G.3)', () => {
     let current: Project | null = existing
     const store: ImportControllerStore = {
       getCurrentProject: () => current,
+      composeProject: () => (current ? composed : null),
       setCurrentProject: (p) => {
         current = p
         setCurrentProject(p)
@@ -225,10 +235,11 @@ describe('import-controller: re-import data integrity (G.3)', () => {
     const { ctl } = build({ store } as Partial<ImportControllerDeps>)
     await ctl.importFile('/movies/new.mp4')
 
-    // The open project is saved first, then the NEW project (fresh id) is set —
-    // never a silent clobber/orphan.
-    expect(saveProject).toHaveBeenCalledWith(expect.objectContaining({ id: 'OLD-ID' }))
+    // The open project is saved first (with its LIVE clips), then the NEW project
+    // (fresh id) is set — never a silent clobber/orphan, never stale empty clips.
     expect(order).toEqual(['save:OLD-ID', 'set:PID'])
+    expect(saved[0].id).toBe('OLD-ID')
+    expect(saved[0].clips).toHaveLength(1) // composed live clips, not the raw []
   })
 
   it('does not flush-save when there is no open project', async () => {

@@ -43,6 +43,13 @@ export interface StorageLike {
 /** Store seam — the project-document reads/writes the controller performs. */
 export interface ImportControllerStore {
   getCurrentProject(): Project | null
+  /**
+   * The open project with the LIVE clips + transcript slices merged in
+   * (store `composeProject()`), for the flush-save before a re-import — the raw
+   * `currentProject.clips`/`.transcript` are stale (the slices are the source of
+   * truth), so saving the raw doc would discard the user's clip edits (G.3).
+   */
+  composeProject?(): Project | null
   setCurrentProject(project: Project): void
   appendTranscriptPartial(partial: JobPartial['transcribe']): void
   hydrateTranscript(transcript: JobResult['transcribe']): void
@@ -152,8 +159,12 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
 
     const current = deps.store.getCurrentProject()
     if (current) {
+      // Save the COMPOSED project (live clips + transcript merged), not the raw
+      // currentProject — otherwise the flush would persist stale/empty clips and
+      // discard the user's edits, the very loss G.3 exists to prevent.
+      const toSave = deps.store.composeProject?.() ?? current
       try {
-        await deps.store.saveProject(current)
+        await deps.store.saveProject(toSave)
       } catch {
         /* best-effort flush — don't block the new import on a save error */
       }

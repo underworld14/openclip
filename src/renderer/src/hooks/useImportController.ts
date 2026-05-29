@@ -59,6 +59,7 @@ export function useImportController(opts: ImportControllerOptions = {}): ImportC
         createBlankProject,
         store: {
           getCurrentProject: () => useProjectStore.getState().currentProject,
+          composeProject: () => useProjectStore.getState().composeProject(),
           setCurrentProject,
           appendTranscriptPartial: appendPartial,
           hydrateTranscript: hydrate,

@@ -124,19 +124,22 @@ export function whisperCliPath(): string {
  */
 export function ytDlpPath(): string {
   if (process.env.OPENCLIP_YTDLP) return process.env.OPENCLIP_YTDLP
+  // The staged binary keeps its platform extension so Windows can spawn it by an
+  // absolute path (CreateProcess does not auto-append .exe).
+  const bin = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'
   if (isDev()) {
     // Prefer the self-contained standalone binary staged in resources/ (the
     // `yt-dlp_macos` release — only libSystem+libz, NO Python). youtube-dl-exec's
     // managed binary is a Python zipapp needing python ≥3.10, which is unreliable
     // on hosts that ship an older python3 (e.g. macOS 3.9), so it's only a fallback.
-    const bundled = join(process.cwd(), 'resources', 'yt-dlp', platArch(), 'yt-dlp')
+    const bundled = join(process.cwd(), 'resources', 'yt-dlp', platArch(), bin)
     if (existsSync(bundled)) return bundled
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const m = require('youtube-dl-exec') as { constants?: { YOUTUBE_DL_PATH?: string } }
     const p = m.constants?.YOUTUBE_DL_PATH
     if (p) return p
   }
-  return join(process.resourcesPath, 'yt-dlp', platArch(), 'yt-dlp')
+  return join(process.resourcesPath, 'yt-dlp', platArch(), bin)
 }
 
 /**

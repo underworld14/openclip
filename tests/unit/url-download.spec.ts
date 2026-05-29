@@ -116,7 +116,7 @@ describe('ytDlpFlags: the exact yt-dlp invocation', () => {
       mergeOutputFormat: 'mp4',
       noPlaylist: true,
       ffmpegLocation: '/bundle/ffmpeg-dir',
-      print: ['after_move:filepath', `before_dl:${TITLE_PRINT_PREFIX}%(title)s`],
+      print: ['after_move:filepath', `before_dl:${TITLE_PRINT_PREFIX}%(title)j`],
       restrictFilenames: true
     })
   })
@@ -259,7 +259,7 @@ describe('downloadUrl: streams parsed progress and resolves with the merged path
     const dir = mkdtempSync(join(tmpdir(), 'oc-urldl-'))
     const filePath = join(dir, 'M5XbNdzPuDQ.mp4')
     writeFileSync(filePath, Buffer.alloc(10))
-    const finalStdout = `${TITLE_PRINT_PREFIX}ClickHouse — Database OLAP\n${filePath}\n`
+    const finalStdout = `${TITLE_PRINT_PREFIX}"ClickHouse — Database OLAP"\n${filePath}\n` // %(title)j is JSON
     const { subprocess, emitAll } = makeFakeSubprocess({ lines: [], finalStdout })
     const resultP = downloadUrl({
       url: 'https://youtu.be/x',
@@ -304,10 +304,18 @@ describe('downloadUrl: streams parsed progress and resolves with the merged path
 
 // ── parseTitle (pure) ───────────────────────────────────────────────────────── //
 
-describe('parseTitle: sentinel-prefixed --print line', () => {
-  it('extracts the title and ignores path/log lines', () => {
-    const stdout = `${TITLE_PRINT_PREFIX}My Great Video\n[download] 100%\n/abs/file.mp4\n`
+describe('parseTitle: sentinel-prefixed --print line (%(title)j JSON)', () => {
+  it('JSON-decodes the title and ignores path/log lines', () => {
+    const stdout = `${TITLE_PRINT_PREFIX}"My Great Video"\n[download] 100%\n/abs/file.mp4\n`
     expect(parseTitle(stdout)).toBe('My Great Video')
+  })
+  it('keeps a title with embedded special chars on one line (no truncation)', () => {
+    // %(title)j escapes a newline as \n → stays a single physical line.
+    const stdout = `${TITLE_PRINT_PREFIX}"Pwn\\n/evil/path — & \\"quote\\""\n/abs/file.mp4\n`
+    expect(parseTitle(stdout)).toBe('Pwn\n/evil/path — & "quote"')
+  })
+  it('tolerates a bare (non-JSON) value', () => {
+    expect(parseTitle(`${TITLE_PRINT_PREFIX}My Great Video\n`)).toBe('My Great Video')
   })
   it('returns undefined when no title was printed', () => {
     expect(parseTitle('/abs/file.mp4\n')).toBeUndefined()
@@ -358,11 +366,13 @@ describe('faststartRemux', () => {
     const fp = join(dir, 'v.mp4')
     writeFileSync(fp, 'ORIGINAL')
     let calledArgs: string[] = []
-    await faststartRemux(fp, '/bundle/ffmpeg', async (_bin, args) => {
-      calledArgs = args
-      // simulate ffmpeg writing the faststart output (the tmp path is the last arg)
-      writeFileSync(args[args.length - 1], 'FASTSTART')
-      return true
+    await faststartRemux(fp, '/bundle/ffmpeg', {
+      run: async (_bin, args) => {
+        calledArgs = args
+        // simulate ffmpeg writing the faststart output (the tmp path is the last arg)
+        writeFileSync(args[args.length - 1], 'FASTSTART')
+        return true
+      }
     })
     expect(calledArgs).toEqual([
       '-y',
@@ -382,11 +392,47 @@ describe('faststartRemux', () => {
     const dir = mkdtempSync(join(tmpdir(), 'oc-fs-'))
     const fp = join(dir, 'v.mp4')
     writeFileSync(fp, 'ORIGINAL')
-    await faststartRemux(fp, '/bundle/ffmpeg', async (_bin, args) => {
-      writeFileSync(args[args.length - 1], 'PARTIAL') // a partial output, then failure
-      return false
+    await faststartRemux(fp, '/bundle/ffmpeg', {
+      run: async (_bin, args) => {
+        writeFileSync(args[args.length - 1], 'PARTIAL') // a partial output, then failure
+        return false
+      }
     })
     expect(readFileSync(fp, 'utf8')).toBe('ORIGINAL') // untouched
     expect(existsSync(`${fp}.faststart.mp4`)).toBe(false) // tmp cleaned up
+  })
+
+  it('skips entirely (no run) when the signal is already aborted', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oc-fs-'))
+    const fp = join(dir, 'v.mp4')
+    writeFileSync(fp, 'ORIGINAL')
+    const ac = new AbortController()
+    ac.abort()
+    let ran = false
+    await faststartRemux(fp, '/bundle/ffmpeg', {
+      signal: ac.signal,
+      run: async () => {
+        ran = true
+        return true
+      }
+    })
+    expect(ran).toBe(false)
+    expect(readFileSync(fp, 'utf8')).toBe('ORIGINAL')
+  })
+
+  it('tracks the ffmpeg pid via onPid (→ kill-on-quit, PRD §17)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oc-fs-'))
+    const fp = join(dir, 'v.mp4')
+    writeFileSync(fp, 'ORIGINAL')
+    const pids: number[] = []
+    await faststartRemux(fp, '/bundle/ffmpeg', {
+      onPid: (p) => pids.push(p),
+      run: async (_bin, args, o) => {
+        o?.onPid?.(54321)
+        writeFileSync(args[args.length - 1], 'FASTSTART')
+        return true
+      }
+    })
+    expect(pids).toContain(54321)
   })
 })

@@ -7,8 +7,9 @@
  *     strict CSP installed on every response (no eval / no inline script).
  *   - Build the single `IpcContext` (DI seam) and loop `HANDLER_REGISTRARS`
  *     (E.4) so each fan-out track fills only its own `ipc/<domain>.ts`.
- *   - Wire the streaming-job control plane: JOB_START transfers a MessagePort
- *     to the renderer and drives the SidecarManager; JOB_CANCEL is plain invoke.
+ *   - Wire the streaming-job control plane: JOB_START (invoke → {jobId}) opens a
+ *     MessageChannelMain, drives the SidecarManager on port1, and transfers port2
+ *     to the renderer out-of-band over JOB_PORT; JOB_CANCEL is plain invoke.
  *   - Install the sidecar kill-on-quit lifecycle hooks (PRD §17).
  *   - A `ping` IPC for the smoke round-trip (Gate A).
  *
@@ -16,7 +17,7 @@
  * fan-out track (it only loops the frozen registry).
  */
 
-import { app, shell, BrowserWindow, ipcMain, session } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, session, MessageChannelMain } from 'electron'
 import { join } from 'node:path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -124,28 +125,40 @@ function createWindow(): void {
 // ============================================================================
 
 /**
- * The renderer calls `ipcRenderer.postMessage(JOB_START, {kind,params}, [port2])`
- * (the only way to transfer a MessagePort over IPC). We receive `port1` here as
- * a MessagePortMain, hand it to the SidecarManager as an EventPort, and reply
- * with the jobId over the same port's first message. JOB_CANCEL stays a plain
- * `invoke` so cancel can never be starved by a busy data port.
+ * JOB_START is a plain `invoke` returning `{ jobId }`. A `MessagePort` can
+ * neither ride `invoke` nor survive being returned across the contextBridge
+ * (the bridge structure-clones+freezes return values into a dead Object), so we
+ * deliver the per-job port OUT-OF-BAND, the contextIsolation-safe Electron way
+ * (MessageChannelMain → senderFrame.postMessage → preload forwards into the
+ * main world; see preload/api/jobs.ts):
+ *
+ *   1. open a `MessageChannelMain`; keep `port1` (the emitter side the sidecar
+ *      runner streams `JobEvent`s into), TRANSFER `port2` to the renderer;
+ *   2. assign the jobId, then `event.senderFrame.postMessage(JOB_PORT, {jobId},
+ *      [port2])` so the renderer can pair the LIVE port to the jobId;
+ *   3. return `{ jobId }` so the `invoke` resolves.
+ *
+ * JOB_CANCEL stays a plain `invoke` so cancel can never be starved by a busy
+ * data port (PRD §10.2).
  */
 function wireJobControlPlane(): void {
-  ipcMain.on(
+  ipcMain.handle(
     IPCChannels.JOB_START,
-    (event, payload: { kind: JobKind; params: JobParams[JobKind] }) => {
-      const [port] = event.ports
-      if (!port) return
-      port.start()
+    (event, payload: { kind: JobKind; params: JobParams[JobKind] }): { jobId: string } => {
+      const { port1, port2 } = new MessageChannelMain()
+      port1.start()
       const eventPort: EventPort = {
-        postMessage: (value) => port.postMessage(value),
-        close: () => port.close(),
-        on: (ev, listener) => port.on(ev, listener),
-        start: () => port.start()
+        postMessage: (value) => port1.postMessage(value),
+        close: () => port1.close(),
+        on: (ev, listener) => port1.on(ev, listener),
+        start: () => port1.start()
       }
       const jobId = sidecar.startJob(payload.kind, payload.params, eventPort)
-      // First message on the port carries the assigned jobId for cancel().
-      port.postMessage({ t: 'job-id', jobId })
+      // Transfer the peer port to the exact sender frame, tagged with the jobId
+      // so the renderer can pair the live port to the job it just started.
+      const frame = event.senderFrame
+      if (frame) frame.postMessage(IPCChannels.JOB_PORT, { jobId }, [port2])
+      return { jobId }
     }
   )
 

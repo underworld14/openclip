@@ -14,6 +14,7 @@ import {
   SidecarManager,
   registerRunner,
   hasRunner,
+  getRunner,
   concurrencyFor,
   exportConcurrency,
   type EventPort
@@ -170,5 +171,53 @@ describe('SidecarManager.startJob drives a scripted runner to done over a real p
     const last = collected.events.at(-1) as { t: string; code?: string }
     expect(last.t).toBe('error')
     expect(last.code).toBe('CANCELLED')
+  })
+
+  it('forced port-close (renderer crash/nav) is an implicit cancel that terminates the job', async () => {
+    // The manager wires `port.on('close', …)` → implicit cancel (PRD §17). In
+    // Electron that 'close' is emitted by MessagePortMain when the renderer's
+    // peer port closes (renderer crash / navigation). Node's worker_threads
+    // MessagePort does NOT emit 'close' on the peer, so we drive the manager via
+    // a fake EventPort whose registered 'close' listener we trigger explicitly —
+    // proving the close→cancel→CANCELLED wiring at the seam.
+    let onClose: (() => void) | undefined
+    const posted: Array<{ t: string; code?: string }> = []
+    const mgr = new SidecarManager({ coreCount: 10, killGraceMs: 5 })
+
+    // A long-running runner that rejects on abort (registry is global; reuse any
+    // already-registered model-download runner — the cancel test registers one
+    // that also rejects on abort, so CANCELLED is emitted either way).
+    if (!hasRunner('model-download')) {
+      registerRunner('model-download', async (_p, emit, ctx) => {
+        emit.progress(1, 'downloading')
+        await new Promise<void>((_resolve, reject) => {
+          ctx.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+        })
+        return { model: 'base', path: '/x', bytes: 1 }
+      })
+    }
+    expect(getRunner('model-download')).toBeTruthy()
+
+    const eventPort: EventPort = {
+      postMessage: (v) => posted.push(v as { t: string; code?: string }),
+      close: () => {},
+      on: (e, l) => {
+        if (e === 'close') onClose = l
+      },
+      start: () => {}
+    }
+    const jobId = mgr.startJob('model-download', { model: 'base' }, eventPort)
+    expect(mgr.activeJobIds()).toContain(jobId)
+    expect(typeof onClose).toBe('function')
+
+    // Let the runner emit first progress, then simulate the renderer port close.
+    await new Promise((r) => setTimeout(r, 10))
+    onClose!() // peer close → manager.cancel(jobId)
+
+    await new Promise((r) => setTimeout(r, 30))
+    expect(mgr.activeJobIds()).not.toContain(jobId)
+    const last = posted.at(-1)
+    expect(last?.t).toBe('error')
+    expect(last?.code).toBe('CANCELLED')
   })
 })

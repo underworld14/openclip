@@ -1,17 +1,23 @@
 /**
  * preload/api/jobs.ts — `window.openclip.jobs` (the streaming-job surface).
  *
- * TRUNK INFRA, frozen seam (plan E.4). This is REAL (not a stub): it implements
- * the MessagePort-per-job handoff exactly as the main side expects
- * (`wireJobControlPlane` in main/index.ts) and per Electron's verified API —
- * `MessagePort`s cannot ride `invoke`, only `ipcRenderer.postMessage(channel,
- * msg, [port])` (PRD §10.2 / Electron message-ports tutorial):
+ * TRUNK INFRA, frozen seam (plan E.4). The MessagePort-per-job handoff is the
+ * contextIsolation-safe Electron 41 pattern (verified via the Electron
+ * message-ports tutorial / `MessageChannelMain` API, PRD §10.2):
  *
- *   1. open a `MessageChannel`; keep `port1`, transfer `port2` to main;
- *   2. main starts the job and posts `{ t:'job-id', jobId }` as the first
- *      message on the port; we resolve `start()` with `{ jobId, port: port1 }`;
- *   3. subsequent `JobEvent`s stream on `port1` and are consumed by `useJob`'s
- *      `jobEvents()` async iterable.
+ *   1. `start(kind, params)` is a plain `invoke(JOB_START)` returning `{ jobId }`
+ *      ONLY. A `MessagePort` is a transferable — it can NEITHER ride
+ *      `ipcRenderer.invoke` NOR be returned across `contextBridge` (the bridge
+ *      structure-clones+freezes return values into a dead plain Object with no
+ *      `postMessage`/`onmessage`). So we never try to return it.
+ *   2. The MAIN side opens a `MessageChannelMain`, keeps `port1` (fed by the
+ *      sidecar runner) and TRANSFERS `port2` to this frame via
+ *      `senderFrame.postMessage(JOB_PORT, {jobId}, [port2])`.
+ *   3. `installJobPortForwarder()` (called once from preload/index.ts) listens
+ *      for that on the ISOLATED world and forwards the LIVE port into the
+ *      renderer's MAIN world with `window.postMessage(…, [port])` — the
+ *      supported isolated→main transfer (it stays a real MessagePort, not a
+ *      cloned Object). The renderer pairs it to the jobId (hooks/jobPort.ts).
  *
  * `cancel(jobId)` stays a plain `invoke` so it can never be starved by a busy
  * data port (PRD §10.2).
@@ -21,34 +27,33 @@ import { ipcRenderer } from 'electron'
 import { IPCChannels } from '@shared/channels'
 import type { JobKind, JobParams, JobsAPI } from '@shared/jobs'
 
-interface JobIdEnvelope {
-  t: 'job-id'
-  jobId: string
-}
+/** The window-message tag the main world listens for to pair the live port. */
+export const JOB_PORT_MESSAGE = 'openclip:job-port' as const
 
-function isJobIdEnvelope(v: unknown): v is JobIdEnvelope {
-  return typeof v === 'object' && v !== null && (v as { t?: unknown }).t === 'job-id'
+/**
+ * Install the one-time bridge that forwards each transferred per-job
+ * `MessagePort` from the isolated (preload) world into the renderer's MAIN
+ * world. Called once from `preload/index.ts` at preload init. Idempotent.
+ *
+ * The transferred ports arrive on `event.ports`; re-transferring them via
+ * `window.postMessage(msg, '*', event.ports)` hands a LIVE `MessagePort` to the
+ * main world's `window.addEventListener('message', …)` (DOM `MessageEvent.ports`).
+ */
+let installed = false
+export function installJobPortForwarder(): void {
+  if (installed) return
+  installed = true
+  ipcRenderer.on(IPCChannels.JOB_PORT, (event, msg: { jobId: string }) => {
+    window.postMessage({ __openclip: JOB_PORT_MESSAGE, jobId: msg.jobId }, '*', event.ports)
+  })
 }
 
 export function buildJobsApi(): JobsAPI {
   return {
-    start<K extends JobKind>(
-      kind: K,
-      params: JobParams[K]
-    ): Promise<{ jobId: string; port: MessagePort }> {
-      const { port1, port2 } = new MessageChannel()
-      return new Promise((resolve) => {
-        const onFirst = (ev: MessageEvent): void => {
-          if (isJobIdEnvelope(ev.data)) {
-            port1.removeEventListener('message', onFirst)
-            resolve({ jobId: ev.data.jobId, port: port1 })
-          }
-        }
-        port1.addEventListener('message', onFirst)
-        port1.start()
-        // Transfer the peer port to main with the job request.
-        ipcRenderer.postMessage(IPCChannels.JOB_START, { kind, params }, [port2])
-      })
+    async start<K extends JobKind>(kind: K, params: JobParams[K]): Promise<{ jobId: string }> {
+      return ipcRenderer.invoke(IPCChannels.JOB_START, { kind, params }) as Promise<{
+        jobId: string
+      }>
     },
     async cancel(jobId: string): Promise<void> {
       await ipcRenderer.invoke(IPCChannels.JOB_CANCEL, { jobId })

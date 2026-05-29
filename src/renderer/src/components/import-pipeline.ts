@@ -8,7 +8,8 @@
 
 import type { SourceVideo } from '@shared/schema'
 import type { JobResult, JobPartial, WhisperModelSize, JobEventFor } from '@shared/jobs'
-import { jobEvents, type MessagePortLike } from '@renderer/hooks/useJob'
+import { jobEvents } from '@renderer/hooks/useJob'
+import { acquireJobPort } from '@renderer/hooks/jobPort'
 
 /**
  * The frozen bridge surface, derived from the global `window.openclip` typing
@@ -59,10 +60,12 @@ export async function runImportPipeline(
   report(25, 'extracting')
 
   // 3) Transcribe — streaming job over a per-job MessagePort (PRD §6.2/§10.2).
-  const { port } = await bridge.jobs.start('transcribe', { projectId, wavPath, model, language })
+  // start() resolves { jobId }; the live port is acquired out-of-band by jobId.
+  const { jobId } = await bridge.jobs.start('transcribe', { projectId, wavPath, model, language })
+  const port = await acquireJobPort(jobId)
   let transcript: JobResult['transcribe'] | null = null
 
-  for await (const ev of jobEvents<'transcribe'>(port as unknown as MessagePortLike)) {
+  for await (const ev of jobEvents<'transcribe'>(port)) {
     const e = ev as JobEventFor<'transcribe'>
     switch (e.t) {
       case 'progress':

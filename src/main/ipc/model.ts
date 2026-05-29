@@ -36,7 +36,7 @@ export function registerModelHandlers(ctx: IpcContext): void {
 
   // MODEL_DOWNLOAD — start a streaming job; renderer streams progress via
   // jobs.start('model-download', …). The invoke result carries the jobId; the
-  // port is delivered over the JOB_START message channel, not over invoke
+  // per-job port is delivered out-of-band over JOB_PORT, never over invoke
   // (MessagePorts cannot ride ipcRenderer.invoke — PRD §10.2).
   ctx.ipcMain.handle(
     IPCChannels.MODEL_DOWNLOAD,
@@ -44,7 +44,7 @@ export function registerModelHandlers(ctx: IpcContext): void {
       // The renderer uses jobs.start for the actual stream; this control-plane
       // entry exists for parity/correlation and returns a placeholder handle.
       void req
-      return { jobId: '', port: null as unknown as MessagePort }
+      return { jobId: '' }
     }
   )
 }

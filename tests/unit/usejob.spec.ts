@@ -17,6 +17,7 @@
 import { describe, expect, it } from 'vitest'
 import { MessageChannel } from 'node:worker_threads'
 import { jobEvents, type MessagePortLike, type JobStatus } from '@renderer/hooks/useJob'
+import { acquireJobPort } from '@renderer/hooks/jobPort'
 import { driveScriptOverChannel } from '../harness/fake-utility-process'
 import { createMockOpenclip } from '../mocks/openclip'
 import { transcribeResultFixture, transcribePartialFixture } from '../fixtures/contract'
@@ -66,14 +67,17 @@ describe('jobEvents: MessagePort → AsyncIterable<JobEvent>', () => {
 })
 
 describe('useJob streaming path drives a consumer to a "done" result', () => {
-  it('mock bridge job → port → done (the renderer runtime path)', async () => {
+  it('mock bridge job → acquireJobPort(jobId) → port → done (the renderer runtime path)', async () => {
     const openclip = createMockOpenclip()
-    const { jobId, port } = await openclip.jobs.start('transcribe', {
+    // The real renderer path: start() resolves { jobId } only, then the live
+    // per-job port is acquired out-of-band keyed by that jobId.
+    const { jobId } = await openclip.jobs.start('transcribe', {
       projectId: 'p1',
       wavPath: '/tmp/audio.16k.wav',
       model: 'base'
     })
     expect(jobId).toBe('transcribe-mock-1')
+    const port = await acquireJobPort(jobId)
 
     // Reproduce useJob's exact event switch over the real port.
     let status: JobStatus = 'idle'

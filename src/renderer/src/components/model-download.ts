@@ -6,7 +6,8 @@
  */
 
 import type { JobResult, WhisperModelSize, JobEventFor } from '@shared/jobs'
-import { jobEvents, type MessagePortLike } from '@renderer/hooks/useJob'
+import { jobEvents } from '@renderer/hooks/useJob'
+import { acquireJobPort } from '@renderer/hooks/jobPort'
 
 // ============================================================================
 // Model table (PRD §6.2 GGML model selection + §13 download UX)
@@ -54,10 +55,11 @@ export interface RunModelDownloadOptions {
 export async function runModelDownload(
   opts: RunModelDownloadOptions
 ): Promise<JobResult['model-download']> {
-  const { port } = await opts.bridge.jobs.start('model-download', { model: opts.model })
+  const { jobId } = await opts.bridge.jobs.start('model-download', { model: opts.model })
+  const port = await acquireJobPort(jobId)
   let result: JobResult['model-download'] | null = null
 
-  for await (const ev of jobEvents<'model-download'>(port as unknown as MessagePortLike)) {
+  for await (const ev of jobEvents<'model-download'>(port)) {
     const e = ev as JobEventFor<'model-download'>
     switch (e.t) {
       case 'partial':

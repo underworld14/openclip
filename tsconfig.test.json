@@ -1,0 +1,29 @@
+{
+  "extends": "@electron-toolkit/tsconfig/tsconfig.node.json",
+  "include": [
+    "tests/**/*.ts",
+    "src/shared/**/*",
+    "src/preload/**/*",
+    "src/renderer/src/**/*",
+    "src/main/**/*",
+    "src/renderer/src/env.d.ts",
+    "src/preload/*.d.ts"
+  ],
+  "exclude": ["src/preload/index.ts"],
+  "compilerOptions": {
+    "composite": false,
+    "strict": true,
+    "jsx": "react-jsx",
+    "types": ["node", "vitest/globals", "electron-vite/node"],
+    "baseUrl": ".",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "paths": {
+      "@renderer/*": ["src/renderer/src/*"],
+      "@main/*": ["src/main/*"],
+      "@shared/*": ["src/shared/*"],
+      "@shared": ["src/shared"],
+      "@preload/*": ["src/preload/*"],
+      "@preload": ["src/preload/index"]
+    }
+  }
+}

@@ -12,6 +12,9 @@ test-results
 playwright-report
 *.tsbuildinfo
 
+# generated test fixtures (synthetic media, never committed — PRD §18)
+tests/fixtures/.generated
+
 # secrets / local env
 .env
 .env.*

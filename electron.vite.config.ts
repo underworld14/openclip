@@ -18,10 +18,16 @@ export default defineConfig({
     }
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
+    // The renderer runs sandboxed (PRD §12.2). Sandboxed preload scripts cannot
+    // `require` external modules, so the preload MUST be fully bundled — disable
+    // dependency externalization here (electron-vite isolated-build guidance).
+    build: {
+      externalizeDeps: false
+    },
     resolve: {
       alias: {
-        '@shared': shared
+        '@shared': shared,
+        '@preload': resolve('src/preload')
       }
     }
   },

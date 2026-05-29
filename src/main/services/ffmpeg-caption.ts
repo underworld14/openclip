@@ -31,6 +31,8 @@ export interface WriteClipCaptionsOptions {
   clipEnd: number
   /** Caption style (font/size/color/bg/position/animation). */
   style?: CaptionStyle
+  /** Part K — words to EMPHASIZE (keyword highlight); usually `Clip.keywords`. */
+  keywords?: string[]
   /** Where to write the .ass (e.g. `<jobTempDir>/clip-<id>.captions.ass`). */
   assPath: string
   /**
@@ -54,6 +56,7 @@ export function writeClipCaptions(opts: WriteClipCaptionsOptions): string {
     clipStart: opts.clipStart,
     clipEnd: opts.clipEnd,
     style: opts.style,
+    keywords: opts.keywords,
     keepRanges: opts.keepRanges
   })
   mkdirSync(dirname(opts.assPath), { recursive: true })

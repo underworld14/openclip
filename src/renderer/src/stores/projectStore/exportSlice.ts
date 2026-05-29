@@ -104,7 +104,9 @@ export function buildExportParams(args: {
     assPath: args.assPath,
     captions:
       args.captionsEnabled && args.words && args.words.length > 0
-        ? { words: args.words, style: args.captionStyle }
+        ? // Part K: thread the clip's AI keywords so a template with keyword
+          // emphasis recolors/scales them; harmless when the style has none.
+          { words: args.words, style: args.captionStyle, keywords: args.clip.keywords }
         : undefined,
     removeSilence: args.removeSilence,
     // Auto-reframe (Part J): pass the source pixel size + fps so the runner's

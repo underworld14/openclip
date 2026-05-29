@@ -60,6 +60,7 @@ export interface ExportRunnerDeps {
     clipStart: number
     clipEnd: number
     style?: NonNullable<JobParams['export']['captions']>['style']
+    keywords?: string[]
     assPath: string
     keepRanges?: Range[]
   }) => string
@@ -178,6 +179,7 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
         clipStart: params.startTime,
         clipEnd: params.endTime,
         style: params.captions.style,
+        keywords: params.captions.keywords,
         assPath: resolveAssPath(params.projectId, ctx.jobId, params.clipId),
         keepRanges
       })

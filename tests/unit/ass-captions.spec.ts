@@ -339,3 +339,61 @@ describe('buildAss — FULL .ass golden file', () => {
     expect(dialogues).toHaveLength(2) // 6 words / 3 per line
   })
 })
+
+describe('Part K — keyword emphasis + per-word animation + auto-emoji (golden)', () => {
+  // Contiguous words (no gaps): I 0–0.20 (20cs), love 0.20–0.50 (30cs), money 0.50–0.90 (40cs).
+  const words: WordTimestamp[] = [
+    { word: 'I', start: 0, end: 0.2, confidence: 1 },
+    { word: 'love', start: 0.2, end: 0.5, confidence: 1 },
+    { word: 'money', start: 0.5, end: 0.9, confidence: 1 }
+  ]
+
+  it('keyword word gets a SOLID color (\\1c+\\2c) + {\\r} reset; non-keywords unchanged', () => {
+    const style: CaptionStyle = { ...STYLE, keywordColor: '#00FF00' } // → &H0000FF00
+    const ass = buildAss({ words, clipStart: 0, clipEnd: 2, style, keywords: ['money'] })
+    expect(ass).toContain('{\\k20}I{\\k30} love{\\k40}{\\1c&H0000FF00\\2c&H0000FF00} money{\\r}')
+  })
+
+  it('keyword scale + bold', () => {
+    const style: CaptionStyle = { ...STYLE, keywordScale: 120, keywordBold: true }
+    const ass = buildAss({ words, clipStart: 0, clipEnd: 2, style, keywords: ['money'] })
+    expect(ass).toContain('{\\k40}{\\fscx120\\fscy120\\b1} money{\\r}')
+  })
+
+  it('per-word bounce wraps EVERY syllable WITHOUT changing the \\k durations', () => {
+    const style: CaptionStyle = { ...STYLE, perWordAnimation: 'bounce' }
+    const ass = buildAss({ words, clipStart: 0, clipEnd: 2, style })
+    expect(ass).toContain('{\\k20}{\\t(0,150,\\fscx115\\fscy115)}I{\\r}')
+    expect(ass).toContain('{\\k30}{\\t(0,150,\\fscx115\\fscy115)} love{\\r}')
+    // The \k durations are identical to the no-animation cue.
+    const plain = buildAss({ words, clipStart: 0, clipEnd: 2, style: STYLE })
+    expect(plain).toContain('{\\k20}I{\\k30} love{\\k40} money')
+  })
+
+  it('auto-emoji (local) appends the dictionary emoji after the word', () => {
+    const style: CaptionStyle = { ...STYLE, autoEmoji: 'local' }
+    const ass = buildAss({ words, clipStart: 0, clipEnd: 2, style })
+    expect(ass).toContain(' love ❤️')
+    expect(ass).toContain(' money 💰')
+  })
+
+  it('emojiPosition=before puts the emoji ahead of the word', () => {
+    const style: CaptionStyle = { ...STYLE, autoEmoji: 'local', emojiPosition: 'before' }
+    const ass = buildAss({ words, clipStart: 0, clipEnd: 2, style })
+    expect(ass).toContain('💰 money')
+  })
+
+  it('style.wordsPerLine controls line grouping', () => {
+    const style: CaptionStyle = { ...STYLE, wordsPerLine: 2 }
+    const ass = buildAss({ words, clipStart: 0, clipEnd: 2, style })
+    const dialogues = ass.split('\n').filter((l) => l.startsWith('Dialogue:'))
+    expect(dialogues).toHaveLength(2) // 3 words / 2 per line
+  })
+
+  it('keywords passed but style has NO keyword fields ⇒ byte-identical (no override)', () => {
+    const ass = buildAss({ words, clipStart: 0, clipEnd: 2, style: STYLE, keywords: ['money'] })
+    expect(ass).toContain('{\\k20}I{\\k30} love{\\k40} money')
+    expect(ass).not.toContain('\\1c')
+    expect(ass).not.toContain('{\\r}')
+  })
+})

@@ -138,3 +138,60 @@ describe('export-runner — caption-burn composition', () => {
     expect(arg.assPath).toBe('/tmp/openclip/proj-1/export-job-1/clip-clip-1.captions.ass')
   })
 })
+
+describe('export-runner — silence jump-cuts (Part I.4)', () => {
+  it('detects silences → keepRanges threaded into captions + exportClip when removeSilence set', async () => {
+    const exportClip = vi.fn().mockResolvedValue(EXPORT_RESULT)
+    const writeClipCaptions = vi.fn((o: { assPath: string }) => o.assPath)
+    // BASE is 10..13; a 1.5s silence at 11..12.5 → keep [10,11.05] + [12.45,13].
+    const detectSilences = vi.fn(async () => [[11, 12.5]] as [number, number][])
+
+    const runner = createExportRunner({
+      exportClip,
+      writeClipCaptions,
+      fontsDir: () => '/fonts',
+      detectSilences,
+      resolveAssPath: () => '/tmp/clip.ass'
+    })
+    await runner(
+      {
+        ...BASE,
+        captions: { words: transcriptFixture.words },
+        removeSilence: { minSilenceSec: 0.6 }
+      },
+      fakeEmitter(),
+      fakeCtx()
+    )
+
+    expect(detectSilences).toHaveBeenCalledWith(
+      expect.objectContaining({ sourcePath: '/src/in.mp4', startTime: 10, endTime: 13 })
+    )
+    const keep = [
+      [10, 11.05],
+      [12.45, 13]
+    ]
+    // Captions remap onto the compressed timeline, and the cut uses the same ranges.
+    expect(writeClipCaptions).toHaveBeenCalledWith(expect.objectContaining({ keepRanges: keep }))
+    expect(exportClip).toHaveBeenCalledWith(expect.objectContaining({ keepRanges: keep }))
+  })
+
+  it('falls back to a normal cut (no keepRanges) when detection finds nothing', async () => {
+    const exportClip = vi.fn().mockResolvedValue(EXPORT_RESULT)
+    const detectSilences = vi.fn(async () => [] as [number, number][])
+    const runner = createExportRunner({ exportClip, detectSilences, fontsDir: () => '/fonts' })
+    await runner({ ...BASE, removeSilence: true }, fakeEmitter(), fakeCtx())
+    expect(detectSilences).toHaveBeenCalledOnce()
+    expect(exportClip).toHaveBeenCalledWith(expect.objectContaining({ keepRanges: undefined }))
+  })
+
+  it('never blocks the export when silence detection throws (best-effort)', async () => {
+    const exportClip = vi.fn().mockResolvedValue(EXPORT_RESULT)
+    const detectSilences = vi.fn(async () => {
+      throw new Error('ffmpeg unavailable')
+    })
+    const runner = createExportRunner({ exportClip, detectSilences, fontsDir: () => '/fonts' })
+    const result = await runner({ ...BASE, removeSilence: true }, fakeEmitter(), fakeCtx())
+    expect(result).toEqual(EXPORT_RESULT)
+    expect(exportClip).toHaveBeenCalledWith(expect.objectContaining({ keepRanges: undefined }))
+  })
+})

@@ -204,6 +204,33 @@ describe('buildStyleLine — CaptionStyle → ASS V4+ Style line (golden)', () =
         '0,0,0,0,100,100,0,0,3,3,0,8,60,60,80,1'
     )
   })
+
+  it('Part I preset fields drive highlight/outline/shadow + no-box for a transparent bg', () => {
+    // Hormozi-style: green highlight, thick black outline, shadow, NO box.
+    const hormozi: CaptionStyle = {
+      ...STYLE,
+      fontFamily: 'Anton',
+      backgroundColor: '#00000000', // fully transparent → BorderStyle 1 (no box)
+      highlightColor: '#00FF00',
+      strokeColor: '#000000',
+      strokeWidth: 4,
+      shadow: true
+    }
+    const line = buildStyleLine(hormozi)
+    // PrimaryColour=green (&H0000FF00), BackColour=transparent black (&HFF000000),
+    // BorderStyle=1, Outline=4, Shadow=2.
+    expect(line).toBe(
+      'Style: Karaoke,Anton,64,&H0000FF00,&H00FFFFFF,&H00000000,&HFF000000,' +
+        '0,0,0,0,100,100,0,0,1,4,2,2,60,60,80,1'
+    )
+  })
+
+  it('a style with NO Part I fields is byte-identical to the pre-Part-I output', () => {
+    // Regression guard: optional fields absent ⇒ yellow highlight, black outline
+    // width 3, no shadow, opaque-bg box (BorderStyle 3) — exactly as before.
+    expect(buildStyleLine(STYLE)).toContain(',&H0000FFFF,') // default highlight (yellow)
+    expect(buildStyleLine(STYLE)).toMatch(/,3,3,0,2,60,60,80,1$/) // BorderStyle 3, Outline 3, Shadow 0
+  })
 })
 
 describe('buildAss — FULL .ass golden file', () => {
@@ -239,6 +266,35 @@ describe('buildAss — FULL .ass golden file', () => {
       ''
     ].join('\n')
     expect(ass).toBe(expected)
+  })
+
+  it('remaps words onto the compressed timeline for a jump-cut (Part I.4)', () => {
+    // A 4s silence (1.0..5.0) is removed via keepRanges; words after it shift
+    // earlier, a word fully inside the gap is dropped, and the karaoke stays
+    // continuous on the compressed (2s) timeline.
+    const jumpWords: WordTimestamp[] = [
+      { word: 'one', start: 0, end: 0.5, confidence: 1 },
+      { word: 'two', start: 0.5, end: 1.0, confidence: 1 },
+      { word: 'gap', start: 2.0, end: 3.0, confidence: 1 }, // inside removed silence
+      { word: 'three', start: 5.0, end: 5.5, confidence: 1 },
+      { word: 'four', start: 5.5, end: 6.0, confidence: 1 }
+    ]
+    const ass = buildAss({
+      words: jumpWords,
+      clipStart: 0,
+      clipEnd: 6,
+      style: STYLE,
+      keepRanges: [
+        [0, 1.0],
+        [5.0, 6.0]
+      ]
+    })
+    // The dropped-silence word is gone; the surviving words are continuous and the
+    // single line ends at 0:00:02.00 (2s kept), not 0:00:06.00.
+    expect(ass).not.toContain('gap')
+    expect(ass).toContain(
+      'Dialogue: 0,0:00:00.00,0:00:02.00,Karaoke,,0,0,0,,{\\k50}one{\\k50} two{\\k50} three{\\k50} four'
+    )
   })
 
   it('emits a header-only file (no Dialogue) when no word intersects the clip', () => {

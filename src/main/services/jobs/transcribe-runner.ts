@@ -96,7 +96,12 @@ export function createTranscribeRunner(deps: TranscribeRunnerDeps = {}): JobRunn
     })
 
     emit.progress(100, 'transcribing')
-    return { language: parsed.language, segments: parsed.segments, words: parsed.words }
+    // An explicitly requested language is authoritative over whisper's detected/
+    // omitted label (Part I): the user chose it AND it was passed as `-l`, so the
+    // transcript is in that language regardless of what the JSON reports.
+    const requested = params.language?.trim()
+    const language = requested ? requested : parsed.language
+    return { language, segments: parsed.segments, words: parsed.words }
   }
 }
 

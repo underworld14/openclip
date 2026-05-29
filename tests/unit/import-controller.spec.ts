@@ -297,3 +297,28 @@ describe('import-controller: managed media adoption (Part H)', () => {
     expect(setCurrentProject).not.toHaveBeenCalled()
   })
 })
+
+describe('import-controller: transcription language (Part I cross-language)', () => {
+  it('threads getLanguage() into the pipeline for a file import', async () => {
+    const { ctl, runImportPipeline } = build({
+      getLanguage: () => 'id'
+    } as Partial<ImportControllerDeps>)
+    await ctl.importFile('/movies/a.mp4')
+    expect(runImportPipeline).toHaveBeenCalledWith(expect.objectContaining({ language: 'id' }))
+  })
+
+  it('threads getLanguage() into the pipeline for a URL import', async () => {
+    const { ctl, runImportPipeline } = build({
+      storage: fakeStorage({ [CONSENT_KEY]: '1' }),
+      getLanguage: () => 'id'
+    } as Partial<ImportControllerDeps>)
+    await ctl.importUrl('https://youtu.be/x')
+    expect(runImportPipeline).toHaveBeenCalledWith(expect.objectContaining({ language: 'id' }))
+  })
+
+  it('passes language: undefined when no getLanguage is provided (auto-detect)', async () => {
+    const { ctl, runImportPipeline } = build()
+    await ctl.importFile('/movies/a.mp4')
+    expect(runImportPipeline).toHaveBeenCalledWith(expect.objectContaining({ language: undefined }))
+  })
+})

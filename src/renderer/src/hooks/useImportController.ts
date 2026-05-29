@@ -14,6 +14,7 @@ import { createBlankProject } from '@renderer/hooks/useProject'
 import { createImportController } from '@renderer/hooks/import-controller'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useUiStore } from '@renderer/stores/uiStore'
+import { useSettingsStore } from '@renderer/stores/settingsStore'
 
 export interface ImportControllerOptions {
   /** Open the first-run model-download dialog when the whisper model is absent. */
@@ -78,6 +79,9 @@ export function useImportController(opts: ImportControllerOptions = {}): ImportC
             }),
           clearTask
         },
+        // Read the transcription language lazily at import time (Part I) so the
+        // latest Settings value applies without rebuilding the controller.
+        getLanguage: () => useSettingsStore.getState().settings.language,
         onNeedModel: (m) => onNeedModelRef.current?.(m)
       }),
     // Built once; all referenced actions are stable zustand refs.

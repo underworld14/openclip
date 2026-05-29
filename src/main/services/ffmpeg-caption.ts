@@ -19,6 +19,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { CaptionStyle, WordTimestamp } from '@shared/schema'
+import type { Range } from '@shared/keep-ranges'
 import { buildAss } from './ass-captions'
 
 export interface WriteClipCaptionsOptions {
@@ -32,6 +33,12 @@ export interface WriteClipCaptionsOptions {
   style?: CaptionStyle
   /** Where to write the .ass (e.g. `<jobTempDir>/clip-<id>.captions.ass`). */
   assPath: string
+  /**
+   * Jump-cut keep ranges (Part I.4 — ABSOLUTE source seconds). When present, the
+   * caption word times are remapped onto the compressed (silence-removed)
+   * timeline so karaoke matches the cut video.
+   */
+  keepRanges?: Range[]
 }
 
 /**
@@ -46,7 +53,8 @@ export function writeClipCaptions(opts: WriteClipCaptionsOptions): string {
     words: opts.words,
     clipStart: opts.clipStart,
     clipEnd: opts.clipEnd,
-    style: opts.style
+    style: opts.style,
+    keepRanges: opts.keepRanges
   })
   mkdirSync(dirname(opts.assPath), { recursive: true })
   writeFileSync(opts.assPath, ass, 'utf8')

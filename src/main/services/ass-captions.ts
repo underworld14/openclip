@@ -41,6 +41,7 @@
  */
 
 import type { CaptionStyle, WordTimestamp } from '@shared/schema'
+import { compressTimeClamped, type Range } from '@shared/keep-ranges'
 
 // ============================================================================
 // Constants
@@ -211,6 +212,26 @@ export function scopeWordsToClip(
   return out
 }
 
+/**
+ * Like `scopeWordsToClip` but for a JUMP-CUT export (Part I.4): map each word's
+ * absolute time onto the COMPRESSED (silence-removed) timeline via the keep
+ * ranges. Words fully inside a removed gap collapse to zero length and are
+ * dropped; the clip window is exactly the keep-ranges span (the first kept
+ * sample → t0), so no separate clipStart/End is needed.
+ */
+export function scopeWordsToKeepRanges(words: WordTimestamp[], keepRanges: Range[]): RebasedWord[] {
+  const out: RebasedWord[] = []
+  for (const w of words) {
+    if (isDroppableToken(w.word)) continue
+    const start = compressTimeClamped(w.start, keepRanges)
+    const end = compressTimeClamped(w.end, keepRanges)
+    if (!(end > start)) continue // entirely inside a removed gap (or zero-length)
+    out.push({ word: w.word.trim(), start, end })
+  }
+  out.sort((a, b) => a.start - b.start)
+  return out
+}
+
 // ============================================================================
 // Karaoke cue building — the `{\k<cs>}word` string for a line of words
 // ============================================================================
@@ -302,13 +323,24 @@ export function animationOverride(animation: CaptionStyle['animation']): string 
 export function buildStyleLine(style: CaptionStyle): string {
   const fontColor = toAssColor(style.fontColor) // pre-highlight (SecondaryColour)
   const bg = toAssColor(style.backgroundColor) // box (BackColour)
+  // Part I caption presets — all optional; the defaults reproduce the pre-Part-I
+  // output byte-for-byte (yellow highlight, opaque-black outline width 3, no shadow).
+  const highlight = style.highlightColor ? toAssColor(style.highlightColor) : HIGHLIGHT_COLOR_ASS
+  const outlineColor = style.strokeColor ? toAssColor(style.strokeColor) : '&H00000000'
+  const outlineWidth = style.strokeWidth ?? 3
+  const shadow = style.shadow ? 2 : 0
+  // A fully-TRANSPARENT background (ASS alpha FF) renders outlined text with NO
+  // box (BorderStyle 1, the punchy preset look); a semi/opaque background draws
+  // an opaque box (BorderStyle 3 — the pre-Part-I default, so existing styles
+  // with an opaque `backgroundColor` are unchanged).
+  const borderStyle = /^&HFF/i.test(bg) ? 1 : 3
   const fields = [
     'Karaoke', // Name
     style.fontFamily, // Fontname
     String(style.fontSize), // Fontsize
-    HIGHLIGHT_COLOR_ASS, // PrimaryColour (highlight)
+    highlight, // PrimaryColour (highlight / karaoke fill)
     fontColor, // SecondaryColour (pre-highlight word)
-    '&H00000000', // OutlineColour (opaque black)
+    outlineColor, // OutlineColour
     bg, // BackColour (box)
     '0', // Bold
     '0', // Italic
@@ -318,9 +350,9 @@ export function buildStyleLine(style: CaptionStyle): string {
     '100', // ScaleY
     '0', // Spacing
     '0', // Angle
-    '3', // BorderStyle (3 = opaque box)
-    '3', // Outline
-    '0', // Shadow
+    String(borderStyle), // BorderStyle (3 = opaque box, 1 = outline only)
+    String(outlineWidth), // Outline
+    String(shadow), // Shadow
     String(alignmentFor(style.position)), // Alignment
     '60', // MarginL
     '60', // MarginR
@@ -351,6 +383,12 @@ export interface BuildAssOptions {
   maxWordsPerLine?: number
   /** Start a new line when the silence before a word exceeds this (s). Default 0.8. */
   gapBreakSec?: number
+  /**
+   * Jump-cut keep ranges (Part I.4 — ABSOLUTE source seconds). When present, words
+   * are remapped onto the compressed (silence-removed) timeline instead of being
+   * scoped to [clipStart, clipEnd], so karaoke stays in sync with the cut video.
+   */
+  keepRanges?: Range[]
 }
 
 /** A grouped run of words that becomes one Dialogue line. */
@@ -396,7 +434,12 @@ export function buildAss(opts: BuildAssOptions): string {
   const maxWords = opts.maxWordsPerLine ?? 7
   const gapBreak = opts.gapBreakSec ?? 0.8
 
-  const scoped = scopeWordsToClip(opts.words, opts.clipStart, opts.clipEnd)
+  // Jump-cut export → remap words onto the compressed timeline; else the normal
+  // scope-to-clip path (Part I.4).
+  const scoped =
+    opts.keepRanges && opts.keepRanges.length > 0
+      ? scopeWordsToKeepRanges(opts.words, opts.keepRanges)
+      : scopeWordsToClip(opts.words, opts.clipStart, opts.clipEnd)
   const lines = groupIntoLines(scoped, maxWords, gapBreak)
   const anim = animationOverride(style.animation)
 

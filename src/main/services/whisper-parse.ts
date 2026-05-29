@@ -153,13 +153,16 @@ export function groupSegments(words: WordTimestamp[]): TranscriptSegment[] {
 /**
  * Parse the full whisper-cli `--output-json-full` document into the frozen
  * contract shapes. `language` comes from `result.language` (PRD §6.2
- * auto-detect), defaulting to `"en"` if whisper omits it.
+ * auto-detect). If whisper omits it we label it `'auto'` — NOT `'en'`: hard-
+ * defaulting to English mislabeled non-English transcripts (Part I cross-language
+ * fix). The transcribe runner additionally overrides this with an explicitly
+ * requested language when one was passed.
  */
 export function parseWhisperJson(json: WhisperJson): ParsedTranscript {
   const words = extractWords(json)
   const segments = groupSegments(words)
   return {
-    language: json.result?.language ?? 'en',
+    language: json.result?.language ?? 'auto',
     words,
     segments
   }

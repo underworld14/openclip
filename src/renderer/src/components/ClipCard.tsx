@@ -52,8 +52,37 @@ export function ClipCard({ clip }: ClipCardProps): React.JSX.Element {
           ⭐ {vm.score}/10
         </span>
       </div>
-      <span className="text-xs text-muted-foreground">{vm.range}</span>
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span>{vm.range}</span>
+        {vm.hookType && vm.hookType !== 'none' && (
+          <span
+            data-testid="hook-type"
+            className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium capitalize text-foreground/80"
+          >
+            {vm.hookType}
+          </span>
+        )}
+      </div>
       <p className="line-clamp-2 text-xs text-muted-foreground">{vm.hook}</p>
+
+      {vm.viralityBars && (
+        <div className="mt-1 flex flex-col gap-0.5" aria-label="virality breakdown">
+          {vm.viralityBars.map((b) => (
+            <div key={b.label} className="flex items-center gap-1.5">
+              <span className="w-12 shrink-0 text-[10px] text-muted-foreground">{b.label}</span>
+              <div className="h-1 flex-1 overflow-hidden rounded bg-muted">
+                <div
+                  className="h-full rounded bg-amber-500"
+                  style={{ width: `${Math.round(b.ratio * 100)}%` }}
+                />
+              </div>
+              <span className="w-7 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
+                {b.score}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="mt-1 flex gap-1">
         {vm.canApprove && (
           <Button

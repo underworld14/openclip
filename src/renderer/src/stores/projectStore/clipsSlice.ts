@@ -38,7 +38,16 @@ export function detectedToClip(d: DetectedClip, index: number): Clip {
     viralityScore: d.virality_score,
     clipType: d.clip_type,
     keywords: d.keywords,
-    status: 'suggested'
+    status: 'suggested',
+    // Part I — carry the 4-D breakdown + opening-hook type for the clip card.
+    virality: {
+      hook: d.virality.hook_score,
+      engagement: d.virality.engagement_score,
+      value: d.virality.value_score,
+      shareability: d.virality.shareability_score,
+      total: d.virality.total_score
+    },
+    hookType: d.virality.hook_type
   }
 }
 

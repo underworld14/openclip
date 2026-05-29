@@ -71,6 +71,14 @@ const FAKE_CLIPS_JSON = JSON.stringify({
       title: 'The hook that stops the scroll',
       hook: 'A bold opening claim that demands attention.',
       virality_score: 9,
+      virality: {
+        hook_score: 24,
+        engagement_score: 22,
+        value_score: 22,
+        shareability_score: 22,
+        total_score: 90,
+        hook_type: 'statement'
+      },
       clip_type: 'hook',
       keywords: ['hook', 'opening'],
       suggested_caption: 'You won’t believe this opener',
@@ -82,6 +90,14 @@ const FAKE_CLIPS_JSON = JSON.stringify({
       title: 'The aha moment',
       hook: 'A counter-intuitive insight that reframes everything.',
       virality_score: 7,
+      virality: {
+        hook_score: 18,
+        engagement_score: 18,
+        value_score: 17,
+        shareability_score: 17,
+        total_score: 70,
+        hook_type: 'contrast'
+      },
       clip_type: 'aha',
       keywords: ['insight', 'aha'],
       suggested_caption: 'This changed how I think',

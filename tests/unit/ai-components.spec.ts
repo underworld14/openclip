@@ -23,7 +23,9 @@ import {
   PROVIDERS,
   filterModels,
   partitionRecommended,
-  formatModelPrice
+  formatModelPrice,
+  LANGUAGES,
+  languageLabel
 } from '@renderer/components/settingsView'
 import { clipsFixture } from '../fixtures/contract'
 import type { Clip } from '@shared/schema'
@@ -59,6 +61,22 @@ describe('clipViewModel (drives ClipCard rendering)', () => {
     expect(suggested.canReject).toBe(true)
     const approved = clipViewModel({ ...clipsFixture[0], status: 'approved' })
     expect(approved.isApproved).toBe(true)
+  })
+
+  it('exposes the 4-D virality total + bars + hook type when present (Part I)', () => {
+    const vm = clipViewModel(clipsFixture[0]) // fixture: total 90, hookType statement
+    expect(vm.viralityTotal).toBe(90)
+    expect(vm.hookType).toBe('statement')
+    expect(vm.viralityBars?.map((b) => b.label)).toEqual(['Hook', 'Engage', 'Value', 'Share'])
+    expect(vm.viralityBars?.[0]).toMatchObject({ score: 24, ratio: 24 / 25 })
+  })
+
+  it('omits the breakdown for an old clip with no virality field', () => {
+    const old: Clip = { ...clipsFixture[0], virality: undefined, hookType: undefined }
+    const vm = clipViewModel(old)
+    expect(vm.viralityTotal).toBeUndefined()
+    expect(vm.viralityBars).toBeUndefined()
+    expect(vm.score).toBe(9) // 1-10 headline still renders
   })
 })
 
@@ -129,5 +147,21 @@ describe('model-picker helpers (Part H — OpenRouter)', () => {
     )
     expect(formatModelPrice(mk({ id: 'b', pricePerMTokIn: 0, pricePerMTokOut: 0 }))).toBe('Free')
     expect(formatModelPrice(mk({ id: 'c' }))).toBe('')
+  })
+})
+
+describe('transcription language helpers (Part I — cross-language)', () => {
+  it('LANGUAGES leads with Auto-detect (empty code) and includes Indonesian', () => {
+    expect(LANGUAGES[0]).toEqual({ code: '', label: 'Auto-detect' })
+    expect(LANGUAGES.find((l) => l.code === 'id')?.label).toBe('Indonesian')
+  })
+
+  it('languageLabel maps undefined/empty → Auto-detect, known → label, unknown → uppercased code', () => {
+    expect(languageLabel(undefined)).toBe('Auto-detect')
+    expect(languageLabel('')).toBe('Auto-detect')
+    expect(languageLabel('  ')).toBe('Auto-detect')
+    expect(languageLabel('id')).toBe('Indonesian')
+    expect(languageLabel('en')).toBe('English')
+    expect(languageLabel('sw')).toBe('SW') // unknown ISO code rendered verbatim, uppercased
   })
 })

@@ -86,7 +86,15 @@ export const CaptionStyle = z.object({
   position: z.enum(['top', 'middle', 'bottom']),
   animation: z.enum(['none', 'pop', 'fade', 'typewriter']),
   highlightCurrentWord: z.boolean(),
-  emojiEnabled: z.boolean()
+  emojiEnabled: z.boolean(),
+  // Part I — caption-preset styling (Hormozi/MrBeast/TikTok/…). All OPTIONAL so
+  // pre-Part-I `.ocproj` still validate and ass-captions reproduces today's
+  // output byte-for-byte when absent (defaults: yellow highlight, black outline
+  // width 3, no shadow).
+  highlightColor: z.string().optional(), // karaoke current-word fill (PrimaryColour)
+  strokeColor: z.string().optional(), // text outline (OutlineColour)
+  strokeWidth: z.number().optional(), // outline thickness (ASS Outline)
+  shadow: z.boolean().optional() // drop shadow on/off (ASS Shadow)
 })
 export type CaptionStyle = z.infer<typeof CaptionStyle>
 
@@ -110,6 +118,20 @@ export type Caption = z.infer<typeof Caption>
 export const ClipStatus = z.enum(['suggested', 'approved', 'edited', 'exported'])
 export type ClipStatus = z.infer<typeof ClipStatus>
 
+/**
+ * Persisted 4-D virality breakdown on a Clip (Part I — supoclip-style scoring).
+ * Optional so pre-Part-I `.ocproj` documents still validate (absent ⇒ only the
+ * 1-10 headline `viralityScore` is shown). Each sub-score is 0-25; `total` 0-100.
+ */
+export const ClipVirality = z.object({
+  hook: z.number(),
+  engagement: z.number(),
+  value: z.number(),
+  shareability: z.number(),
+  total: z.number()
+})
+export type ClipVirality = z.infer<typeof ClipVirality>
+
 /** PRD §9.3 `Clip`. */
 export const Clip = z.object({
   id: z.string(),
@@ -117,14 +139,17 @@ export const Clip = z.object({
   endTime: z.number(), // seconds, absolute (AI-suggested span end)
   title: z.string(),
   hook: z.string(),
-  viralityScore: z.number(), // 1-10
+  viralityScore: z.number(), // 1-10 headline (derived from virality.total/10)
   clipType: z.string(),
   keywords: z.array(z.string()),
   status: ClipStatus,
   editedStart: z.number().optional(), // timeline trim (overrides startTime on export)
   editedEnd: z.number().optional(), // timeline trim (overrides endTime on export)
   captions: z.array(Caption).optional(),
-  thumbnailPath: z.string().optional()
+  thumbnailPath: z.string().optional(),
+  // Part I — optional 4-D breakdown + opening-hook type (absent on old projects).
+  virality: ClipVirality.optional(),
+  hookType: z.string().optional()
 })
 export type Clip = z.infer<typeof Clip>
 
@@ -294,13 +319,38 @@ export const ClipTypeEnum = z.enum([
 ])
 export type ClipTypeEnum = z.infer<typeof ClipTypeEnum>
 
+/**
+ * Opening-hook taxonomy (Part I — supoclip). How the clip OPENS (orthogonal to
+ * `clip_type`, which is the content category).
+ */
+export const HookType = z.enum(['question', 'statement', 'statistic', 'story', 'contrast', 'none'])
+export type HookType = z.infer<typeof HookType>
+
+/**
+ * 4-dimensional virality breakdown (Part I — adopted from supoclip's rubric).
+ * Plain `z.number()` (NO min/max/int) deliberately — the AI-facing schema must
+ * stay within OpenAI strict json_schema's supported keyword subset (same reason
+ * `virality_score` is unconstrained); the prompt states the 0-25 bands and
+ * `reconcileVirality` (ai-client) clamps + recomputes `total_score` in code.
+ */
+export const ViralityBreakdown = z.strictObject({
+  hook_score: z.number(), // 0-25 — opening hook strength
+  engagement_score: z.number(), // 0-25 — entertainment/emotional pull
+  value_score: z.number(), // 0-25 — insight/information value
+  shareability_score: z.number(), // 0-25 — "I need to send this" factor
+  total_score: z.number(), // 0-100 — sum of the four sub-scores
+  hook_type: HookType
+})
+export type ViralityBreakdown = z.infer<typeof ViralityBreakdown>
+
 /** One detected clip candidate (PRD §7.1 output object). */
 export const DetectedClip = z.strictObject({
   start_time: z.number(), // absolute seconds from start of full video
   end_time: z.number(), // absolute seconds
   title: z.string(), // catchy title, < 60 chars (enforced in prompt)
   hook: z.string(), // one sentence: why this moment is engaging
-  virality_score: z.number(), // 1-10
+  virality_score: z.number(), // 1-10 headline (derived from virality.total_score/10)
+  virality: ViralityBreakdown, // Part I — the 4-D breakdown + hook type
   clip_type: ClipTypeEnum,
   keywords: z.array(z.string()),
   suggested_caption: z.string(), // short social caption

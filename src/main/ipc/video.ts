@@ -26,6 +26,7 @@ import type { ImportVideoResult } from '@shared/channels'
 import type { IpcContext } from './index'
 import { registerRunner, hasRunner } from '@main/services/sidecar-manager'
 import { exportRunner } from '@main/services/jobs/export-runner'
+import { probeVideo } from '@main/utils/ffprobe'
 
 export function registerVideoHandlers(ctx: IpcContext): void {
   // Plug the streaming export runner into the sidecar's JOB_RUNNERS registry
@@ -86,10 +87,11 @@ export function registerVideoHandlers(ctx: IpcContext): void {
     }
   )
 
-  // ── Fake-sidecar mode (plan E.10) ────────────────────────────────────────
-  // A fixed, schema-valid SourceVideo so the integration E2E can import without
-  // ffprobe / a real file. (Real IMPORT_VIDEO/IMPORT_FROM_URL belong to a later
-  // import track; only the export-relevant channels above are wired here.)
+  // ── Import / probe (PRD §6.1: validate format + read metadata via ffprobe) ──
+  // In fake-sidecar mode (plan E.10) return a fixed, schema-valid SourceVideo so
+  // the integration E2E can import without a real media file. Otherwise probe
+  // the real file with the bundled ffprobe — the prod packaged-app path the
+  // Gate-D smoke exercises (binary resolved from Contents/Resources).
   if (process.env.OPENCLIP_FAKE_TRANSCRIBE) {
     ctx.ipcMain.handle(
       IPCChannels.IMPORT_VIDEO,
@@ -101,6 +103,13 @@ export function registerVideoHandlers(ctx: IpcContext): void {
           fps: 30,
           format: 'mp4'
         }
+      })
+    )
+  } else {
+    ctx.ipcMain.handle(
+      IPCChannels.IMPORT_VIDEO,
+      async (_e, req: { filePath: string }): Promise<ImportVideoResult> => ({
+        sourceVideo: await probeVideo(req.filePath)
       })
     )
   }

@@ -207,6 +207,23 @@ app.whenReady().then(async () => {
   // Smoke round-trip used by Gate A.
   ipcMain.handle('ping', () => 'pong')
 
+  // Gate-D packaged-bundle diagnostic (PRD §13): expose the PRODUCTION-resolved
+  // sidecar/font paths + process.resourcesPath so the packaged-app smoke can
+  // prove binaries resolve from Contents/Resources (NOT node_modules). Read-only
+  // path strings, no secrets — harmless to keep in production. Resolved lazily so
+  // the import of `paths` stays cheap.
+  ipcMain.handle('diag:resolved-paths', async () => {
+    const paths = await import('./utils/paths')
+    return {
+      resourcesPath: process.resourcesPath,
+      isPackaged: app.isPackaged,
+      ffmpeg: paths.ffmpegPath(),
+      ffprobe: paths.ffprobePath(),
+      whisperCli: paths.whisperCliPath(),
+      fontsDir: paths.fontsDir()
+    }
+  })
+
   // DI seam: build the context once and loop the frozen registrars (E.4).
   const ctx: IpcContext = {
     ipcMain,

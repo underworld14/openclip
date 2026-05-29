@@ -42,11 +42,14 @@ output tensors (`cls_{8,16,32}`, `obj_{8,16,32}`, `bbox_{8,16,32}`, `kps_{8,16,3
 - npm: https://www.npmjs.com/package/onnxruntime-web
 
 The bundled WASM is the **SIMD + multithreaded** build
-(`ort-wasm-simd-threaded.*`). We load `onnxruntime-web/wasm` (the external-wasm
-entry) and set `ort.env.wasm.wasmPaths` to this directory so the loader fetches
-`ort-wasm-simd-threaded.wasm`/`.mjs` from beside the model rather than embedding or
-fetching them from a CDN. Detection runs with `numThreads = 1` (single-threaded,
-no cross-origin-isolation / SharedArrayBuffer requirement).
+(`ort-wasm-simd-threaded.*`). At RUNTIME the detector uses `require('onnxruntime-web')`
+(the package's `node` export → `ort.node.min.js`, an external-wasm build); the
+`verify-package` load-proof uses the `onnxruntime-web/wasm` entry — both reference
+the SAME `ort-wasm-simd-threaded.{wasm,mjs}` and both honor `ort.env.wasm.wasmPaths`,
+which we point at this directory so the loader reads the `.wasm`/`.mjs` from beside
+the model rather than embedding or fetching them from a CDN. Detection runs with
+`numThreads = 1` (single-threaded — no cross-origin-isolation / SharedArrayBuffer
+requirement, which matters in the packaged main process).
 
 > When bumping `onnxruntime-web`, re-run `node scripts/bundle-binaries.mjs` to
 > re-stage the matching `.wasm`/`.mjs` and update the version note above.

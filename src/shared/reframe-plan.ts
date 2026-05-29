@@ -10,7 +10,9 @@
  * Coordinate convention: all face/region values are ABSOLUTE SOURCE pixels.
  * `crop` height is always the full source height (we only move horizontally for a
  * 9:16 column); `cropX` is the left edge of the crop window, clamped to
- * `[0, sourceW - cropW]`. Pan `xExpr` is an ffmpeg expression in source time `t`.
+ * `[0, sourceW - cropW]`. Pan `xExpr` is an ffmpeg expression in CLIP-RELATIVE
+ * time (`t` 0-based from the clip start) — `planReframe` rebases the sample/motion
+ * times by `-clipStart`, matching the `-ss`-rebased PTS ffmpeg feeds `crop`.
  *
  * ffmpeg-expression escaping: a `crop` node's `x='…'` value lives INSIDE the
  * filtergraph mini-language, where a bare `,` would split filter arguments. So the
@@ -63,7 +65,11 @@ export interface CropRegion {
  */
 export type ReframePlan =
   | { mode: 'static'; cropW: number; cropH: number; cropX: number }
-  | { mode: 'pan'; cropW: number; cropH: number; xExpr: string }
+  // `xExpr` is a CLIP-RELATIVE time (`t` 0-based from the clip start, matching the
+  // `-ss`-rebased PTS ffmpeg feeds `crop`). `cropX` is a representative STATIC
+  // fallback used where a time-varying expr can't apply (the jump-cut multi-range
+  // path renders on a silence-COMPRESSED timeline, so it crops at `cropX`).
+  | { mode: 'pan'; cropW: number; cropH: number; xExpr: string; cropX: number }
   | { mode: 'split'; regions: [CropRegion, CropRegion] }
 
 /** What the user asked for (mirrors `JobParams['export'].reframe`). */
@@ -181,7 +187,10 @@ export function cropWidthFor(
 ): { cropW: number; cropH: number } {
   const [arW, arH] = aspect.split(':').map(Number)
   const ideal = source.height * (arW / arH)
-  const cropW = clamp(roundEven(Math.min(source.width, ideal)), 2, source.width)
+  // Both operands EVEN so the min stays even AND never exceeds the source width
+  // (roundEven alone could round an odd source width UP past it). Floor to even.
+  const evenWidth = source.width - (source.width % 2)
+  const cropW = clamp(Math.min(roundEven(ideal), evenWidth), 2, source.width)
   return { cropW, cropH: source.height }
 }
 
@@ -562,7 +571,16 @@ export function reduceKeyframes(
     for (let k = 0; k < budget; k++) picked.push(interior[Math.floor(k * step)])
     reduced = [reduced[0], ...picked, reduced[reduced.length - 1]]
   }
-  return reduced.map((p) => ({ t: r3(p.t), x: ri(p.x) }))
+  // Round, then drop any keyframe whose rounded time collapses onto the previous
+  // one (ms-rounding can coincide) so buildLinearPanExpr never sees a zero-width
+  // `between(t,a,a)` segment.
+  const rounded = reduced.map((p) => ({ t: r3(p.t), x: ri(p.x) }))
+  const out: { t: number; x: number }[] = []
+  for (const kf of rounded) {
+    if (out.length > 0 && kf.t === out[out.length - 1].t) out[out.length - 1] = kf
+    else out.push(kf)
+  }
+  return out
 }
 
 // ============================================================================
@@ -609,7 +627,16 @@ export function buildReframePlan(args: BuildReframePlanArgs): ReframePlan | null
           return ri(clampCropX(c.centerX - cropW / 2, source.width, cropW))
         }
         const steps = segs.map((s) => ({ end: s.end, x: xFor(s.side) }))
-        return { mode: 'pan', cropW, cropH, xExpr: buildStepPanExpr(steps, source.width, cropW) }
+        // Static fallback (jump-cut path): crop on the dominant cluster.
+        const dom = left.weight >= right.weight ? left : right
+        const fallbackX = ri(clampCropX(dom.centerX - cropW / 2, source.width, cropW))
+        return {
+          mode: 'pan',
+          cropW,
+          cropH,
+          xExpr: buildStepPanExpr(steps, source.width, cropW),
+          cropX: fallbackX
+        }
       }
       // Single active side throughout → static on that cluster (fall through to
       // a static crop on the dominant cluster below).
@@ -626,8 +653,14 @@ export function buildReframePlan(args: BuildReframePlanArgs): ReframePlan | null
     path.map((p) => p.x),
     EMA_ALPHA
   )
-  const minC = Math.min(...smoothed)
-  const maxC = Math.max(...smoothed)
+  // Single-pass min/max (NOT Math.min(...spread): spreading a long sample array
+  // overflows the call stack at ~200k elements — bound the path regardless of fps).
+  let minC = smoothed[0]
+  let maxC = smoothed[0]
+  for (const c of smoothed) {
+    if (c < minC) minC = c
+    if (c > maxC) maxC = c
+  }
 
   // Within the deadzone → a single STATIC crop centered on the mean center.
   if (maxC - minC <= deadzonePx) {
@@ -641,5 +674,13 @@ export function buildReframePlan(args: BuildReframePlanArgs): ReframePlan | null
     x: clampCropX(smoothed[i] - cropW / 2, source.width, cropW)
   }))
   const keyframes = reduceKeyframes(cropXPath, deadzonePx)
-  return { mode: 'pan', cropW, cropH, xExpr: buildLinearPanExpr(keyframes, source.width, cropW) }
+  // Static fallback (jump-cut path): center on the mean smoothed position.
+  const fallbackX = ri(clampCropX(mean(smoothed) - cropW / 2, source.width, cropW))
+  return {
+    mode: 'pan',
+    cropW,
+    cropH,
+    xExpr: buildLinearPanExpr(keyframes, source.width, cropW),
+    cropX: fallbackX
+  }
 }

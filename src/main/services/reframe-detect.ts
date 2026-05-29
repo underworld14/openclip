@@ -400,6 +400,7 @@ export async function detectReframe(opts: DetectReframeOptions): Promise<DetectR
   const frameCount = Math.floor(buf.length / frameBytes)
   const samples: SampleFrame[] = []
   for (let i = 0; i < frameCount; i++) {
+    if (opts.signal?.aborted) throw new Error('reframe detection aborted')
     const frame = buf.subarray(i * frameBytes, (i + 1) * frameBytes)
     const faces = await detector(frame, modelSize, modelSize)
     samples.push({
@@ -644,9 +645,18 @@ export async function planReframe(opts: PlanReframeOptions): Promise<ReframePlan
     }
   }
 
+  // CLIP-RELATIVE rebase (Part J review fix): ffmpeg feeds `crop`'s `t` the
+  // `-ss`-rebased 0-based PTS, NOT the absolute source time. detectReframe stamps
+  // sample/motion times absolute (startTime-offset), so we subtract startTime here
+  // → the pan `xExpr` is authored in clip-relative time and lines up with the cut.
+  const rebasedSamples = samples.map((s) => ({ ...s, timeMs: s.timeMs - opts.startTime * 1000 }))
+  const rebasedMotion: MotionTimeline | undefined = motion
+    ? { ...motion, times: motion.times.map((t) => t - opts.startTime) }
+    : undefined
+
   return buildReframePlan({
-    samples,
-    motion,
+    samples: rebasedSamples,
+    motion: rebasedMotion,
     source: opts.source,
     aspect: opts.aspect,
     mode: opts.mode

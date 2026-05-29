@@ -131,8 +131,10 @@ export interface JobParams {
      */
     reframe?: 'off' | 'auto' | 'split'
     /**
-     * Source video pixel size + fps (from `Project.sourceVideo`), supplied by the
-     * renderer so the reframe step needn't re-ffprobe. Required when reframe != off.
+     * Source video pixel size (from `Project.sourceVideo`), supplied by the renderer
+     * so the reframe face-detection step needn't re-ffprobe — REQUIRED when reframe
+     * != off (absent ⇒ reframe is skipped → center-crop). `fps` is informational
+     * (the detector samples at its own fixed rate); kept for future tuning.
      */
     sourceResolution?: { width: number; height: number }
     fps?: number

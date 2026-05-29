@@ -13,6 +13,7 @@ import {
   exportClipArgs,
   exportClipArgsMultiRange,
   exportClipArgsSplit,
+  staticizeForCompressedTimeline,
   thumbnailArgs,
   buildVf,
   cropExpr,
@@ -84,7 +85,8 @@ describe('buildVf with a reframePlan (Part J auto-reframe)', () => {
       mode: 'pan',
       cropW: 608,
       cropH: 1080,
-      xExpr: 'max(0,min(1312,200+50*t))'
+      xExpr: 'max(0,min(1312,200+50*t))',
+      cropX: 240
     }
     expect(buildVf({ aspectRatio: '9:16', reframePlan: plan })).toBe(
       "crop=608:1080:x='max(0,min(1312,200+50*t))':y=0,scale=1080:1920"
@@ -192,7 +194,7 @@ describe('exportClipArgs (the verified command)', () => {
     )
     const panArgs = exportClipArgs({
       ...base,
-      reframePlan: { mode: 'pan', cropW: 608, cropH: 1080, xExpr: 'min(1312,200+50*t)' }
+      reframePlan: { mode: 'pan', cropW: 608, cropH: 1080, xExpr: 'min(1312,200+50*t)', cropX: 240 }
     })
     expect(panArgs[panArgs.indexOf('-vf') + 1]).toBe(
       "crop=608:1080:x='min(1312,200+50*t)':y=0,scale=1080:1920"
@@ -243,17 +245,40 @@ describe('exportClipArgsMultiRange (Part I.4 jump-cuts)', () => {
     expect(() => exportClipArgsMultiRange({ ...base })).toThrow(/keepRanges/)
   })
 
-  it('composes a pan reframe crop AFTER select,setpts (crop reads source t, Part J)', () => {
+  it('staticizeForCompressedTimeline: pan → static cropX; static/split/null pass through', () => {
+    const pan: ReframePlan = {
+      mode: 'pan',
+      cropW: 608,
+      cropH: 1080,
+      xExpr: 'min(1312,200+50*t)',
+      cropX: 240
+    }
+    expect(staticizeForCompressedTimeline(pan)).toEqual({
+      mode: 'static',
+      cropW: 608,
+      cropH: 1080,
+      cropX: 240
+    })
+    const stat: ReframePlan = { mode: 'static', cropW: 608, cropH: 1080, cropX: 100 }
+    expect(staticizeForCompressedTimeline(stat)).toBe(stat) // unchanged
+    expect(staticizeForCompressedTimeline(null)).toBeNull()
+    expect(staticizeForCompressedTimeline(undefined)).toBeUndefined()
+  })
+
+  it('coerces a PAN plan to its static cropX on the compressed jump-cut timeline (Part J review fix)', () => {
+    // After select,setpts the timeline is silence-COMPRESSED, so the pan xExpr
+    // (authored in the clip's uncompressed time) can't apply — the multi-range
+    // path crops at the pan's representative cropX (a constant) instead.
     const args = exportClipArgsMultiRange({
       ...base,
       keepRanges,
-      reframePlan: { mode: 'pan', cropW: 608, cropH: 1080, xExpr: 'min(1312,200+50*t)' }
+      reframePlan: { mode: 'pan', cropW: 608, cropH: 1080, xExpr: 'min(1312,200+50*t)', cropX: 240 }
     })
     const fc = args[args.indexOf('-filter_complex') + 1]
-    // The reframe crop sits where cropExpr was: after setpts, before scale.
     expect(fc).toContain(
-      "[0:v]select='between(t,30,40)+between(t,44,58.5)',setpts=N/FRAME_RATE/TB,crop=608:1080:x='min(1312,200+50*t)':y=0,scale=1080:1920[v]"
+      "[0:v]select='between(t,30,40)+between(t,44,58.5)',setpts=N/FRAME_RATE/TB,crop=608:1080:x=240:y=0,scale=1080:1920[v]"
     )
+    expect(fc).not.toContain("x='min(1312,200+50*t)'") // the time-expr is NOT used here
   })
 
   it('composes a static reframe crop in the multi-range chain (Part J)', () => {

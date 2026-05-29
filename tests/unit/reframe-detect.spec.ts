@@ -390,6 +390,34 @@ describe('planReframe orchestration (Part J Phase 2)', () => {
     expect(plan?.mode === 'static' || plan?.mode === 'pan').toBe(true)
   })
 
+  it('rebases the pan xExpr to CLIP-RELATIVE time for a clip starting after 0 (review-critical fix)', async () => {
+    // A single speaker sweeping left→right (center moves well past the deadzone) →
+    // a PAN plan. The clip starts at 30s; sample times are stamped absolute. The
+    // emitted xExpr MUST be in clip-relative time (t≈0..), matching the `-ss`-rebased
+    // PTS ffmpeg feeds crop — NOT absolute source seconds (the silent-mis-crop bug).
+    const sweep: SampleFrame[] = [600, 760, 920, 1080].map((x, i) => ({
+      timeMs: 30_000 + i * 500, // (30 + i*0.5)s, absolute
+      faces: [face(x)]
+    }))
+    const plan = await planReframe({
+      sourcePath: '/s.mp4',
+      startTime: 30,
+      endTime: 32,
+      source: SRC,
+      aspect: '9:16',
+      mode: 'auto',
+      detect: detectStub(sweep),
+      motion: vi.fn() as never
+    })
+    expect(plan?.mode).toBe('pan')
+    if (plan?.mode === 'pan') {
+      // first keyframe boundary is at clip-relative t≈0, never the absolute 30.
+      expect(plan.xExpr).toContain('between(t\\,0\\,')
+      expect(plan.xExpr).not.toContain('30\\,') // no absolute-time boundary leaked through
+      expect(plan.cropX).toBeGreaterThanOrEqual(0) // static fallback present for jump-cuts
+    }
+  })
+
   it('two speakers + auto → runs the motion pass', async () => {
     const two = (t: number): SampleFrame => ({ timeMs: t, faces: [face(300), face(1500)] })
     const detect = detectStub([two(0), two(500), two(1000), two(1500)])

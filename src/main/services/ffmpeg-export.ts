@@ -124,6 +124,22 @@ export function reframeCropNode(aspect: AspectRatio, plan?: ReframePlan | null):
 }
 
 /**
+ * Coerce a `pan` plan to its STATIC fallback for the jump-cut (multi-range) path.
+ * That path re-stamps kept frames onto a silence-COMPRESSED timeline (`setpts`),
+ * so the pan `xExpr` (authored in the clip's UNcompressed time) no longer lines up
+ * — we crop at the pan's representative `cropX` instead (a constant is correct on
+ * any timeline). `static`/`split`/no-plan pass through unchanged.
+ */
+export function staticizeForCompressedTimeline(
+  plan?: ReframePlan | null
+): ReframePlan | null | undefined {
+  if (plan && plan.mode === 'pan') {
+    return { mode: 'static', cropW: plan.cropW, cropH: plan.cropH, cropX: plan.cropX }
+  }
+  return plan
+}
+
+/**
  * Build the `-vf` filtergraph string: `<crop>,scale=W:H[,subtitles=…:fontsdir=…]`.
  * The optional subtitles node is appended LAST (the caption-burn seam). Paths
  * inside the `subtitles=` filter are escaped for the filtergraph mini-language.
@@ -282,11 +298,12 @@ export function exportClipArgsMultiRange(opts: ExportArgsOptions): string[] {
   // `+`-joined OR of the kept spans; single-quoted so the commas are literal to
   // the filtergraph parser (not filter separators).
   const between = keep.map(([a, b]) => `between(t,${a},${b})`).join('+')
-  // The reframe crop (static/pan) goes AFTER `select,setpts`: `crop`'s `t` is the
-  // SOURCE timestamp of each kept frame, so a `pan` expr in source `t` stays
-  // correct even though `setpts` re-stamps the OUTPUT timeline. No plan / a
-  // `split` plan ⇒ the center-crop (split is rendered by exportClipArgsSplit).
-  const crop = reframeCropNode(opts.aspectRatio, opts.reframePlan)
+  // The reframe crop goes AFTER `select,setpts`, where `crop`'s `t` is the
+  // silence-COMPRESSED 0-based output time. A `pan` plan's `xExpr` is authored in
+  // the clip's UNcompressed time, so it can't apply here — coerce pan → its static
+  // `cropX` (a constant crop, correct on the compressed timeline). `static`/no plan
+  // pass through; a `split` plan is rendered by exportClipArgsSplit, not here.
+  const crop = reframeCropNode(opts.aspectRatio, staticizeForCompressedTimeline(opts.reframePlan))
   let vchain = `[0:v]select='${between}',setpts=N/FRAME_RATE/TB,${crop},scale=${width}:${height}`
   if (opts.assPath) {
     vchain += `,subtitles=${escapeFilterPath(opts.assPath)}`
@@ -416,8 +433,11 @@ export interface ThumbnailArgsOptions {
 }
 
 /**
- * Build the single-frame thumbnail argv (PRD Appendix A `-vframes 1`), reframed
- * to the same aspect ratio as the export so the thumbnail matches the clip.
+ * Build the single-frame thumbnail argv (PRD Appendix A `-vframes 1`), reframed to
+ * the export's aspect ratio. NOTE: the thumbnail uses the static CENTER-crop — it
+ * does NOT apply an auto-reframe (Part J) face-crop or split-screen, so for a
+ * reframed export the thumbnail may not match the exported framing (acceptable: a
+ * thumbnail is a coarse preview, and a time-varying pan has no single frame).
  *   ffmpeg -ss <t> -i src -vframes 1 -vf "<crop>,scale=W:H" thumb.jpg
  */
 export function thumbnailArgs(opts: ThumbnailArgsOptions): string[] {

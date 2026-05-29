@@ -108,7 +108,10 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
     emit: JobEmitter<'export'>,
     ctx: JobRunnerContext
   ): Promise<JobResult['export']> => {
-    emit.progress(0, 'encoding')
+    // Lead with a stage that matches what runs first: an 'analyzing' pass when we
+    // detect silences/faces, else straight to 'encoding' (keeps progress monotonic).
+    const willAnalyze = !!params.removeSilence || (!!params.reframe && params.reframe !== 'off')
+    emit.progress(0, willAnalyze ? 'analyzing' : 'encoding')
 
     // Jump-cut (Part I.4, opt-in): detect silences in the clip span → compute the
     // spans to keep. Best-effort — a detection failure (or no removable silence)
@@ -142,7 +145,6 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
     // the plan null ⇒ the static center-crop (export never fails because of this).
     let reframePlan: ReframePlan | null = null
     if (params.reframe && params.reframe !== 'off' && params.sourceResolution) {
-      emit.progress(0, 'analyzing')
       try {
         reframePlan = await planReframe({
           sourcePath: params.sourcePath,
@@ -153,8 +155,14 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
           mode: params.reframe,
           signal: ctx.signal
         })
-      } catch {
-        /* reframe detection failed → static center-crop (never block the export) */
+      } catch (e) {
+        // Best-effort → static center-crop (never block the export). LOG it, though:
+        // a missing/broken model is otherwise indistinguishable from "no faces found".
+        console.warn(
+          `[export] reframe detection failed; falling back to center-crop: ${
+            e instanceof Error ? e.message : String(e)
+          }`
+        )
       }
     }
 

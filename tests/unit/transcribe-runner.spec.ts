@@ -1,0 +1,109 @@
+/**
+ * tests/unit/transcribe-runner.spec.ts — the `transcribe` job runner, driven by
+ * the REAL SidecarManager over the fake-port harness, with whisper INJECTED (no
+ * real binary). Proves: progress + per-word/segment partials stream, the
+ * terminal `done` carries the frozen `JobResult['transcribe']` shape, and the
+ * job-termination invariant holds (PRD §6.2 / §10.2).
+ */
+
+import { describe, expect, it } from 'vitest'
+import { MessageChannel } from 'node:worker_threads'
+import { SidecarManager, type EventPort } from '@main/services/sidecar-manager'
+import { createTranscribeRunner } from '@main/services/jobs/transcribe-runner'
+import { jobEvents, type MessagePortLike } from '@renderer/hooks/useJob'
+import { transcriptFixture } from '../fixtures/contract'
+import type { JobEventFor } from '@shared/jobs'
+import type { ParsedTranscript } from '@main/services/whisper-parse'
+
+/** A fake whisper run that streams two words then resolves a parsed transcript. */
+function fakeWhisper(): ReturnType<typeof createTranscribeRunner> {
+  return createTranscribeRunner({
+    resolveModelPath: () => '/models/ggml-base.bin',
+    isModelInstalled: () => true,
+    runWhisper: async (o) => {
+      o.onProgress?.(20)
+      o.onWord?.({ word: 'Hello', start: 0.05, end: 0.47, confidence: 0 })
+      o.onProgress?.(60)
+      o.onWord?.({ word: 'world.', start: 0.47, end: 1.24, confidence: 0 })
+      o.onProgress?.(100)
+      const parsed: ParsedTranscript = {
+        language: 'en',
+        words: transcriptFixture.words,
+        segments: transcriptFixture.segments
+      }
+      return parsed
+    }
+  })
+}
+
+function eventPortFor(mgr: SidecarManager): { port: EventPort; consume: MessagePortLike } {
+  const { port1, port2 } = new MessageChannel()
+  port1.start()
+  const port: EventPort = {
+    postMessage: (v) => port2.postMessage(v),
+    close: () => port2.close(),
+    on: (ev, l) => port2.on(ev, l as () => void),
+    start: () => port2.start()
+  }
+  void mgr
+  return { port, consume: port1 as unknown as MessagePortLike }
+}
+
+describe('transcribe-runner: streams words/segments then a contract-valid done', () => {
+  it('emits progress + partials and a terminal done with language/segments/words', async () => {
+    const mgr = new SidecarManager()
+    const runner = fakeWhisper()
+    // register via the public seam
+    const { registerRunner, getRunner } = await import('@main/services/sidecar-manager')
+    if (!getRunner('transcribe')) registerRunner('transcribe', runner)
+
+    const { port, consume } = eventPortFor(mgr)
+    mgr.startJob('transcribe', { projectId: 'p1', wavPath: '/tmp/a.wav', model: 'base' }, port)
+
+    const seen: string[] = []
+    let done: JobEventFor<'transcribe'> | null = null
+    let partialWords = 0
+    for await (const ev of jobEvents<'transcribe'>(consume)) {
+      seen.push(ev.t)
+      if (ev.t === 'partial') partialWords += ev.data.words.length
+      if (ev.t === 'done') done = ev
+    }
+
+    expect(seen).toContain('progress')
+    expect(seen).toContain('partial')
+    expect(seen[seen.length - 1]).toBe('done')
+    expect(partialWords).toBeGreaterThan(0)
+    expect(done).not.toBeNull()
+    expect(done!.t).toBe('done')
+    if (done!.t === 'done') {
+      expect(done!.result.language).toBe('en')
+      expect(done!.result.segments.length).toBeGreaterThan(0)
+      expect(done!.result.words.length).toBeGreaterThan(0)
+    }
+  })
+})
+
+describe('transcribe-runner: missing model surfaces a typed input error', () => {
+  it('throws when the model is not installed (no silent hang)', async () => {
+    const runner = createTranscribeRunner({
+      resolveModelPath: () => '/models/ggml-base.bin',
+      isModelInstalled: () => false,
+      runWhisper: async () => {
+        throw new Error('should not be called')
+      }
+    })
+    const emit = {
+      progress: () => {},
+      partial: () => {},
+      done: () => {},
+      error: () => {}
+    }
+    await expect(
+      runner({ projectId: 'p1', wavPath: '/tmp/a.wav', model: 'base' }, emit, {
+        signal: new AbortController().signal,
+        trackPid: () => {},
+        jobId: 'j1'
+      })
+    ).rejects.toThrow(/model.*not installed|not installed/i)
+  })
+})

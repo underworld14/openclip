@@ -16,4 +16,4 @@
 export * from './whisper-parse'
 
 // ── SEAM: T-Media appends its re-export below (one writer per line) ──
-// T-Media:  export * from './whisper-spawn'
+export * from './whisper-spawn'

@@ -20,6 +20,7 @@ import type { NamespaceMethods } from './api/types'
 import { buildVideoApi } from './api/video'
 import { buildAudioApi } from './api/audio'
 import { buildAiApi } from './api/ai'
+import { buildMediaApi } from './api/media'
 import { buildProjectApi } from './api/project'
 import { buildSettingsApi } from './api/settings'
 import { buildModelApi } from './api/model'
@@ -35,8 +36,10 @@ export interface OpenClipBridge {
   video: NamespaceMethods<'video'>
   /** audio:extract → extract */
   audio: NamespaceMethods<'audio'>
-  /** ai:generate-clips, ai:generate-titles, ai:enhance-captions */
+  /** ai:generate-clips, ai:generate-titles, ai:enhance-captions, ai:list-models */
   ai: NamespaceMethods<'ai'>
+  /** media:adopt-source → adoptSource */
+  media: NamespaceMethods<'media'>
   /** project:save|load|list|delete */
   project: NamespaceMethods<'project'>
   /** settings:get|set|api-key-status|set-api-key */
@@ -57,6 +60,7 @@ const openclip: OpenClipBridge = {
   video: buildVideoApi(),
   audio: buildAudioApi(),
   ai: buildAiApi(),
+  media: buildMediaApi(),
   project: buildProjectApi(),
   settings: buildSettingsApi(),
   model: buildModelApi(),

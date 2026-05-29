@@ -12,7 +12,7 @@
 
 import { create } from 'zustand'
 import type { Settings, AIProvider } from '@shared/schema'
-import type { ApiKeyStatus } from '@shared/channels'
+import type { ApiKeyStatus, ModelInfo } from '@shared/channels'
 
 const DEFAULT_SETTINGS: Settings = {
   aiProvider: 'openai',
@@ -32,8 +32,15 @@ export interface SettingsStore {
   settings: Settings
   /** Renderer-safe key status per provider (NEVER the raw key — PRD §12.2). */
   keyStatus: Partial<Record<AIProvider, ApiKeyStatus>>
+  /** Provider model list for the picker (Part H — OpenRouter), recommended-first. */
+  models: ModelInfo[]
+  modelsLoading: boolean
+  modelsError: string | null
+  modelsFetchedAt: number | null
   setSettings: (patch: Partial<Settings>) => void
   setKeyStatus: (status: ApiKeyStatus) => void
+  /** Fetch the current provider's model list via the bridge (Part H). */
+  loadModels: (refresh?: boolean) => Promise<void>
   /** Load settings + the current provider's key status from main. */
   load: () => Promise<void>
   /** Persist a settings patch via the bridge; updates local state with the result. */
@@ -48,12 +55,33 @@ export interface SettingsStore {
   refreshKeyStatus: (provider: AIProvider) => Promise<void>
 }
 
-export const useSettingsStore = create<SettingsStore>()((set) => ({
+export const useSettingsStore = create<SettingsStore>()((set, get) => ({
   settings: DEFAULT_SETTINGS,
   keyStatus: {},
+  models: [],
+  modelsLoading: false,
+  modelsError: null,
+  modelsFetchedAt: null,
   setSettings: (patch) => set((s) => ({ settings: { ...s.settings, ...patch } })),
   setKeyStatus: (status) =>
     set((s) => ({ keyStatus: { ...s.keyStatus, [status.provider]: status } })),
+  loadModels: async (refresh) => {
+    const provider = get().settings.aiProvider
+    set({ modelsLoading: true, modelsError: null })
+    try {
+      const res = await window.openclip.ai.listModels({ provider, refresh })
+      // Drop a stale completion if the user switched providers mid-fetch.
+      if (get().settings.aiProvider !== provider) return
+      set({ models: res.models, modelsFetchedAt: res.fetchedAt, modelsLoading: false })
+    } catch (e) {
+      if (get().settings.aiProvider !== provider) return
+      // Store only a message string — never any key material.
+      set({
+        modelsLoading: false,
+        modelsError: e instanceof Error ? e.message : String(e)
+      })
+    }
+  },
   load: async () => {
     const settings = await window.openclip.settings.get()
     const status = await window.openclip.settings.apiKeyStatus({ provider: settings.aiProvider })
@@ -64,7 +92,12 @@ export const useSettingsStore = create<SettingsStore>()((set) => ({
   },
   save: async (patch) => {
     const settings = await window.openclip.settings.set({ settings: patch })
-    set({ settings })
+    // Switching provider invalidates the model list (it's per-provider).
+    set((s) =>
+      patch.aiProvider && patch.aiProvider !== s.settings.aiProvider
+        ? { settings, models: [], modelsError: null, modelsFetchedAt: null }
+        : { settings }
+    )
   },
   setApiKey: async (provider, key) => {
     const status = await window.openclip.settings.setApiKey({ provider, key })

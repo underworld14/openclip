@@ -16,7 +16,10 @@ import {
   buildOpenAITransport,
   buildAnthropicTransport,
   buildOllamaTransport,
-  clipJsonSchema
+  clipJsonSchema,
+  createTransport,
+  OPENROUTER_BASE_URL,
+  OPENROUTER_APP_TITLE
 } from '@main/services/ai-client'
 import { ClipSchema } from '@shared/schema'
 import { clipSchemaFixture } from '../fixtures/contract'
@@ -92,6 +95,37 @@ describe('Anthropic adapter', () => {
     const transport = buildAnthropicTransport({ messages: { parse } } as never, 'claude-sonnet-4-5')
     const { rawText } = await transport(PROMPT)
     expect(JSON.parse(rawText).clips).toHaveLength(1)
+  })
+})
+
+describe('createTransport: OpenRouter (Part H)', () => {
+  it('builds an OpenAI client at the OpenRouter base URL with attribution headers', async () => {
+    const ctorCalls: Array<Record<string, unknown>> = []
+    vi.doMock('openai', () => ({
+      default: class {
+        chat = {
+          completions: {
+            create: vi.fn(async () => ({ choices: [{ message: { content: '{}' } }] }))
+          }
+        }
+        constructor(opts: Record<string, unknown>) {
+          ctorCalls.push(opts)
+        }
+      }
+    }))
+    const transport = await createTransport({
+      provider: 'openrouter',
+      model: 'anthropic/claude-sonnet-4.5',
+      apiKey: 'sk-or-XYZ'
+    })
+    expect(typeof transport).toBe('function')
+    expect(ctorCalls).toHaveLength(1)
+    expect(ctorCalls[0].baseURL).toBe(OPENROUTER_BASE_URL)
+    expect(ctorCalls[0].apiKey).toBe('sk-or-XYZ')
+    const headers = ctorCalls[0].defaultHeaders as Record<string, string>
+    expect(headers['X-Title']).toBe(OPENROUTER_APP_TITLE)
+    expect(headers['HTTP-Referer']).toBeTruthy()
+    vi.doUnmock('openai')
   })
 })
 

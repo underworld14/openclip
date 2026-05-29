@@ -42,7 +42,12 @@ export enum IPCChannels {
   GENERATE_CLIPS = 'ai:generate-clips',
   GENERATE_TITLES = 'ai:generate-titles',
   ENHANCE_CAPTIONS = 'ai:enhance-captions',
+  /** List a provider's available models (OpenRouter, Part H) → `ai.listModels`. */
+  AI_LIST_MODELS = 'ai:list-models',
   EXPORT_CLIP = 'video:export',
+  // Media: adopt a downloaded source file into <userData>/media/<projectId>/ so it
+  // persists with the project + is deleted with it (Part H) → `media.adoptSource`.
+  MEDIA_ADOPT_SOURCE = 'media:adopt-source',
   // Project
   SAVE_PROJECT = 'project:save',
   LOAD_PROJECT = 'project:load',
@@ -128,6 +133,36 @@ export interface ApiKeyStatus {
   last4?: string
 }
 
+/** Request a provider's model list (Part H — OpenRouter). */
+export interface ListModelsRequest {
+  provider: AIProvider
+  /** Bypass the in-memory TTL cache and re-fetch. */
+  refresh?: boolean
+}
+
+/** One model option surfaced in the picker (Part H). */
+export interface ModelInfo {
+  id: string
+  name: string
+  contextLength?: number
+  /** USD per 1M prompt / completion tokens (omitted when unknown/free). */
+  pricePerMTokIn?: number
+  pricePerMTokOut?: number
+  /** Supports strict JSON (structured_outputs / response_format) — clip detection needs this. */
+  supportsStructured: boolean
+  /** In the curated recommended shortlist (pinned to the top of the list). */
+  recommended: boolean
+  description?: string
+}
+
+/** Provider model list, already ordered recommended-first (Part H). */
+export interface ListModelsResult {
+  provider: AIProvider
+  models: ModelInfo[]
+  fetchedAt: number // epoch ms
+  fromCache: boolean
+}
+
 /** Whisper model presence on disk (PRD §13 / §10.1 model:status). */
 export interface ModelStatus {
   model: WhisperModelSize
@@ -176,6 +211,13 @@ export interface ChannelMap {
   [IPCChannels.GENERATE_CLIPS]: ChannelPayload<GenerateClipsRequest, ClipSchema>
   [IPCChannels.GENERATE_TITLES]: ChannelPayload<GenerateTitlesRequest, GenerateTitlesResult>
   [IPCChannels.ENHANCE_CAPTIONS]: ChannelPayload<EnhanceCaptionsRequest, EnhanceCaptionsResult>
+  [IPCChannels.AI_LIST_MODELS]: ChannelPayload<ListModelsRequest, ListModelsResult>
+
+  // --- Media ---
+  [IPCChannels.MEDIA_ADOPT_SOURCE]: ChannelPayload<
+    { projectId: string; filePath: string },
+    { path: string }
+  >
 
   // --- Project ---
   [IPCChannels.SAVE_PROJECT]: ChannelPayload<{ project: Project }, { path: string }>

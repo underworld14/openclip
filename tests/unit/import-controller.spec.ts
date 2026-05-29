@@ -56,6 +56,7 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
   saveProject: ReturnType<typeof vi.fn>
   runImportPipeline: ReturnType<typeof vi.fn>
   runUrlDownload: ReturnType<typeof vi.fn>
+  adoptSource: ReturnType<typeof vi.fn>
   onNeedModel: ReturnType<typeof vi.fn>
   pcts: number[]
   storage: ReturnType<typeof fakeStorage>
@@ -99,6 +100,10 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
     return { filePath: '/dl/v.mp4', title: 'Real Video Title', bytes: 1234 }
   })
 
+  const adoptSource = vi.fn(async (_pid: string, fp: string) => ({
+    path: `/media/PID/${fp.split('/').pop()}`
+  }))
+
   const ctl = createImportController({
     bridge: {
       model: { status: async () => [{ model: 'base', installed: true }] }
@@ -108,6 +113,7 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
     genId: () => 'PID',
     storage,
     onNeedModel,
+    adoptSource,
     runImportPipeline: runImportPipeline as unknown as ImportControllerDeps['runImportPipeline'],
     runUrlDownload: runUrlDownload as unknown as ImportControllerDeps['runUrlDownload'],
     ...overrides
@@ -122,6 +128,7 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
     saveProject,
     runImportPipeline,
     runUrlDownload,
+    adoptSource,
     onNeedModel,
     pcts,
     storage
@@ -247,5 +254,46 @@ describe('import-controller: re-import data integrity (G.3)', () => {
     await ctl.importFile('/movies/first.mp4')
     expect(saveProject).not.toHaveBeenCalled()
     expect(setCurrentProject).toHaveBeenCalledWith(expect.objectContaining({ id: 'PID' }))
+  })
+})
+
+describe('import-controller: managed media adoption (Part H)', () => {
+  it('URL import adopts the download into media and marks the source app-owned', async () => {
+    const { ctl, adoptSource, setCurrentProject, runImportPipeline } = build({
+      storage: fakeStorage({ [CONSENT_KEY]: '1' })
+    })
+    await ctl.importUrl('https://youtu.be/x')
+
+    // Adopt is called with the new project id + the downloaded path, BEFORE the
+    // pipeline runs on the adopted path.
+    expect(adoptSource).toHaveBeenCalledWith('PID', '/dl/v.mp4')
+    expect(runImportPipeline).toHaveBeenCalledWith(
+      expect.objectContaining({ filePath: '/media/PID/v.mp4' })
+    )
+    const project = setCurrentProject.mock.calls.at(-1)?.[0]
+    expect(project.sourceVideo.path).toBe('/media/PID/v.mp4')
+    expect(project.sourceVideo.appOwned).toBe(true)
+  })
+
+  it('file import does NOT adopt and the source is not app-owned', async () => {
+    const { ctl, adoptSource, setCurrentProject } = build()
+    await ctl.importFile('/Users/me/Movies/original.mp4')
+    expect(adoptSource).not.toHaveBeenCalled()
+    const project = setCurrentProject.mock.calls.at(-1)?.[0]
+    expect(project.sourceVideo.path).toBe('/Users/me/Movies/original.mp4')
+    expect(project.sourceVideo.appOwned).toBe(false)
+  })
+
+  it('an adopt failure surfaces an error and does not create a project', async () => {
+    const adoptSource = vi.fn(async () => {
+      throw new Error('disk full')
+    })
+    const { ctl, setCurrentProject } = build({
+      storage: fakeStorage({ [CONSENT_KEY]: '1' }),
+      adoptSource
+    } as Partial<ImportControllerDeps>)
+    await ctl.importUrl('https://youtu.be/x')
+    expect(ctl.getState().error).toMatch(/disk full/)
+    expect(setCurrentProject).not.toHaveBeenCalled()
   })
 })

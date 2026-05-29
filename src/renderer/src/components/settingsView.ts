@@ -8,13 +8,14 @@
  */
 
 import type { AIProvider } from '@shared/schema'
-import type { ApiKeyStatus } from '@shared/channels'
+import type { ApiKeyStatus, ModelInfo } from '@shared/channels'
 
 const PROVIDER_LABELS: Record<AIProvider, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   google: 'Google Gemini',
-  ollama: 'Ollama (local)'
+  ollama: 'Ollama (local)',
+  openrouter: 'OpenRouter'
 }
 
 export function providerLabel(provider: AIProvider): string {
@@ -27,4 +28,40 @@ export function keyStatusLabel(status: ApiKeyStatus | undefined): string {
   return `Key set ••••${status.last4 ?? ''}`
 }
 
-export const PROVIDERS: AIProvider[] = ['openai', 'anthropic', 'google', 'ollama']
+export const PROVIDERS: AIProvider[] = ['openai', 'anthropic', 'google', 'ollama', 'openrouter']
+
+// ── Model-picker pure helpers (Part H — OpenRouter) ──────────────────────────
+
+/** Case-insensitive substring filter over id + name + description (empty → all). */
+export function filterModels(models: ModelInfo[], query: string): ModelInfo[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return models
+  return models.filter(
+    (m) =>
+      m.id.toLowerCase().includes(q) ||
+      m.name.toLowerCase().includes(q) ||
+      (m.description ?? '').toLowerCase().includes(q)
+  )
+}
+
+/** Split into the recommended (pinned) group and the rest, preserving order. */
+export function partitionRecommended(models: ModelInfo[]): {
+  recommended: ModelInfo[]
+  others: ModelInfo[]
+} {
+  return {
+    recommended: models.filter((m) => m.recommended),
+    others: models.filter((m) => !m.recommended)
+  }
+}
+
+/** "$3.00 / $15.00 per 1M" pricing summary; "Free" / "" when unknown. */
+export function formatModelPrice(m: ModelInfo): string {
+  const fmt = (n: number | undefined): string | null =>
+    n === undefined ? null : n === 0 ? '$0' : `$${n.toFixed(2)}`
+  const inp = fmt(m.pricePerMTokIn)
+  const out = fmt(m.pricePerMTokOut)
+  if (inp === null && out === null) return ''
+  if (inp === '$0' && out === '$0') return 'Free'
+  return `${inp ?? '?'} / ${out ?? '?'} per 1M`
+}

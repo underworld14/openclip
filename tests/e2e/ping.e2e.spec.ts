@@ -42,6 +42,7 @@ test('ping IPC round-trips and the openclip bridge is exposed', async () => {
     'ai',
     'audio',
     'jobs',
+    'media',
     'model',
     'project',
     'settings',

@@ -11,10 +11,14 @@
  * handler is wired with an INJECTED transport factory so no provider is hit.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { IpcContext } from '@main/ipc/index'
 import { registerSettingsHandlers } from '@main/ipc/settings'
-import { registerAiHandlers, __setTransportFactoryForTests } from '@main/ipc/ai'
+import {
+  registerAiHandlers,
+  __setTransportFactoryForTests,
+  __setModelsFetcherForTests
+} from '@main/ipc/ai'
 import { KeyVault, type SafeStorageLike, type SecretStoreBackend } from '@main/utils/security'
 import { IPCChannels } from '@shared/channels'
 import type { ChannelMap, ChannelReq, ChannelRes } from '@shared/channels'
@@ -155,5 +159,75 @@ describe('ai handler: GENERATE_CLIPS (transport injected — no network)', () =>
     ).rejects.toThrow(/INPUT_INVALID/)
 
     __setTransportFactoryForTests(null)
+  })
+})
+
+describe('ai handler: AI_LIST_MODELS (Part H — fetcher injected, no network)', () => {
+  afterEach(() => __setModelsFetcherForTests(null))
+
+  it('returns recommended-first models for openrouter using the decrypted key, no key in the response', async () => {
+    const { ctx, handlers, vault } = makeCtx()
+    vault.setKey('openrouter', 'sk-or-SECRET99')
+    let keyGivenToFetcher: string | null = null
+    __setModelsFetcherForTests(async ({ apiKey }) => {
+      keyGivenToFetcher = apiKey
+      return [
+        { id: 'b/other', name: 'Other', supported_parameters: ['structured_outputs'] },
+        {
+          id: 'anthropic/claude-sonnet-4.5',
+          name: 'Claude',
+          supported_parameters: ['structured_outputs']
+        },
+        { id: 'tools/only', name: 'ToolsOnly', supported_parameters: ['tools'] } // dropped
+      ]
+    })
+    registerAiHandlers(ctx)
+
+    const res = await call(handlers, IPCChannels.AI_LIST_MODELS, {
+      provider: 'openrouter',
+      refresh: true
+    })
+    expect(res.provider).toBe('openrouter')
+    // Curated pin first; non-structured dropped.
+    expect(res.models[0].id).toBe('anthropic/claude-sonnet-4.5')
+    expect(res.models[0].recommended).toBe(true)
+    expect(res.models.some((m) => m.id === 'tools/only')).toBe(false)
+    // Key was used main-side; never in the response.
+    expect(keyGivenToFetcher).toBe('sk-or-SECRET99')
+    expect(JSON.stringify(res)).not.toContain('sk-or-SECRET')
+  })
+
+  it('serves the second call from cache (no second fetch) unless refresh is set', async () => {
+    const { ctx, handlers } = makeCtx()
+    const fetcher = vi.fn(async () => [
+      { id: 'a/b', name: 'A', supported_parameters: ['structured_outputs'] }
+    ])
+    __setModelsFetcherForTests(fetcher)
+    registerAiHandlers(ctx)
+
+    const first = await call(handlers, IPCChannels.AI_LIST_MODELS, {
+      provider: 'openrouter',
+      refresh: true
+    })
+    expect(first.fromCache).toBe(false)
+    const second = await call(handlers, IPCChannels.AI_LIST_MODELS, { provider: 'openrouter' })
+    expect(second.fromCache).toBe(true)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    const third = await call(handlers, IPCChannels.AI_LIST_MODELS, {
+      provider: 'openrouter',
+      refresh: true
+    })
+    expect(third.fromCache).toBe(false)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+  })
+
+  it('returns an empty list for non-openrouter providers (no fetch)', async () => {
+    const { ctx, handlers } = makeCtx()
+    const fetcher = vi.fn(async () => [])
+    __setModelsFetcherForTests(fetcher)
+    registerAiHandlers(ctx)
+    const res = await call(handlers, IPCChannels.AI_LIST_MODELS, { provider: 'openai' })
+    expect(res.models).toEqual([])
+    expect(fetcher).not.toHaveBeenCalled()
   })
 })

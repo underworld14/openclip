@@ -17,6 +17,7 @@ import type { SidecarManager } from '@main/services/sidecar-manager'
 import { registerVideoHandlers } from './video'
 import { registerAudioHandlers } from './audio'
 import { registerAiHandlers } from './ai'
+import { registerMediaHandlers } from './media'
 import { registerProjectHandlers } from './project'
 import { registerSettingsHandlers } from './settings'
 import { registerModelHandlers } from './model'
@@ -64,6 +65,7 @@ export const HANDLER_REGISTRARS: ReadonlyArray<HandlerRegistrar> = Object.freeze
   registerVideoHandlers,
   registerAudioHandlers,
   registerAiHandlers,
+  registerMediaHandlers,
   registerProjectHandlers,
   registerSettingsHandlers,
   registerModelHandlers,

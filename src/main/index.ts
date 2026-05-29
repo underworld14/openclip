@@ -280,12 +280,41 @@ app.whenReady().then(async () => {
   registerAllHandlers(ctx)
   wireJobControlPlane()
 
+  // Launch-time orphan-media sweep (Part H): reclaim <userData>/media/<id>/ dirs
+  // with no matching .ocproj (downloads from crashed/abandoned imports). Fire-and-
+  // forget so window creation isn't blocked; best-effort + logged.
+  void sweepOrphanMediaAtLaunch().catch((err) => console.error('[media] orphan sweep failed:', err))
+
   createWindow()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
+
+/**
+ * Reclaim orphaned app-owned media at launch (Part H): media subdirs are named by
+ * project id, so any `<userData>/media/<id>/` without a matching `<id>.ocproj` is
+ * a leftover from a crashed/abandoned import. Reads `.ocproj` basenames directly
+ * (no Zod parse) so a transiently-unreadable project still protects its media.
+ */
+async function sweepOrphanMediaAtLaunch(): Promise<void> {
+  const { readdir } = await import('node:fs/promises')
+  const { projectsDir, mediaDir } = await import('./utils/paths')
+  const { sweepOrphanMedia } = await import('./services/media-store')
+  const { OCPROJ_EXT } = await import('./services/project-store')
+  let referenced: string[] = []
+  try {
+    const entries = await readdir(projectsDir())
+    referenced = entries
+      .filter((f) => f.endsWith(OCPROJ_EXT))
+      .map((f) => f.slice(0, -OCPROJ_EXT.length))
+  } catch {
+    // No projects dir yet ⇒ everything under media/ is orphaned; sweep with [].
+  }
+  const { removed } = await sweepOrphanMedia(referenced, mediaDir())
+  if (removed.length) console.log(`[media] swept ${removed.length} orphan media dir(s):`, removed)
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

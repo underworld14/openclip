@@ -1,5 +1,19 @@
-appId: com.electron.app
-productName: openclip-scaffold
+# electron-builder.yml — OpenClip Desktop packaging (P7 / PRD §13, §15; plan E.6)
+#
+# macOS Apple-Silicon-first arm64 dmg. The three native sidecars are bundled as
+# `extraResources` and resolved at runtime by src/main/utils/paths.ts:
+#   resources/ffmpeg  → <Resources>/ffmpeg/<plat-arch>/{ffmpeg,ffprobe}
+#   resources/whisper → <Resources>/whisper/<plat-arch>/whisper-cli
+#   build/fonts       → <Resources>/fonts/DejaVuSans.ttf   (libass fontsdir)
+# These directories are populated by scripts/bundle-binaries.mjs (run in the
+# `beforePack` hook below) so the bundle is reproducible and not committed.
+#
+# Signing/notarization: hardenedRuntime + entitlements always; the afterSign
+# hook (build/notarize.cjs) notarizes ONLY when Apple credentials are present in
+# the environment, otherwise it logs "skipping" and returns so dev/unsigned
+# builds still complete (PRD §15).
+appId: com.openclip.desktop
+productName: OpenClip
 directories:
   buildResources: build
 files:
@@ -8,35 +22,52 @@ files:
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
-  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,tsconfig.shared.json,tsconfig.test.json}'
+  - '!{vitest.config.ts,playwright.config.ts,components.json}'
+  - '!{tests,scripts,test-results,playwright-report,.smoke-cache}/**'
+# Populate resources/{ffmpeg,whisper}/<plat-arch> from node_modules / the whisper
+# build output before the app is packed (keeps large binaries out of git — plan E.6).
+beforePack: build/bundle-binaries.cjs
+# afterSign notarize hook — gated on env creds (see build/notarize.cjs).
+afterSign: build/notarize.cjs
+# Bundled sidecars + native addons must NOT live inside app.asar (they have to be
+# spawnable / dlopen-able from disk) — PRD §13, §8.4.
 asarUnpack:
   - resources/**
-win:
-  executableName: openclip-scaffold
-nsis:
-  artifactName: ${name}-${version}-setup.${ext}
-  shortcutName: ${productName}
-  uninstallDisplayName: ${productName}
-  createDesktopShortcut: always
+  - '**/*.node'
+# Native binaries shipped beside the app and resolved via process.resourcesPath.
+extraResources:
+  - from: resources/ffmpeg
+    to: ffmpeg
+    filter:
+      - '**/*'
+  - from: resources/whisper
+    to: whisper
+    filter:
+      - '**/*'
+  - from: build/fonts
+    to: fonts
+    filter:
+      - '**/*.ttf'
 mac:
-  entitlementsInherit: build/entitlements.mac.plist
-  extendInfo:
-    - NSCameraUsageDescription: Application requests access to the device's camera.
-    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
-    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
-    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
-  notarize: false
-dmg:
-  artifactName: ${name}-${version}.${ext}
-linux:
+  category: public.app-category.video
   target:
-    - AppImage
-    - snap
-    - deb
-  maintainer: electronjs.org
-  category: Utility
-appImage:
-  artifactName: ${name}-${version}.${ext}
+    - target: dmg
+      arch:
+        - arm64
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # The custom afterSign hook performs notarization conditionally; disable the
+  # built-in path so an unsigned dev build is not forced to notarize.
+  notarize: false
+  extendInfo:
+    - NSMicrophoneUsageDescription: OpenClip does not record audio; this is declared only because bundled media tooling links AVFoundation.
+    - NSDocumentsFolderUsageDescription: OpenClip reads and writes video projects you choose.
+    - NSDownloadsFolderUsageDescription: OpenClip exports finished clips to folders you choose.
+dmg:
+  artifactName: ${name}-${version}-${arch}.${ext}
 npmRebuild: false
 publish:
   provider: generic

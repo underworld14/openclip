@@ -1,5 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  OpenClip hardened-runtime entitlements (PRD §15).
+
+  - allow-jit + allow-unsigned-executable-memory: required by Chromium/V8 in the
+    Electron renderer under Hardened Runtime.
+  - allow-dyld-environment-variables: lets the main process spawn the bundled
+    FFmpeg/whisper sidecars with a controlled environment.
+
+  NOTE: com.apple.security.cs.disable-library-validation is deliberately OMITTED.
+  All three bundled sidecars (ffmpeg, ffprobe, whisper-cli) are self-contained and
+  link ONLY /usr/lib and /System/Library dylibs (verified via `otool -L` at bundle
+  time — see scripts/bundle-binaries.mjs), so no unsigned third-party dylib is ever
+  loaded into the app's process space. If a future native-addon (e.g. smart-whisper)
+  path is adopted, add disable-library-validation then (PRD §15).
+-->
 <plist version="1.0">
   <dict>
     <key>com.apple.security.cs.allow-jit</key>

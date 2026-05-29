@@ -27,6 +27,13 @@ tests/fixtures/.generated
 # …but DO keep the bundled libre caption font (PRD §6.4 / §20)
 !build/fonts/*.ttf
 
+# bundled native sidecars — copied at build time by scripts/bundle-binaries.mjs,
+# NEVER committed (large; reproducible from node_modules + the whisper build — P7/§13)
+resources/ffmpeg/
+resources/whisper/
+# local whisper.cpp build output staged for the bundler
+build/whisper-build/
+
 # secrets / local env
 .env
 .env.*

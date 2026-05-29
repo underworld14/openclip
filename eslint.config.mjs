@@ -79,5 +79,15 @@ export default defineConfig(
       '@typescript-eslint/no-explicit-any': 'off'
     }
   },
+  // Build/packaging tooling (Node scripts + electron-builder CJS hooks). These run
+  // outside the app process and are intentionally plain JS/CommonJS — relax the
+  // TS-author conventions (return types, no-require) for them only.
+  {
+    files: ['scripts/**/*.{mjs,cjs,js}', 'build/**/*.{cjs,js,mjs}'],
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off',
+      '@typescript-eslint/no-require-imports': 'off'
+    }
+  },
   eslintConfigPrettier
 )

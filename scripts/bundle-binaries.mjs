@@ -72,14 +72,33 @@ function resolveFfprobeStatic() {
   return m.ffprobePath
 }
 
-/** Resolve youtube-dl-exec's auto-installed yt-dlp binary (F.4). */
+/**
+ * Resolve the SELF-CONTAINED standalone yt-dlp binary (F.4 / F.9). We ship the
+ * `yt-dlp_macos` release (a PyInstaller universal2 executable — only libSystem +
+ * libz, NO Python dependency) rather than youtube-dl-exec's Python zipapp, which
+ * needs python ≥3.10 on the host and fails on macOS's default python3. Downloaded
+ * once into a build cache; reused if present.
+ */
 function resolveYtDlp() {
-  const { constants } = require('youtube-dl-exec')
-  const p = constants?.YOUTUBE_DL_PATH
-  if (!p || typeof p !== 'string') {
-    fail('youtube-dl-exec did not resolve constants.YOUTUBE_DL_PATH (reinstall it)')
+  if (process.env.OPENCLIP_YTDLP_SRC && existsSync(process.env.OPENCLIP_YTDLP_SRC)) {
+    return process.env.OPENCLIP_YTDLP_SRC
   }
-  return p
+  const asset =
+    process.platform === 'darwin'
+      ? 'yt-dlp_macos'
+      : process.platform === 'win32'
+        ? 'yt-dlp.exe'
+        : 'yt-dlp'
+  const outName = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'
+  const cacheDir = join(repoRoot, 'build', 'yt-dlp-cache', platArch)
+  const cached = join(cacheDir, outName)
+  if (existsSync(cached)) return cached
+  mkdirSync(cacheDir, { recursive: true })
+  const url = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${asset}`
+  log(`downloading standalone yt-dlp (${asset}) → ${cached}`)
+  execFileSync('curl', ['-fsSL', '-o', cached, url], { stdio: 'inherit' })
+  chmodSync(cached, 0o755)
+  return cached
 }
 
 /** Find the locally-built (static, Metal-embedded) whisper-cli. NEVER brew. */
@@ -144,38 +163,20 @@ function verifyPortable(bin, label) {
 }
 
 /**
- * Run `yt-dlp --version`. IMPORTANT (F.4 / F.9): youtube-dl-exec ships the yt-dlp
- * PYTHON ZIPAPP (shebang `/usr/bin/env python3`), NOT a self-contained binary —
- * it requires Python >= 3.10 on the host PATH at runtime. If the default
- * `python3` is too old, we retry with a modern `python3.NN` so the bundling step
- * can still verify the binary in dev environments whose default python3 is < 3.10.
- * The version-stamp string still tracks the yt-dlp release (e.g. "2026.03.17").
+ * Run `yt-dlp --version`. The bundled binary is the SELF-CONTAINED standalone
+ * release (no Python), so it must run directly with a date-stamped version
+ * (e.g. "2026.03.17") — a Python traceback or empty output is a hard failure.
  */
 function verifyYtDlpRuns(bin) {
-  const versionOk = (out) => /^\s*\d{4}\.\d{2}\.\d{2}/.test(out) || /\d+\.\d+/.test(out)
-  // Try direct (uses the zipapp's `/usr/bin/env python3` shebang) first.
-  const direct = spawnSync(bin, ['--version'], { encoding: 'utf8' })
-  if (!direct.error && direct.status === 0 && versionOk(direct.stdout ?? '')) {
-    log(`yt-dlp OK: runs (--version → ${(direct.stdout ?? '').trim().split('\n')[0]})`)
-    return
+  const r = spawnSync(bin, ['--version'], { encoding: 'utf8' })
+  const out = (r.stdout ?? '').trim()
+  if (r.error || r.status !== 0 || !/^\d{4}\.\d{2}\.\d{2}/.test(out)) {
+    fail(
+      `bundled yt-dlp did not run a self-contained --version (got: ${JSON.stringify(out)} ` +
+        `status=${r.status}). It must be the standalone yt-dlp release (no Python).`
+    )
   }
-  // Fall back to an explicit modern interpreter if the default python3 is < 3.10.
-  for (const py of ['python3.13', 'python3.12', 'python3.11', 'python3.10']) {
-    const r = spawnSync(py, [bin, '--version'], { encoding: 'utf8' })
-    if (!r.error && r.status === 0 && versionOk(r.stdout ?? '')) {
-      log(
-        `yt-dlp OK: runs via ${py} (--version → ${(r.stdout ?? '').trim().split('\n')[0]}). ` +
-          `NOTE: the zipapp needs Python >= 3.10 at runtime (F.9 packaging risk).`
-      )
-      return
-    }
-  }
-  fail(
-    `bundled yt-dlp did not run --version. It is a Python zipapp requiring ` +
-      `Python >= 3.10 on PATH; the default python3 appears too old and no ` +
-      `python3.10+ was found. (See F.9 — consider shipping the standalone ` +
-      `yt-dlp_macos binary instead.)`
-  )
+  log(`yt-dlp OK: self-contained, runs (--version → ${out.split('\n')[0]})`)
 }
 
 function verifyWhisperRuns(bin) {

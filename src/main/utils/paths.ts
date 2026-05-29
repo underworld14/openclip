@@ -123,7 +123,12 @@ export function whisperCliPath(): string {
 export function ytDlpPath(): string {
   if (process.env.OPENCLIP_YTDLP) return process.env.OPENCLIP_YTDLP
   if (isDev()) {
-    // youtube-dl-exec ships `constants.YOUTUBE_DL_PATH` → its auto-installed yt-dlp.
+    // Prefer the self-contained standalone binary staged in resources/ (the
+    // `yt-dlp_macos` release — only libSystem+libz, NO Python). youtube-dl-exec's
+    // managed binary is a Python zipapp needing python ≥3.10, which is unreliable
+    // on hosts that ship an older python3 (e.g. macOS 3.9), so it's only a fallback.
+    const bundled = join(process.cwd(), 'resources', 'yt-dlp', platArch(), 'yt-dlp')
+    if (existsSync(bundled)) return bundled
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const m = require('youtube-dl-exec') as { constants?: { YOUTUBE_DL_PATH?: string } }
     const p = m.constants?.YOUTUBE_DL_PATH

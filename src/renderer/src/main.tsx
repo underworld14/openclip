@@ -4,7 +4,8 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { useProjectStore } from './stores/projectStore'
-import { runImportPipeline } from './components/import-pipeline'
+import { runImportPipeline, runUrlDownload } from './components/import-pipeline'
+import { acquireJobPort } from './hooks/jobPort'
 import { projectActions } from './hooks/useProject'
 import { runExport } from './components/export-run'
 import { buildExportParams } from './stores/projectStore/exportSlice'
@@ -21,6 +22,8 @@ declare global {
     __openclipTest?: {
       store: typeof useProjectStore
       runImportPipeline: typeof runImportPipeline
+      runUrlDownload: typeof runUrlDownload
+      acquireJobPort: typeof acquireJobPort
       projectActions: typeof projectActions
       runExport: typeof runExport
       /** TIMELINE E2E (P6): prove a drag retrim → resolveBounds → export span. */
@@ -32,6 +35,8 @@ declare global {
 window.__openclipTest = {
   store: useProjectStore,
   runImportPipeline,
+  runUrlDownload,
+  acquireJobPort,
   projectActions,
   runExport,
   buildExportParams,

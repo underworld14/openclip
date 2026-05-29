@@ -190,4 +190,44 @@ describe('@serial ffmpeg-export — real cut + 9:16 reframe re-encode', () => {
       rmSync(tmp, { recursive: true, force: true })
     }
   })
+
+  it.skipIf(!HAVE_FFMPEG)(
+    'a 2-up SPLIT export is bounded to the CLIP span, not the whole source (review-critical guard)',
+    async () => {
+      const { videoMp4 } = ensureFixtures() // 1280×720 25fps 4s
+      const tmp = mkdtempSync(join(tmpdir(), 'openclip-split-'))
+      try {
+        const out = join(tmp, 'split.mp4')
+        // Cut [1.0, 3.0) = 2.0s of the 4s source with a 2-speaker split plan. The
+        // bug (missing -ss/-t) would re-encode the FULL 4s source → ~4s output.
+        const result = await exportClip({
+          sourcePath: videoMp4,
+          outputPath: out,
+          startTime: 1.0,
+          endTime: 3.0,
+          aspectRatio: '9:16',
+          quality: '1080p',
+          forceCpu: true,
+          binPath: resolveFfmpeg(),
+          reframePlan: {
+            mode: 'split',
+            regions: [
+              { cropX: 0, cropY: 0, cropW: 640, cropH: 720 },
+              { cropX: 640, cropY: 0, cropW: 640, cropH: 720 }
+            ]
+          }
+        })
+        expect(result.width).toBe(1080)
+        expect(result.height).toBe(1920)
+        const { stream, durationSec } = probe(out)
+        expect(stream.width).toBe(1080)
+        expect(stream.height).toBe(1920)
+        expect(stream.codec_name).toBe('h264')
+        // Duration ≈ the 2.0s clip span (NOT the 4s source) — within ~3 frames.
+        expect(Math.abs(durationSec - 2.0)).toBeLessThanOrEqual(0.12)
+      } finally {
+        rmSync(tmp, { recursive: true, force: true })
+      }
+    }
+  )
 })

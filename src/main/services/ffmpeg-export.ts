@@ -337,20 +337,22 @@ export function exportClipArgsMultiRange(opts: ExportArgsOptions): string[] {
  * (optionally jump-cut) video into two crops and `vstack`s them into one 9:16
  * frame. Each tile is a 1080×960 half; stacked → 1080×1920 (PRD §6.5 9:16).
  *
- *   ffmpeg -i src -filter_complex
+ *   ffmpeg -ss <start> -i src -t <dur> -filter_complex
  *     "[0:v][,select='…',setpts=…]split=2[l][r];
- *      [l]crop=<region0>,scale=1080:960[lv];
- *      [r]crop=<region1>,scale=1080:960[rv];
+ *      [l]crop=<region0>,scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960[lv];
+ *      [r]crop=<region1>,scale=1080:960:…,crop=1080:960[rv];
  *      [lv][rv]vstack=inputs=2[,subtitles=…:fontsdir=…][v];
  *      [0:a][aselect='…',asetpts=…][a]"
  *     -map [v] -map [a] -c:v … -c:a aac -movflags +faststart out
  *
- * When `keepRanges` actually drop something, the same `select/setpts` (video) and
- * `aselect/asetpts` (audio) jump-cut nodes run BEFORE the split (video) / on the
- * audio chain; the region crops then read each kept frame's SOURCE `t`. With no
- * removing keepRanges the video forks straight from `[0:v]` and audio maps `0:a`.
- * Subtitles (compressed-timeline `.ass`) burn AFTER the `vstack`, the proven
- * caption-burn order (fix M3). Throws if the plan is not a `split`.
+ * `-ss`/`-t` BOUND the encode to the clip span (without them the split re-encoded
+ * the WHOLE source) and rebase the timeline to 0-based CLIP-RELATIVE. When
+ * `keepRanges` drop something, `select/setpts` (video) + `aselect/asetpts` (audio)
+ * jump-cut nodes run on that clip-relative timeline (start-subtracted ranges); with
+ * no removing keepRanges the video forks straight from `[0:v]` and audio maps `0:a`.
+ * Each tile cover-fits its half (scale-up-then-center-crop) so an off-ratio cluster
+ * box isn't distorted. Subtitles (compressed `.ass`) burn AFTER the `vstack` (fix
+ * M3). Throws if the plan is not a `split`.
  */
 export function exportClipArgsSplit(opts: ExportArgsOptions): string[] {
   const plan = opts.reframePlan
@@ -361,22 +363,30 @@ export function exportClipArgsSplit(opts: ExportArgsOptions): string[] {
   // Each tile fills the top/bottom 1080×960 half of the 1080×1920 9:16 output.
   const TILE_W = 1080
   const TILE_H = 960
+  const duration = opts.endTime - opts.startTime
 
   // Jump-cut (Part I.4): only when the kept ranges actually drop something. The
   // select/setpts run BEFORE the split so the forked tiles share one compressed
   // timeline; the audio is selected in lock-step (else mapped straight from 0:a).
+  // `-ss`/`-t` (below) bound the encode to the clip span and rebase the decoded
+  // timeline to 0-based CLIP-RELATIVE time, so the keep ranges are start-subtracted.
   const keep = opts.keepRanges ?? []
   const removing = keep.length > 0 && removesAnything(keep, opts.startTime, opts.endTime)
-  const between = removing ? keep.map(([a, b]) => `between(t,${a},${b})`).join('+') : ''
+  const rel = (n: number): number => Math.round((n - opts.startTime) * 1000) / 1000
+  const between = removing ? keep.map(([a, b]) => `between(t,${rel(a)},${rel(b)})`).join('+') : ''
   const vSelect = removing ? `select='${between}',setpts=N/FRAME_RATE/TB,` : ''
 
-  const cropNode = (r: typeof r0): string => `crop=${r.cropW}:${r.cropH}:x=${r.cropX}:y=${r.cropY}`
+  // Crop the cluster region, then COVER-fit the tile (scale up preserving aspect →
+  // center-crop to exactly the tile) so an off-ratio cluster box isn't distorted.
+  const cropNode = (r: typeof r0): string =>
+    `crop=${r.cropW}:${r.cropH}:x=${r.cropX}:y=${r.cropY},` +
+    `scale=${TILE_W}:${TILE_H}:force_original_aspect_ratio=increase,crop=${TILE_W}:${TILE_H}`
 
-  // [0:v] → (optional select) → split into two; each half crop+scale to a tile.
+  // [0:v] → (optional select) → split into two; each half crop+cover-fit to a tile.
   let fc =
     `[0:v]${vSelect}split=2[l][r];` +
-    `[l]${cropNode(r0)},scale=${TILE_W}:${TILE_H}[lv];` +
-    `[r]${cropNode(r1)},scale=${TILE_W}:${TILE_H}[rv];` +
+    `[l]${cropNode(r0)}[lv];` +
+    `[r]${cropNode(r1)}[rv];` +
     `[lv][rv]vstack=inputs=2`
   // Burn captions AFTER the vstack (the proven order, fix M3).
   if (opts.assPath) {
@@ -394,8 +404,13 @@ export function exportClipArgsSplit(opts: ExportArgsOptions): string[] {
   return [
     '-hide_banner',
     '-y',
+    // Bound the encode to the clip span (was MISSING → encoded the whole source).
+    '-ss',
+    String(opts.startTime),
     '-i',
     opts.sourcePath,
+    '-t',
+    String(duration),
     '-filter_complex',
     fc,
     '-map',

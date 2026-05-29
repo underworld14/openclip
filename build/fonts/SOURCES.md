@@ -22,6 +22,11 @@ Download URLs (raw):
 - https://raw.githubusercontent.com/google/fonts/main/ofl/bebasneue/BebasNeue-Regular.ttf
 - https://raw.githubusercontent.com/google/fonts/main/ofl/poppins/Poppins-ExtraBold.ttf
 
+The full SIL OFL 1.1 license text (with each font's copyright + Reserved Font
+Names) travels with the fonts in **`OFL.txt`** in this directory; it ships under
+`<Resources>/fonts/` via the same `extraResources` rule, satisfying the OFL's
+"license must accompany the fonts" requirement.
+
 > When adding a font, reference it in a caption preset by its **family name**
-> (verify with `fc-scan --format '%{family}\n' <file>`), and add a row here.
-> The OFL requires the license text to travel with the fonts — keep this file.
+> (verify with `fc-scan --format '%{family}\n' <file>`), add a row here, and
+> append its `OFL.txt` license text to `OFL.txt`.

@@ -29,7 +29,7 @@ const NO_BOX = '#00000000'
 export const CAPTION_PRESETS: CaptionPreset[] = [
   {
     id: 'default',
-    name: 'Default',
+    name: 'Clean',
     description: 'Clean white caps with a gold highlight',
     style: {
       fontFamily: 'Bebas Neue',
@@ -152,7 +152,9 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
       backgroundColor: '#00000080',
       position: 'bottom',
       animation: 'fade',
-      highlightCurrentWord: false,
+      // Karaoke highlight is always on in the ASS burn path; keep this true so the
+      // preset doesn't advertise a toggle the renderer doesn't honor.
+      highlightCurrentWord: true,
       emojiEnabled: false,
       highlightColor: '#CCCCCC',
       strokeColor: '#000000',

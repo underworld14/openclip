@@ -211,6 +211,15 @@ export function exportClipArgs(opts: ExportArgsOptions): string[] {
  *     "[0:v]select='between(t,a,b)+…',setpts=N/FRAME_RATE/TB,<crop>,scale=W:H[,subtitles=…][v];
  *      [0:a]aselect='between(t,a,b)+…',asetpts=N/SR/TB[a]"
  *     -map [v] -map [a] -c:v … -c:a aac -movflags +faststart out
+ *
+ * TRADE-OFFS (documented, acceptable for the opt-in feature):
+ *   - No `-ss`: `between(t,…)` predicates reference absolute source `t`, so the
+ *     source is decoded from 0 (the single-range path's fast keyframe seek isn't
+ *     available here). Cost scales with the clip's distance into the source.
+ *   - `setpts=N/FRAME_RATE/TB` re-stamps to a continuous CFR timeline; video and
+ *     audio are re-stamped independently from their own selected-frame counts, so
+ *     a tiny per-cut A/V skew can accumulate over MANY cuts / on VFR input. Fine
+ *     for typical re-encoded short-form sources; not frame-exact across cuts.
  */
 export function exportClipArgsMultiRange(opts: ExportArgsOptions): string[] {
   const keep = opts.keepRanges ?? []

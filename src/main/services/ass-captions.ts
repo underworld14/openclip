@@ -46,15 +46,16 @@ import {
   scopeWordsToClip,
   scopeWordsToKeepRanges,
   groupIntoLines,
-  isDroppableToken
+  isDroppableToken,
+  DEFAULT_CAPTION_STYLE
 } from '@shared/caption-layout'
 import { annotateWords, type AnnotatedWord } from '@shared/caption-emphasis'
 
-// Part K (Step 1): the line-layout primitives moved to the PURE `@shared`
-// module so the renderer preview can import them too. Re-export here so existing
-// `@main/services/ass-captions` importers (tests, reframe, …) are unaffected and
-// the golden `.ass` strings stay byte-for-byte identical.
-export { scopeWordsToClip, scopeWordsToKeepRanges, isDroppableToken }
+// Part K (Step 1): the line-layout primitives + the default style moved to the
+// PURE `@shared` module so the renderer preview can import them too. Re-export
+// here so existing `@main/services/ass-captions` importers (tests, reframe, …)
+// are unaffected and the golden `.ass` strings stay byte-for-byte identical.
+export { scopeWordsToClip, scopeWordsToKeepRanges, isDroppableToken, DEFAULT_CAPTION_STYLE }
 export type { RebasedWord } from '@shared/caption-layout'
 
 // ============================================================================
@@ -64,18 +65,6 @@ export type { RebasedWord } from '@shared/caption-layout'
 /** ASS script resolution the styles are authored against — matches the 1080×1920
  * export canvas so Fontsize/Margins are in output pixels (PlayResX/Y). */
 export const ASS_PLAY_RES = { x: 1080, y: 1920 } as const
-
-/** Default style if a caller passes none (mirrors the bundled font, PRD §6.4). */
-export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
-  fontFamily: 'DejaVu Sans',
-  fontSize: 64,
-  fontColor: '#FFFFFF',
-  backgroundColor: '#000000',
-  position: 'bottom',
-  animation: 'none',
-  highlightCurrentWord: true,
-  emojiEnabled: false
-}
 
 /** The highlight (karaoke-fill) color words turn once spoken. */
 const HIGHLIGHT_COLOR_ASS = '&H0000FFFF' // opaque yellow (BGR: 00 FF FF)

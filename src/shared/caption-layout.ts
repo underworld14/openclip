@@ -11,8 +11,26 @@
  * the golden `.ass` strings stay byte-for-byte identical.
  */
 
-import type { WordTimestamp } from './schema'
+import type { CaptionStyle, WordTimestamp } from './schema'
 import { compressTimeClamped, type Range } from './keep-ranges'
+
+/**
+ * The app-default caption style (the bundled DejaVu Sans karaoke look, PRD §6.4).
+ * Lives in `@shared` so BOTH the burn (`buildAss` fallback, re-exported via
+ * ass-captions) AND the renderer (preview + `resolveEffectiveCaptionStyle`) share
+ * one source. `buildAss(opts.style ?? DEFAULT_CAPTION_STYLE)` means passing this
+ * explicitly is byte-identical to passing nothing.
+ */
+export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
+  fontFamily: 'DejaVu Sans',
+  fontSize: 64,
+  fontColor: '#FFFFFF',
+  backgroundColor: '#000000',
+  position: 'bottom',
+  animation: 'none',
+  highlightCurrentWord: true,
+  emojiEnabled: false
+}
 
 // ============================================================================
 // Token filtering — drop whisper special / blank tokens

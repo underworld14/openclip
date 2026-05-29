@@ -97,7 +97,6 @@ export function isUrl(value: string): boolean {
 export interface UrlDownloadOptions {
   bridge: OpenClipBridge
   url: string
-  outDir?: string
   /** 0..100 download progress + stage label. */
   onProgress?: (pct: number, stage: string) => void
 }
@@ -108,12 +107,9 @@ export interface UrlDownloadOptions {
  * the local file path of the downloaded+merged mp4. Throws on a terminal error
  * (never hangs) so the caller can surface a retriable toast.
  */
-export async function runUrlDownload(
-  opts: UrlDownloadOptions
-): Promise<JobResult['url-download']> {
+export async function runUrlDownload(opts: UrlDownloadOptions): Promise<JobResult['url-download']> {
   const { jobId } = await opts.bridge.jobs.start('url-download', {
-    url: opts.url,
-    outDir: opts.outDir
+    url: opts.url
   })
   const port = await acquireJobPort(jobId)
   let result: JobResult['url-download'] | null = null

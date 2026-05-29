@@ -57,18 +57,29 @@ registerMediaScheme()
  * F.5 audit: this header is now the SINGLE source of truth (the page-level
  * <meta> CSP was removed from index.html — it intersected with this header and
  * the stale meta blocked the module script/media in the packaged build).
- * Nothing inline is required: the entry is an EXTERNAL module script
- * (`/src/main.tsx`, covered by `script-src 'self'`); Tailwind v4 injects styles
- * via <style> tags (covered by `style-src 'self' 'unsafe-inline'`); AI providers
- * are reached over https (`connect-src 'self' https:`); the source-video preview
- * streams over the privileged `openclip-media:` scheme + blob:/file:
+ *
+ * DEV vs PROD differ for script-src. In PROD the renderer is a static built
+ * bundle whose only entry is an EXTERNAL module script (covered by
+ * `script-src 'self'`) — so prod stays strict (no inline, no eval). In DEV,
+ * `@vitejs/plugin-react` (Fast Refresh) injects an INLINE `<script type=module>`
+ * preamble into the page and `main.tsx` throws if that preamble didn't run
+ * (`__vite_plugin_react_preamble_installed__`). A strict `script-src 'self'`
+ * blocks that inline preamble → React never mounts → blank (dark) window on
+ * `npm run dev`. So DEV must allow `'unsafe-inline' 'unsafe-eval'` for scripts
+ * (HMR/Refresh). This relaxation is DEV-ONLY and never ships.
+ *
+ * In both: Tailwind v4 injects styles via <style> tags (`style-src 'unsafe-inline'`);
+ * AI providers are reached over https (`connect-src https:`); the source-video
+ * preview streams over the privileged `openclip-media:` scheme + blob:/file:
  * (`media-src`). `font-src 'self' data:` covers the bundled font + any data: URI.
  */
 function cspHeader(): string {
   if (is.dev) {
     return [
       "default-src 'self'",
-      "script-src 'self'",
+      // DEV-ONLY: Vite HMR + React Fast Refresh inject an inline module preamble
+      // and may eval; without these the renderer can't boot in dev (see above).
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob:",
       // The privileged `openclip-media:` scheme serves the source video to the

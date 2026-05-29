@@ -54,7 +54,10 @@ export function createUrlDownloadRunner(
   ): Promise<JobResult['url-download']> => {
     emit.progress(0, 'downloading')
 
-    const outDir = params.outDir ?? resolveOutDir(ctx.jobId)
+    // Always derive the output dir server-side from the jobId — never trust a
+    // renderer-supplied path (G.2 trust boundary: a renderer outDir would be an
+    // arbitrary-file-write primitive). The URL itself is validated in downloadUrl.
+    const outDir = resolveOutDir(ctx.jobId)
 
     const result = await download({
       url: params.url,

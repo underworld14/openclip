@@ -107,11 +107,11 @@ runVersion(bins['whisper-cli'], ['-h'], 'whisper-cli -h', /usage:|whisper|model/
 verifyYtDlpFromBundle(bins['yt-dlp'])
 
 /**
- * yt-dlp from the bundle (F.4). youtube-dl-exec ships the yt-dlp PYTHON ZIPAPP
- * (`/usr/bin/env python3`), so it needs Python >= 3.10 at runtime. Verify it
- * emits a date-stamped version line (e.g. "2026.03.17"); if the default python3
- * is too old (a 3.9 traceback would otherwise sneak past a loose regex), retry
- * with an explicit modern interpreter so this smoke is not a false pass/fail.
+ * yt-dlp from the bundle (F.4 / G.6). We ship the SELF-CONTAINED standalone
+ * release (no Python), so it MUST run `--version` DIRECTLY and emit a date-stamped
+ * version line (e.g. "2026.03.17"). We deliberately do NOT fall back to a host
+ * python interpreter — a binary that only runs under external Python is exactly
+ * the fragile artifact this gate (and the bundle-time verifier) must reject.
  */
 function verifyYtDlpFromBundle(bin) {
   const versionOk = (out) => /^\s*\d{4}\.\d{2}\.\d{2}\b/m.test(out)
@@ -120,16 +120,10 @@ function verifyYtDlpFromBundle(bin) {
     log(`yt-dlp --version runs from bundle → ${(direct.stdout ?? '').trim().split('\n')[0]}`)
     return
   }
-  for (const py of ['python3.13', 'python3.12', 'python3.11', 'python3.10']) {
-    const r = spawnSync(py, [bin, '--version'], { encoding: 'utf8' })
-    if (!r.error && r.status === 0 && versionOk(r.stdout ?? '')) {
-      log(`yt-dlp --version runs from bundle via ${py} → ${(r.stdout ?? '').trim().split('\n')[0]}`)
-      return
-    }
-  }
   fail(
-    `bundled yt-dlp did not run --version. It is a Python zipapp needing ` +
-      `Python >= 3.10 on PATH (F.9). Ship a Python >= 3.10 or the standalone yt-dlp_macos binary.`
+    `bundled yt-dlp did not run a self-contained --version ` +
+      `(status=${direct.status}, out=${JSON.stringify((direct.stdout ?? '').trim().slice(0, 80))}). ` +
+      `It must be the standalone yt-dlp release (no Python dependency).`
   )
 }
 

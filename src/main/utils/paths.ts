@@ -112,13 +112,15 @@ export function whisperCliPath(): string {
 
 /**
  * Absolute path to the `yt-dlp` binary used for URL/YouTube imports (F.4).
- * dev → `youtube-dl-exec`'s auto-installed binary (`constants.YOUTUBE_DL_PATH`);
+ * dev → PREFERS the staged self-contained standalone binary
+ * (`resources/yt-dlp/<platArch>/yt-dlp` — the `yt-dlp_macos` release, no Python),
+ * falling back to `youtube-dl-exec`'s managed binary only when it isn't staged;
  * prod → bundled extraResource `resources/yt-dlp/<platArch>/yt-dlp`.
  * `OPENCLIP_YTDLP` overrides everything (tests / smoke harness).
  *
  * Mirrors `whisperCliPath`: the binary is large + platform-specific, so it is
- * NOT committed; `scripts/bundle-binaries.mjs` stages it from the dev path into
- * `resources/` at package time (plan F.6).
+ * NOT committed; `scripts/bundle-binaries.mjs` downloads the PINNED, SHA-256
+ * verified standalone release into `resources/` at package time (plan F.6 / G.6).
  */
 export function ytDlpPath(): string {
   if (process.env.OPENCLIP_YTDLP) return process.env.OPENCLIP_YTDLP

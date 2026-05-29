@@ -35,7 +35,9 @@ import type { WhisperModelSize, JobKind, JobParams } from './jobs'
 
 export enum IPCChannels {
   IMPORT_VIDEO = 'video:import',
-  IMPORT_FROM_URL = 'video:import:url',
+  // NOTE: URL/YouTube import is NOT a request/response channel — it's the
+  // streaming `url-download` job (jobs.start('url-download', …), see jobs.ts).
+  // The old `video:import:url` channel was never handled; removed in G.7.
   AUDIO_EXTRACT = 'audio:extract',
   GENERATE_CLIPS = 'ai:generate-clips',
   GENERATE_TITLES = 'ai:generate-titles',
@@ -161,10 +163,6 @@ export interface ChannelPayload<Req, Res> {
 export interface ChannelMap {
   // --- Video / media ---
   [IPCChannels.IMPORT_VIDEO]: ChannelPayload<{ filePath: string }, ImportVideoResult>
-  [IPCChannels.IMPORT_FROM_URL]: ChannelPayload<
-    { url: string; consentAccepted: boolean },
-    ImportVideoResult
-  >
   [IPCChannels.AUDIO_EXTRACT]: ChannelPayload<
     { projectId: string; sourcePath: string },
     { wavPath: string }
@@ -215,14 +213,11 @@ export interface ChannelMap {
     { canceled: boolean; filePath?: string }
   >
   // Native open-file picker for the unified import (F.3). Mirrors SHOW_SAVE_DIALOG;
-  // auto-creates `window.openclip.system.openDialog`. `properties` is a string
-  // union (kept free of `Electron.*` types so the SHARED tsconfig stays Electron-
-  // agnostic); it maps 1:1 onto Electron's OpenDialogOptions.properties.
+  // auto-creates `window.openclip.system.openDialog`. Takes NO inputs: the picker
+  // is hard-scoped server-side to a single video file (G.7 least-privilege), so
+  // the renderer cannot widen it (e.g. to a directory / all files).
   [IPCChannels.SHOW_OPEN_DIALOG]: ChannelPayload<
-    {
-      filters?: Array<{ name: string; extensions: string[] }>
-      properties?: Array<'openFile' | 'openDirectory' | 'multiSelections'>
-    },
+    Record<string, never>,
     { canceled: boolean; filePaths: string[] }
   >
   [IPCChannels.CHECK_UPDATE]: ChannelPayload<void, UpdateStatus>

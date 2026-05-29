@@ -15,10 +15,11 @@ import {
   parseMotionMetadata,
   splitMotionSeries,
   detectReframe,
+  planReframe,
   type YuNetOutputs,
   type ReframeRunner
 } from '@main/services/reframe-detect'
-import type { FaceBox } from '@shared/reframe-plan'
+import type { FaceBox, SampleFrame, MotionTimeline } from '@shared/reframe-plan'
 
 // ---------------------------------------------------------------------------
 // frameSampleArgs
@@ -358,5 +359,89 @@ describe('detectReframe', () => {
     expect(res.samples).toEqual([
       { timeMs: 0, faces: [{ x: 7, y: 7, w: 1, h: 1, confidence: 0.95 }] }
     ])
+  })
+})
+
+describe('planReframe orchestration (Part J Phase 2)', () => {
+  const SRC = { width: 1920, height: 1080 }
+  // A comfortably-passing face (area 200x240 = 2.3% of frame, max dim ≥ 30px).
+  const face = (x: number): FaceBox => ({ x, y: 400, w: 200, h: 240, confidence: 0.9 })
+  const detectStub = (samples: SampleFrame[]): typeof detectReframe =>
+    vi.fn(async () => ({ samples })) as unknown as typeof detectReframe
+
+  it('single speaker → NO motion pass, returns a static/pan plan', async () => {
+    const detect = detectStub([
+      { timeMs: 0, faces: [face(800)] },
+      { timeMs: 500, faces: [face(810)] }
+    ])
+    const motion = vi.fn()
+    const plan = await planReframe({
+      sourcePath: '/s.mp4',
+      startTime: 0,
+      endTime: 2,
+      source: SRC,
+      aspect: '9:16',
+      mode: 'auto',
+      detect,
+      motion: motion as never
+    })
+    expect(detect).toHaveBeenCalledOnce()
+    expect(motion).not.toHaveBeenCalled()
+    expect(plan?.mode === 'static' || plan?.mode === 'pan').toBe(true)
+  })
+
+  it('two speakers + auto → runs the motion pass', async () => {
+    const two = (t: number): SampleFrame => ({ timeMs: t, faces: [face(300), face(1500)] })
+    const detect = detectStub([two(0), two(500), two(1000), two(1500)])
+    const motion = vi.fn(
+      async (): Promise<MotionTimeline> => ({ times: [0, 1, 2], left: [1, 5, 1], right: [5, 1, 5] })
+    )
+    const plan = await planReframe({
+      sourcePath: '/s.mp4',
+      startTime: 0,
+      endTime: 2,
+      source: SRC,
+      aspect: '9:16',
+      mode: 'auto',
+      detect,
+      motion: motion as never
+    })
+    expect(motion).toHaveBeenCalledOnce()
+    expect(plan).not.toBeNull()
+  })
+
+  it('split mode with two speakers → split plan, NO motion pass', async () => {
+    const two = (t: number): SampleFrame => ({ timeMs: t, faces: [face(300), face(1500)] })
+    const detect = detectStub([two(0), two(500), two(1000)])
+    const motion = vi.fn()
+    const plan = await planReframe({
+      sourcePath: '/s.mp4',
+      startTime: 0,
+      endTime: 2,
+      source: SRC,
+      aspect: '9:16',
+      mode: 'split',
+      detect,
+      motion: motion as never
+    })
+    expect(motion).not.toHaveBeenCalled()
+    expect(plan?.mode).toBe('split')
+  })
+
+  it('no faces → null (center-crop), no motion pass', async () => {
+    const detect = detectStub([{ timeMs: 0, faces: [] }])
+    const motion = vi.fn()
+    const plan = await planReframe({
+      sourcePath: '/s.mp4',
+      startTime: 0,
+      endTime: 2,
+      source: SRC,
+      aspect: '9:16',
+      mode: 'auto',
+      detect,
+      motion: motion as never
+    })
+    expect(plan).toBeNull()
+    expect(motion).not.toHaveBeenCalled()
   })
 })

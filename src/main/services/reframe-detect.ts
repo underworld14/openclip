@@ -28,7 +28,14 @@
 
 import { spawn } from 'node:child_process'
 import { ffmpegPath, reframeModelPath, reframeWasmDir } from '@main/utils/paths'
-import type { FaceBox, SampleFrame, MotionTimeline } from '@shared/reframe-plan'
+import type { FaceBox, SampleFrame, MotionTimeline, ReframePlan } from '@shared/reframe-plan'
+import {
+  buildReframePlan,
+  filterFaceOutliers,
+  clusterTwoFaceRegions,
+  clusterTileRegion
+} from '@shared/reframe-plan'
+import type { AspectRatio } from '@shared/schema'
 // Type-only import (erased at compile — does NOT eagerly load the heavy WASM
 // module; the runtime `require('onnxruntime-web')` stays lazy below).
 import type * as OrtModule from 'onnxruntime-web'
@@ -549,4 +556,99 @@ function defaultYuNetDetector(
       { source, modelSize }
     )
   }
+}
+
+// ============================================================================
+// Orchestrator: detect → cluster → (optional motion) → ReframePlan (Part J)
+// ============================================================================
+
+export interface DetectMotionOptions {
+  sourcePath: string
+  startTime: number
+  endTime: number
+  left: MotionRoi
+  right: MotionRoi
+  signal?: AbortSignal
+  binPath?: string
+  run?: ReframeRunner
+}
+
+/** Run ONLY the per-side motion pass → a `MotionTimeline` (absolute source times). */
+export async function detectMotion(opts: DetectMotionOptions): Promise<MotionTimeline> {
+  const run =
+    opts.run ??
+    ((a) => defaultRunFfmpegCaptureStdout({ args: a.args, binPath: a.binPath, signal: a.signal }))
+  const argv = motionArgs(opts.sourcePath, opts.startTime, opts.endTime, opts.left, opts.right)
+  const { stderr } = await run({ args: argv, binPath: opts.binPath, signal: opts.signal })
+  return splitMotionSeries(parseMotionMetadata(stderr), opts.startTime)
+}
+
+/** A `MotionRoi` from a planner `CropRegion` (clusterTileRegion output). */
+function roiOf(r: { cropX: number; cropY: number; cropW: number; cropH: number }): MotionRoi {
+  return { x: r.cropX, y: r.cropY, w: r.cropW, h: r.cropH }
+}
+
+export interface PlanReframeOptions {
+  sourcePath: string
+  startTime: number
+  endTime: number
+  source: { width: number; height: number }
+  aspect: AspectRatio
+  mode: 'auto' | 'split'
+  sampleFps?: number
+  signal?: AbortSignal
+  binPath?: string
+  /** Injectable passes (default the real ffmpeg+YuNet) — the unit test fakes these. */
+  detect?: typeof detectReframe
+  motion?: typeof detectMotion
+}
+
+/**
+ * Full reframe analysis for a clip span → a `ReframePlan` (or `null` ⇒ center-crop).
+ * Samples faces (pass 1); if there are two speaker clusters AND `mode==='auto'`,
+ * runs the per-side motion pass (pass 2) so the planner can build an active-speaker
+ * pan; otherwise the planner decides static/pan/split from faces alone. A motion
+ * failure degrades to static-on-dominant (never throws here). Pure given injected
+ * `detect`/`motion`; the real defaults touch ffmpeg + onnxruntime.
+ */
+export async function planReframe(opts: PlanReframeOptions): Promise<ReframePlan | null> {
+  const detect = opts.detect ?? detectReframe
+  const motionFn = opts.motion ?? detectMotion
+  const { samples } = await detect({
+    sourcePath: opts.sourcePath,
+    startTime: opts.startTime,
+    endTime: opts.endTime,
+    source: opts.source,
+    sampleFps: opts.sampleFps,
+    signal: opts.signal,
+    binPath: opts.binPath
+  })
+  const filtered = filterFaceOutliers(samples, opts.source)
+  if (filtered.length === 0) return null
+
+  let motion: MotionTimeline | undefined
+  const clusters = clusterTwoFaceRegions(filtered, opts.source)
+  if (opts.mode === 'auto' && clusters) {
+    try {
+      motion = await motionFn({
+        sourcePath: opts.sourcePath,
+        startTime: opts.startTime,
+        endTime: opts.endTime,
+        left: roiOf(clusterTileRegion(clusters[0], opts.source)),
+        right: roiOf(clusterTileRegion(clusters[1], opts.source)),
+        signal: opts.signal,
+        binPath: opts.binPath
+      })
+    } catch {
+      motion = undefined // motion pass failed → planner falls back to static-on-dominant
+    }
+  }
+
+  return buildReframePlan({
+    samples,
+    motion,
+    source: opts.source,
+    aspect: opts.aspect,
+    mode: opts.mode
+  })
 }

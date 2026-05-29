@@ -44,6 +44,8 @@ export function ExportPanel(): React.JSX.Element {
   const [captionPresetId, setCaptionPresetId] = useState('')
   // Remove long silences via jump-cuts (Part I.4, opt-in, default off).
   const [removeSilence, setRemoveSilence] = useState(false)
+  // Auto-reframe (Part J, opt-in, default off): follow the speaker / split-screen.
+  const [reframe, setReframe] = useState<'off' | 'auto' | 'split'>('off')
 
   const words = transcript?.words ?? currentProject?.transcript.words ?? []
   const hasWords = words.length > 0
@@ -80,7 +82,8 @@ export function ExportPanel(): React.JSX.Element {
             captionsEnabled: captionsEnabled && hasWords,
             words: project.transcript.words,
             captionStyle: captionPresetStyle(captionPresetId),
-            removeSilence
+            removeSilence,
+            reframe
           }),
         onProgress: (p) => setPct(Math.round(p))
       })
@@ -111,7 +114,8 @@ export function ExportPanel(): React.JSX.Element {
     captionsEnabled,
     hasWords,
     captionPresetId,
-    removeSilence
+    removeSilence,
+    reframe
   ])
 
   const reveal = useCallback(async (): Promise<void> => {
@@ -185,6 +189,21 @@ export function ExportPanel(): React.JSX.Element {
               onChange={(e) => setRemoveSilence(e.target.checked)}
             />
             <span>Remove silences (tighten the clip)</span>
+          </label>
+
+          {/* Auto-reframe (Part J, opt-in). Off = static center-crop. */}
+          <label className="flex items-center gap-2 text-xs" data-testid="reframe-control">
+            <span className="text-muted-foreground">Reframe:</span>
+            <select
+              data-testid="reframe-select"
+              className="flex-1 rounded-md border bg-background px-2 py-1"
+              value={reframe}
+              onChange={(e) => setReframe(e.target.value as 'off' | 'auto' | 'split')}
+            >
+              <option value="off">Off (center)</option>
+              <option value="auto">Follow speaker</option>
+              <option value="split">Split-screen (2 people)</option>
+            </select>
           </label>
 
           {/* Quick clip picker when multiple clips exist. */}

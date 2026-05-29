@@ -1,6 +1,6 @@
 # Auto‑Reframe (Speaker‑Following Vertical Crop) — Design
 
-> **Status: DEFERRED design.** This documents a planned feature for a future part. It is **not implemented** in Part I. It exists so the work is scoped, the trade‑offs are recorded, and a later round can pick it up without re‑discovery.
+> **Status: IMPLEMENTED (Part J, v1).** Shipped as opt-in export modes Off / Follow speaker (`auto`) / Split-screen (`split`). The detector landed as **ONNX YuNet via `onnxruntime-web` (WASM)** — option (A) but with the WASM backend instead of the native `onnxruntime-node` addon, so it adds **no native binary** and is cross-platform-ready (the notarization-safe choice). Single-speaker face-follow (static + smoothed pan) AND 2-speaker (motion-based active-speaker pan + split-screen) are all implemented; any detection failure or low-confidence frame degrades to the static center-crop. The original design rationale is kept below for reference.
 
 ## Why
 Today OpenClip exports vertical clips with a **static center‑crop**: `ffmpeg-export.ts → cropExpr(aspect)` emits `crop=ih*9/16:ih` (a fixed column down the middle), then `scale=1080:1920`. When the speaker isn't centered — interviews, two‑person podcasts, off‑center framing — the crop cuts off faces and looks amateur.

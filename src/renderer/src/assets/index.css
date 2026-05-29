@@ -119,12 +119,10 @@
   #root {
     height: 100%;
   }
-  /* Transparent base so macOS window vibrancy shows through the chrome regions.
-     The center editor canvas paints its own opaque dark surface on top. Off-mac,
-     the BrowserWindow backgroundColor (dark) shows behind the transparent body. */
+  /* Solid base (the app defaults to the dark editor aesthetic) so content always
+     has contrast — we do NOT depend on macOS vibrancy to paint the backdrop. */
   body {
-    @apply text-foreground;
-    background: transparent;
+    @apply bg-background text-foreground;
     font-family:
       -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
@@ -142,9 +140,9 @@
   .app-no-drag {
     -webkit-app-region: no-drag;
   }
-  /* Translucent sidebar surface that lets window vibrancy through while keeping
-     content legible. */
+  /* Subtle elevated sidebar surface (a lighter dark panel) for visual separation
+     from the editor canvas; slight translucency gives a hint of macOS vibrancy. */
   .vibrant-sidebar {
-    background: color-mix(in oklch, var(--sidebar) 55%, transparent);
+    background: color-mix(in oklch, var(--sidebar) 88%, transparent);
   }
 }

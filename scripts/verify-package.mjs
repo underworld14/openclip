@@ -10,6 +10,7 @@
  *                  HW-export invariants the packaged flow depends on)
  *   - ffprobe    → `ffprobe -version`
  *   - whisper-cli→ `whisper-cli -h`      (emits its usage/help banner)
+ *   - yt-dlp     → `yt-dlp --version`    (URL/YouTube import, F.4)
  * Also confirms the bundled libass font (`fonts/DejaVuSans.ttf`) is present so
  * the caption burn filtergraph (`subtitles=…:fontsdir=…`) resolves a font.
  *
@@ -71,7 +72,8 @@ if (!existsSync(resourcesDir)) fail(`Contents/Resources missing: ${resourcesDir}
 const bins = {
   ffmpeg: join(resourcesDir, 'ffmpeg', platArch, 'ffmpeg'),
   ffprobe: join(resourcesDir, 'ffmpeg', platArch, 'ffprobe'),
-  'whisper-cli': join(resourcesDir, 'whisper', platArch, 'whisper-cli')
+  'whisper-cli': join(resourcesDir, 'whisper', platArch, 'whisper-cli'),
+  'yt-dlp': join(resourcesDir, 'yt-dlp', platArch, 'yt-dlp')
 }
 
 // 1) existence
@@ -102,6 +104,34 @@ function runVersion(bin, args, label, mustMatch) {
 runVersion(bins.ffmpeg, ['-hide_banner', '-version'], 'ffmpeg -version', /ffmpeg version/i)
 runVersion(bins.ffprobe, ['-hide_banner', '-version'], 'ffprobe -version', /ffprobe version/i)
 runVersion(bins['whisper-cli'], ['-h'], 'whisper-cli -h', /usage:|whisper|model/i)
+verifyYtDlpFromBundle(bins['yt-dlp'])
+
+/**
+ * yt-dlp from the bundle (F.4). youtube-dl-exec ships the yt-dlp PYTHON ZIPAPP
+ * (`/usr/bin/env python3`), so it needs Python >= 3.10 at runtime. Verify it
+ * emits a date-stamped version line (e.g. "2026.03.17"); if the default python3
+ * is too old (a 3.9 traceback would otherwise sneak past a loose regex), retry
+ * with an explicit modern interpreter so this smoke is not a false pass/fail.
+ */
+function verifyYtDlpFromBundle(bin) {
+  const versionOk = (out) => /^\s*\d{4}\.\d{2}\.\d{2}\b/m.test(out)
+  const direct = spawnSync(bin, ['--version'], { encoding: 'utf8' })
+  if (!direct.error && direct.status === 0 && versionOk(direct.stdout ?? '')) {
+    log(`yt-dlp --version runs from bundle → ${(direct.stdout ?? '').trim().split('\n')[0]}`)
+    return
+  }
+  for (const py of ['python3.13', 'python3.12', 'python3.11', 'python3.10']) {
+    const r = spawnSync(py, [bin, '--version'], { encoding: 'utf8' })
+    if (!r.error && r.status === 0 && versionOk(r.stdout ?? '')) {
+      log(`yt-dlp --version runs from bundle via ${py} → ${(r.stdout ?? '').trim().split('\n')[0]}`)
+      return
+    }
+  }
+  fail(
+    `bundled yt-dlp did not run --version. It is a Python zipapp needing ` +
+      `Python >= 3.10 on PATH (F.9). Ship a Python >= 3.10 or the standalone yt-dlp_macos binary.`
+  )
+}
 
 // 3) caption-burn + HW-export invariants on the BUNDLED ffmpeg (PRD §6.4 / §6.9)
 const filters = execFileSync(bins.ffmpeg, ['-hide_banner', '-filters'], { encoding: 'utf8' })
@@ -119,4 +149,4 @@ const font = join(resourcesDir, 'fonts', 'DejaVuSans.ttf')
 if (!existsSync(font)) fail(`bundled caption font missing: ${font}`)
 log(`bundled caption font OK: ${font}`)
 
-log('packaged bundle verified ✓ (3 sidecars exist + run from Contents/Resources; font present)')
+log('packaged bundle verified ✓ (4 sidecars exist + run from Contents/Resources; font present)')

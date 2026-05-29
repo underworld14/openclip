@@ -34,6 +34,7 @@ test('ping IPC round-trips and the openclip bridge is exposed', async () => {
     return {
       namespaces: o ? Object.keys(o).sort() : [],
       videoMethods: o ? Object.keys(o.video).sort() : [],
+      systemMethods: o ? Object.keys(o.system).sort() : [],
       hasJobs: !!(o && typeof o.jobs.start === 'function' && typeof o.jobs.cancel === 'function')
     }
   })
@@ -48,6 +49,8 @@ test('ping IPC round-trips and the openclip bridge is exposed', async () => {
     'video'
   ])
   expect(bridge.videoMethods).toEqual(['export', 'import', 'importUrl'])
+  // F.3: the native file picker auto-derives `system.openDialog` from ChannelMap.
+  expect(bridge.systemMethods).toEqual(['checkUpdate', 'openDialog', 'openFolder', 'saveDialog'])
   expect(bridge.hasJobs).toBe(true)
 
   // 3) security baseline: nodeIntegration off ⇒ no Node `process` in renderer.

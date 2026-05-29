@@ -1,26 +1,29 @@
 /**
- * src/renderer/src/App.tsx — the full PRD §11.1 main layout (TRUNK, frozen).
+ * App.tsx — the native-macOS hybrid shell (Part F): a draggable hidden-inset
+ * title bar, vibrancy sidebars, and a dark editor canvas. First run shows the
+ * focused <Welcome> import screen; once a project has content (source / transcript
+ * / clips) it swaps to the 3-pane editor. Export / Settings / subsequent Import
+ * open as native dialogs rather than inline drawers.
  *
- * Per plan E.4: the JSX tree is authored ONCE here importing per-component
- * STUBS; each fan-out track replaces only its own component body, never this
- * layout. The frozen regions are the structural shell:
- *   ┌ top bar (title + 🔍 ⚙️ 👤) ───────────────────────────────────────┐
- *   ├ PROJECT PANEL │   PREVIEW PLAYER + TIMELINE   │  CLIP SIDEBAR      ┤
- *   ├ bottom action bar [Import][Auto Generate][Export All][Settings] ──┘
- *
- * The Import / Transcript / Export / Settings panels and the first-run model
- * dialog mount inside the shell; this file imports every §11.2 stub so the
- * import graph (and thus the type surface each track fills) is fixed up front.
+ * The editor is shown whenever there is content so the headless E2E (which
+ * hydrates the stores via window.__openclipTest) still renders TranscriptPanel /
+ * ClipSidebar / Timeline.
  */
 
 import { useEffect, useState } from 'react'
 import { APP_NAME } from '@shared'
 import type { WhisperModelSize } from '@shared/jobs'
 import { Button } from '@renderer/components/ui/button'
-import { Separator } from '@renderer/components/ui/separator'
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
-import { Search, Settings as SettingsIcon, User } from 'lucide-react'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle
+} from '@renderer/components/ui/dialog'
+import { Clapperboard, Download, Moon, Plus, Settings as SettingsIcon, Sparkles, Sun } from 'lucide-react'
 
+import { Welcome } from '@renderer/components/Welcome'
 import { Dashboard } from '@renderer/components/Dashboard'
 import { ImportPanel } from '@renderer/components/ImportPanel'
 import { TranscriptPanel } from '@renderer/components/TranscriptPanel'
@@ -33,116 +36,147 @@ import { ModelDownloadDialog } from '@renderer/components/ModelDownloadDialog'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { installAutosave } from '@renderer/stores/projectStore/autosave'
 
-type Drawer = 'none' | 'import' | 'transcript' | 'export' | 'settings'
+type Modal = 'none' | 'import' | 'export' | 'settings'
 
 function App(): React.JSX.Element {
-  const [drawer, setDrawer] = useState<Drawer>('none')
+  const [modal, setModal] = useState<Modal>('none')
   const [modelDialogOpen, setModelDialogOpen] = useState(false)
   const [neededModel, setNeededModel] = useState<WhisperModelSize | undefined>(undefined)
+  const [dark, setDark] = useState(true)
 
-  // The single canonical transcript view lives in the center pane (Wave-1
-  // dedupe — the ImportPanel inline workaround was removed). Show it once a
-  // transcript exists, or when the user explicitly opens the transcript drawer.
+  const hasSource = useProjectStore((s) => !!s.currentProject?.sourceVideo)
   const hasTranscript = useProjectStore((s) => (s.transcript?.segments.length ?? 0) > 0)
-  const showTranscript = drawer === 'transcript' || hasTranscript
+  const hasClips = useProjectStore((s) => (s.clips?.length ?? 0) > 0)
+  const showEditor = hasSource || hasTranscript || hasClips
 
-  // Wave-1 integration: wire the debounced autosave subscriber to the store
-  // (T-Persist shipped createAutosave with no subscriber). One install for the
-  // app lifetime; tears down on unmount.
+  // Wire the debounced autosave subscriber (Wave-1 integration) once for the app
+  // lifetime; tears down on unmount.
   useEffect(() => installAutosave(), [])
+  // Default to the dark editor aesthetic; the header toggle flips chrome theme.
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', dark)
+  }, [dark])
 
-  // ImportPanel's first-transcribe model gate (PRD §13): open the download
-  // dialog for the requested model.
   const handleNeedModel = (model: WhisperModelSize): void => {
     setNeededModel(model)
     setModelDialogOpen(true)
   }
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
-      {/* ── Top bar (PRD §11.1): title + search / settings / profile ── */}
-      <header className="flex h-12 shrink-0 items-center justify-between border-b px-3">
-        <span className="text-sm font-semibold tracking-tight">{APP_NAME}</span>
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" aria-label="Search">
-            <Search className="size-4" />
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-transparent text-foreground">
+      {/* ── Native hidden-inset title bar (draggable). Left padding clears the
+          macOS traffic lights; interactive controls carry .app-no-drag. ── */}
+      <header className="app-drag flex h-[52px] shrink-0 items-center justify-between border-b border-border/60 pl-20 pr-3">
+        <div className="flex items-center gap-2">
+          <Clapperboard className="size-4 text-primary" />
+          <span className="text-sm font-semibold tracking-tight">{APP_NAME}</span>
+        </div>
+        <div className="app-no-drag flex items-center gap-1">
+          {showEditor && (
+            <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => setModal('import')}>
+              <Plus className="size-4" /> Import
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Toggle theme"
+            onClick={() => setDark((d) => !d)}
+          >
+            {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
           </Button>
           <Button
             variant="ghost"
             size="icon"
             aria-label="Settings"
-            onClick={() => setDrawer('settings')}
+            onClick={() => setModal('settings')}
           >
             <SettingsIcon className="size-4" />
-          </Button>
-          <Button variant="ghost" size="icon" aria-label="Profile">
-            <User className="size-4" />
           </Button>
         </div>
       </header>
 
-      {/* ── Three-column body: project panel │ preview+timeline │ clip sidebar ── */}
-      <div className="flex min-h-0 flex-1">
-        {/* LEFT — project panel (Dashboard). */}
-        <aside className="flex w-60 shrink-0 flex-col border-r">
-          <ScrollArea className="flex-1">
-            <Dashboard />
-            {drawer === 'import' && <ImportPanel onNeedModel={handleNeedModel} />}
-          </ScrollArea>
-          <Separator />
-          <div className="p-2">
-            <Button className="w-full" size="sm" onClick={() => setDrawer('import')}>
-              + New
-            </Button>
-          </div>
-        </aside>
+      {/* ── Body: welcome (first-run) or the 3-pane editor. ── */}
+      {!showEditor ? (
+        <Welcome onNeedModel={handleNeedModel} />
+      ) : (
+        <div className="flex min-h-0 flex-1">
+          {/* LEFT — translucent projects sidebar (vibrancy). */}
+          <aside className="vibrant-sidebar flex w-60 shrink-0 flex-col border-r border-border/60">
+            <ScrollArea className="flex-1">
+              <Dashboard />
+            </ScrollArea>
+            <div className="p-2">
+              <Button className="w-full gap-1.5" size="sm" onClick={() => setModal('import')}>
+                <Plus className="size-4" /> New / Import
+              </Button>
+            </div>
+          </aside>
 
-        {/* CENTER — preview player above the (minimal) timeline. The single
-            canonical TranscriptPanel lives here (PRD §11.1 center pane). */}
-        <main className="flex min-w-0 flex-1 flex-col gap-3 p-3">
-          <PreviewPlayer />
-          <Timeline />
-          {showTranscript && <TranscriptPanel />}
-          {drawer === 'export' && <ExportPanel />}
-          {drawer === 'settings' && <SettingsPanel />}
-        </main>
+          {/* CENTER — solid dark editor canvas. */}
+          <main className="flex min-w-0 flex-1 flex-col bg-background">
+            <div className="flex items-center justify-between border-b border-border/60 px-3 py-2">
+              <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Editor
+              </span>
+              <div className="flex gap-2">
+                <Button variant="secondary" size="sm" className="gap-1.5">
+                  <Sparkles className="size-4" /> Auto Generate Clips
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => setModal('export')}
+                >
+                  <Download className="size-4" /> Export All
+                </Button>
+              </div>
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-3">
+              <PreviewPlayer />
+              <Timeline />
+              {hasTranscript && <TranscriptPanel />}
+            </div>
+          </main>
 
-        {/* RIGHT — clip sidebar (cards + scores). */}
-        <aside className="w-72 shrink-0 border-l">
-          <ScrollArea className="h-full">
-            <ClipSidebar />
-          </ScrollArea>
-        </aside>
-      </div>
+          {/* RIGHT — translucent clip sidebar (vibrancy). */}
+          <aside className="vibrant-sidebar w-72 shrink-0 border-l border-border/60">
+            <ScrollArea className="h-full">
+              <ClipSidebar />
+            </ScrollArea>
+          </aside>
+        </div>
+      )}
 
-      {/* ── Bottom action bar (PRD §11.1). ── */}
-      <footer className="flex h-14 shrink-0 items-center gap-2 border-t px-3">
-        <Button variant="secondary" size="sm" onClick={() => setDrawer('import')}>
-          Import Video
-        </Button>
-        <Button variant="secondary" size="sm">
-          Auto Generate Clips
-        </Button>
-        <Button variant="secondary" size="sm" onClick={() => setDrawer('export')}>
-          Export All
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => setDrawer('settings')}>
-          Settings
-        </Button>
-        <span className="ml-auto text-xs text-muted-foreground">
-          <button
-            type="button"
-            className="underline-offset-2 hover:underline"
-            onClick={() => setModelDialogOpen(true)}
-          >
-            Models
-          </button>
-        </span>
-      </footer>
+      {/* ── Dialogs ── */}
+      <Dialog open={modal === 'import'} onOpenChange={(o) => !o && setModal('none')}>
+        <DialogContent className="app-no-drag">
+          <DialogHeader>
+            <DialogTitle>Import a video</DialogTitle>
+          </DialogHeader>
+          <ImportPanel onNeedModel={handleNeedModel} />
+        </DialogContent>
+      </Dialog>
 
-      {/* First-run model download dialog (PRD §13). Opened either via the
-          "Models" affordance or by ImportPanel's first-transcribe model gate
-          (onNeedModel → handleNeedModel), pre-selecting the needed model. */}
+      <Dialog open={modal === 'export'} onOpenChange={(o) => !o && setModal('none')}>
+        <DialogContent className="app-no-drag sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Export clips</DialogTitle>
+          </DialogHeader>
+          <ExportPanel />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={modal === 'settings'} onOpenChange={(o) => !o && setModal('none')}>
+        <DialogContent className="app-no-drag">
+          <DialogHeader>
+            <DialogTitle>Settings</DialogTitle>
+          </DialogHeader>
+          <SettingsPanel />
+        </DialogContent>
+      </Dialog>
+
       <ModelDownloadDialog
         open={modelDialogOpen}
         initialModel={neededModel}

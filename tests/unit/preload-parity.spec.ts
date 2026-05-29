@@ -88,7 +88,12 @@ describe('preload parity: real bridge method-set === mock method-set', () => {
     ])
     expect(methodKeys(realBridge.settings)).toEqual(['apiKeyStatus', 'get', 'set', 'setApiKey'])
     expect(methodKeys(realBridge.model)).toEqual(['download', 'status'])
-    expect(methodKeys(realBridge.system)).toEqual(['checkUpdate', 'openFolder', 'saveDialog'])
+    expect(methodKeys(realBridge.system)).toEqual([
+      'checkUpdate',
+      'openDialog',
+      'openFolder',
+      'saveDialog'
+    ])
   })
 
   it('both bridges expose a jobs API with start + cancel', () => {

@@ -77,6 +77,7 @@ const CANNED: Partial<Record<string, unknown>> = {
   [IPCChannels.MODEL_DOWNLOAD]: { jobId: 'model-1' },
   [IPCChannels.OPEN_FOLDER]: undefined,
   [IPCChannels.SHOW_SAVE_DIALOG]: { canceled: false, filePath: '/Users/me/Movies/clip-1.mp4' },
+  [IPCChannels.SHOW_OPEN_DIALOG]: { canceled: false, filePaths: ['/Users/me/Movies/source.mp4'] },
   [IPCChannels.CHECK_UPDATE]: { updateAvailable: false }
 }
 
@@ -123,6 +124,21 @@ const DEFAULT_SCRIPTS: { [K in JobKind]: JobScript<K> } = {
       { t: 'partial', data: { receivedBytes: 50_000_000, totalBytes: 147_000_000 } },
       { t: 'progress', pct: 100, stage: 'downloading' },
       { t: 'done', result: { model: 'base', path: '/models/ggml-base.bin', bytes: 147_000_000 } }
+    ]
+  },
+  'url-download': {
+    steps: [
+      { t: 'progress', pct: 0, stage: 'downloading' },
+      { t: 'partial', data: { downloadedBytes: 5_000_000, totalBytes: 50_000_000, pct: 10 } },
+      { t: 'progress', pct: 100, stage: 'downloading' },
+      {
+        t: 'done',
+        result: {
+          filePath: '/tmp/openclip/downloads/url-mock-1/M5XbNdzPuDQ.mp4',
+          title: 'Sample',
+          bytes: 50_000_000
+        }
+      }
     ]
   }
 }

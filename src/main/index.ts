@@ -53,6 +53,16 @@ registerMediaScheme()
  * In dev, electron-vite serves the renderer over http with HMR (needs
  * 'unsafe-inline' styles + ws). In prod everything is local `file:` so we can
  * be strict: default-src 'self', no inline script, no eval.
+ *
+ * F.5 audit: this header is now the SINGLE source of truth (the page-level
+ * <meta> CSP was removed from index.html — it intersected with this header and
+ * the stale meta blocked the module script/media in the packaged build).
+ * Nothing inline is required: the entry is an EXTERNAL module script
+ * (`/src/main.tsx`, covered by `script-src 'self'`); Tailwind v4 injects styles
+ * via <style> tags (covered by `style-src 'self' 'unsafe-inline'`); AI providers
+ * are reached over https (`connect-src 'self' https:`); the source-video preview
+ * streams over the privileged `openclip-media:` scheme + blob:/file:
+ * (`media-src`). `font-src 'self' data:` covers the bundled font + any data: URI.
  */
 function cspHeader(): string {
   if (is.dev) {
@@ -95,6 +105,28 @@ function installCsp(): void {
 // ============================================================================
 
 function createWindow(): void {
+  const isMac = process.platform === 'darwin'
+
+  // Native-macOS chrome (F.1): inset traffic lights over a vibrant sidebar, with
+  // a near-transparent backgroundColor so the vibrancy material shows through.
+  // We DELIBERATELY do NOT set `transparent: true` (it kills the window shadow +
+  // live resize). Off-mac we keep an opaque dark window. show:false +
+  // ready-to-show is preserved so vibrancy doesn't flash an unpainted frame.
+  const macChrome: Partial<Electron.BrowserWindowConstructorOptions> = isMac
+    ? {
+        titleBarStyle: 'hiddenInset',
+        trafficLightPosition: { x: 16, y: 14 },
+        vibrancy: 'sidebar',
+        visualEffectState: 'followWindow',
+        // Near-transparent so the 'sidebar' vibrancy material shows; not fully
+        // transparent (that would drop the shadow / break resize).
+        backgroundColor: '#00000000'
+      }
+    : {
+        // Off-mac: a sensible opaque dark background (matches the dark canvas).
+        backgroundColor: '#0b0b0f'
+      }
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -102,7 +134,8 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     autoHideMenuBar: true,
-    title: 'OpenClip Desktop',
+    title: 'OpenClip',
+    ...macChrome,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -113,6 +146,8 @@ function createWindow(): void {
       webSecurity: true
     }
   })
+
+  mainWindow.title = 'OpenClip'
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
   mainWindow.on('closed', () => {

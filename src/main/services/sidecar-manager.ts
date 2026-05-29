@@ -113,6 +113,8 @@ export function concurrencyFor(kind: JobKind, coreCount = cpus().length): number
       return exportConcurrency(coreCount)
     case 'model-download':
       return 4 // network-bound, cheap to overlap
+    case 'url-download':
+      return 2 // network-bound; allow a couple of concurrent URL imports (F.4)
     default:
       return 1
   }

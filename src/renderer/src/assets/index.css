@@ -114,7 +114,35 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  /* Solid base (the app defaults to the dark editor aesthetic) so content always
+     has contrast — we do NOT depend on macOS vibrancy to paint the backdrop. */
   body {
     @apply bg-background text-foreground;
+    font-family:
+      -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+}
+
+@layer utilities {
+  /* macOS custom-title-bar drag regions (titleBarStyle: 'hiddenInset'). Any
+     interactive control inside a drag region MUST carry .app-no-drag or it
+     becomes unclickable (clicks are swallowed by the drag region). */
+  .app-drag {
+    -webkit-app-region: drag;
+  }
+  .app-no-drag {
+    -webkit-app-region: no-drag;
+  }
+  /* Subtle elevated sidebar surface (a lighter dark panel) for visual separation
+     from the editor canvas; slight translucency gives a hint of macOS vibrancy. */
+  .vibrant-sidebar {
+    background: color-mix(in oklch, var(--sidebar) 88%, transparent);
   }
 }

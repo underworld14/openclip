@@ -63,6 +63,7 @@ export enum IPCChannels {
   // System
   OPEN_FOLDER = 'system:open-folder',
   SHOW_SAVE_DIALOG = 'system:save-dialog',
+  SHOW_OPEN_DIALOG = 'system:open-dialog',
   CHECK_UPDATE = 'system:check-update'
 }
 
@@ -212,6 +213,17 @@ export interface ChannelMap {
   [IPCChannels.SHOW_SAVE_DIALOG]: ChannelPayload<
     { defaultPath?: string; filters?: Array<{ name: string; extensions: string[] }> },
     { canceled: boolean; filePath?: string }
+  >
+  // Native open-file picker for the unified import (F.3). Mirrors SHOW_SAVE_DIALOG;
+  // auto-creates `window.openclip.system.openDialog`. `properties` is a string
+  // union (kept free of `Electron.*` types so the SHARED tsconfig stays Electron-
+  // agnostic); it maps 1:1 onto Electron's OpenDialogOptions.properties.
+  [IPCChannels.SHOW_OPEN_DIALOG]: ChannelPayload<
+    {
+      filters?: Array<{ name: string; extensions: string[] }>
+      properties?: Array<'openFile' | 'openDirectory' | 'multiSelections'>
+    },
+    { canceled: boolean; filePaths: string[] }
   >
   [IPCChannels.CHECK_UPDATE]: ChannelPayload<void, UpdateStatus>
 }

@@ -37,8 +37,13 @@ import type { CaptionStyle, Transcript, TranscriptSegment, WordTimestamp } from 
 // Job taxonomy
 // ============================================================================
 
-/** The three MVP long-job kinds (PRD §10.2). */
-export type JobKind = 'transcribe' | 'export' | 'model-download'
+/**
+ * The MVP long-job kinds (PRD §10.2). `url-download` is the additive UX-revamp
+ * job (F.4): stream a remote video (YouTube/URL) to disk via the bundled yt-dlp,
+ * emitting byte/percent progress; the renderer then feeds the merged file into
+ * the existing import→extract→transcribe pipeline.
+ */
+export type JobKind = 'transcribe' | 'export' | 'model-download' | 'url-download'
 
 /** Typed terminal-error codes streamed in `{t:'error'}` (PRD §10.2). */
 export type JobErrorCode =
@@ -116,6 +121,15 @@ export interface JobParams {
   'model-download': {
     model: WhisperModelSize
   }
+  /**
+   * Download a remote video (YouTube/URL) to disk via the bundled yt-dlp (F.4).
+   * `outDir` defaults to a per-job temp dir; the merged mp4 path is returned in
+   * the `done` result for the renderer to feed into the import pipeline.
+   */
+  'url-download': {
+    url: string
+    outDir?: string
+  }
 }
 
 // ============================================================================
@@ -140,6 +154,14 @@ export interface JobResult {
     model: WhisperModelSize
     /** Absolute path to the downloaded ggml-<model>.bin. */
     path: string
+    bytes: number
+  }
+  'url-download': {
+    /** Absolute path to the downloaded (merged) video file. */
+    filePath: string
+    /** Best-effort title parsed from yt-dlp metadata (may be absent). */
+    title?: string
+    /** Final on-disk size of the downloaded file. */
     bytes: number
   }
 }
@@ -169,6 +191,16 @@ export interface JobPartial {
   'model-download': {
     receivedBytes: number
     totalBytes: number
+  }
+  /**
+   * yt-dlp `--newline` progress (F.4): each `[download]  xx.x% of ~yyMiB` line
+   * is parsed to a byte count + percent. `totalBytes` may be approximate (`~`)
+   * while yt-dlp is still resolving the size; `pct` is 0..100.
+   */
+  'url-download': {
+    downloadedBytes: number
+    totalBytes: number
+    pct: number
   }
 }
 

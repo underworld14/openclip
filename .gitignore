@@ -31,8 +31,10 @@ tests/fixtures/.generated
 # NEVER committed (large; reproducible from node_modules + the whisper build — P7/§13)
 resources/ffmpeg/
 resources/whisper/
-# local whisper.cpp build output staged for the bundler
+resources/yt-dlp/
+# local whisper.cpp build output + yt-dlp download cache staged for the bundler
 build/whisper-build/
+build/yt-dlp-cache/
 
 # secrets / local env
 .env

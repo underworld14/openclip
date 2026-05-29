@@ -9,6 +9,7 @@
  *   resources/ffmpeg/<plat-arch>/ffmpeg     ← ffmpeg-static (libass + videotoolbox)
  *   resources/ffmpeg/<plat-arch>/ffprobe    ← ffmpeg-ffprobe-static
  *   resources/whisper/<plat-arch>/whisper-cli ← static Metal-embedded build
+ *   resources/yt-dlp/<plat-arch>/yt-dlp     ← youtube-dl-exec's auto-installed yt-dlp (F.4)
  *
  * Gate-A invariants honored (verified here, build fails loudly otherwise):
  *   - the bundled ffmpeg MUST expose the libass `subtitles` filter and the
@@ -26,7 +27,7 @@
  *   node scripts/bundle-binaries.mjs --verify  # verify already-bundled binaries
  */
 
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, copyFileSync, chmodSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -69,6 +70,35 @@ function resolveFfprobeStatic() {
   const m = require('ffmpeg-ffprobe-static')
   if (!m.ffprobePath) fail('ffmpeg-ffprobe-static did not resolve ffprobePath')
   return m.ffprobePath
+}
+
+/**
+ * Resolve the SELF-CONTAINED standalone yt-dlp binary (F.4 / F.9). We ship the
+ * `yt-dlp_macos` release (a PyInstaller universal2 executable — only libSystem +
+ * libz, NO Python dependency) rather than youtube-dl-exec's Python zipapp, which
+ * needs python ≥3.10 on the host and fails on macOS's default python3. Downloaded
+ * once into a build cache; reused if present.
+ */
+function resolveYtDlp() {
+  if (process.env.OPENCLIP_YTDLP_SRC && existsSync(process.env.OPENCLIP_YTDLP_SRC)) {
+    return process.env.OPENCLIP_YTDLP_SRC
+  }
+  const asset =
+    process.platform === 'darwin'
+      ? 'yt-dlp_macos'
+      : process.platform === 'win32'
+        ? 'yt-dlp.exe'
+        : 'yt-dlp'
+  const outName = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'
+  const cacheDir = join(repoRoot, 'build', 'yt-dlp-cache', platArch)
+  const cached = join(cacheDir, outName)
+  if (existsSync(cached)) return cached
+  mkdirSync(cacheDir, { recursive: true })
+  const url = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${asset}`
+  log(`downloading standalone yt-dlp (${asset}) → ${cached}`)
+  execFileSync('curl', ['-fsSL', '-o', cached, url], { stdio: 'inherit' })
+  chmodSync(cached, 0o755)
+  return cached
 }
 
 /** Find the locally-built (static, Metal-embedded) whisper-cli. NEVER brew. */
@@ -132,6 +162,23 @@ function verifyPortable(bin, label) {
   log(`${label} OK: portable (only /usr/lib + /System/* dylibs)`)
 }
 
+/**
+ * Run `yt-dlp --version`. The bundled binary is the SELF-CONTAINED standalone
+ * release (no Python), so it must run directly with a date-stamped version
+ * (e.g. "2026.03.17") — a Python traceback or empty output is a hard failure.
+ */
+function verifyYtDlpRuns(bin) {
+  const r = spawnSync(bin, ['--version'], { encoding: 'utf8' })
+  const out = (r.stdout ?? '').trim()
+  if (r.error || r.status !== 0 || !/^\d{4}\.\d{2}\.\d{2}/.test(out)) {
+    fail(
+      `bundled yt-dlp did not run a self-contained --version (got: ${JSON.stringify(out)} ` +
+        `status=${r.status}). It must be the standalone yt-dlp release (no Python).`
+    )
+  }
+  log(`yt-dlp OK: self-contained, runs (--version → ${out.split('\n')[0]})`)
+}
+
 function verifyWhisperRuns(bin) {
   // whisper-cli prints usage to stdout/stderr and exits non-zero for -h on some
   // builds; we only care that it executes and emits its help banner.
@@ -156,7 +203,8 @@ const verifyOnly = process.argv.includes('--verify')
 const dest = {
   ffmpeg: join(repoRoot, 'resources', 'ffmpeg', platArch, 'ffmpeg'),
   ffprobe: join(repoRoot, 'resources', 'ffmpeg', platArch, 'ffprobe'),
-  whisper: join(repoRoot, 'resources', 'whisper', platArch, 'whisper-cli')
+  whisper: join(repoRoot, 'resources', 'whisper', platArch, 'whisper-cli'),
+  ytdlp: join(repoRoot, 'resources', 'yt-dlp', platArch, 'yt-dlp')
 }
 
 log(`target plat-arch: ${platArch}`)
@@ -165,6 +213,7 @@ if (!verifyOnly) {
   installBinary(resolveFfmpegStatic(), dest.ffmpeg)
   installBinary(resolveFfprobeStatic(), dest.ffprobe)
   installBinary(resolveWhisperCli(), dest.whisper)
+  installBinary(resolveYtDlp(), dest.ytdlp)
 }
 
 // Verify whatever is now bundled (works for both modes).
@@ -176,6 +225,9 @@ verifyPortable(dest.ffmpeg, 'ffmpeg')
 verifyPortable(dest.ffprobe, 'ffprobe')
 verifyPortable(dest.whisper, 'whisper-cli')
 verifyWhisperRuns(dest.whisper)
+// yt-dlp is a self-contained standalone executable (not a dylib-linking Mach-O
+// in the relocatable sense), so we only assert it RUNS — no otool linkage check.
+verifyYtDlpRuns(dest.ytdlp)
 
 log('all sidecars bundled and verified ✓')
 

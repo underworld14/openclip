@@ -44,17 +44,28 @@ export interface OpenRouterRawModel {
 /** Injectable network seam — returns the raw `data[]` from `/api/v1/models`. */
 export type ModelsFetcher = (args: { apiKey: string | null }) => Promise<OpenRouterRawModel[]>
 
-/** True if the model advertises strict-JSON support (structured_outputs / response_format). */
+/**
+ * True if the model can produce JSON output we can consume — either strict
+ * `structured_outputs` (json_schema strict, the ideal) OR basic `response_format`
+ * (JSON mode). The transport always requests strict json_schema; a
+ * response_format-only model may downgrade to JSON mode, and the Zod repair
+ * ladder recovers it. We include both so the picker isn't needlessly sparse;
+ * clip detection still works for both via the repair ladder.
+ */
 export function supportsStructured(raw: OpenRouterRawModel): boolean {
   const params = raw.supported_parameters ?? []
   return params.includes('structured_outputs') || params.includes('response_format')
 }
 
-/** Parse a per-token USD price string → USD per 1M tokens; undefined if unknown/zero. */
+/**
+ * Parse a per-token USD price string → USD per 1M tokens. `undefined` when the
+ * price is unknown (missing/empty/NaN/negative); a finite 0 passes through as 0
+ * so free models render as "Free" rather than blank.
+ */
 function pricePerMTok(perToken: string | undefined): number | undefined {
   if (!perToken) return undefined
   const n = Number(perToken)
-  if (!Number.isFinite(n) || n <= 0) return undefined
+  if (!Number.isFinite(n) || n < 0) return undefined
   return n * 1_000_000
 }
 

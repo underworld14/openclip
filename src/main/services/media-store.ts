@@ -10,7 +10,7 @@
  * is unit-testable against a real temp filesystem.
  */
 
-import { basename, join } from 'node:path'
+import { basename, dirname, join, resolve, sep } from 'node:path'
 import { copyFile, mkdir, readdir, rename, rm, unlink } from 'node:fs/promises'
 
 export class MediaStoreError extends Error {
@@ -37,9 +37,18 @@ export function projectMediaDir(mediaRoot: string, projectId: string): string {
   return join(mediaRoot, assertSafeProjectId(projectId))
 }
 
-/** Destination path when adopting `srcPath` for `projectId` (pure). */
+/**
+ * Destination path when adopting `srcPath` for `projectId` (pure). Validates BOTH
+ * the projectId (via projectMediaDir) AND the source basename — a `.`/`..`/
+ * separator basename could otherwise collapse the dest out of `media/<projectId>/`
+ * (trust boundary: srcPath/projectId reach here from the renderer over IPC).
+ */
 export function adoptedMediaPath(mediaRoot: string, projectId: string, srcPath: string): string {
-  return join(projectMediaDir(mediaRoot, projectId), basename(srcPath))
+  const base = basename(srcPath)
+  if (!base || base === '.' || base === '..' || /[\\/]/.test(base)) {
+    throw new MediaStoreError('INVALID', `unsafe source filename: ${JSON.stringify(base)}`)
+  }
+  return join(projectMediaDir(mediaRoot, projectId), base)
 }
 
 function isErrnoCode(err: unknown, code: string): boolean {
@@ -57,21 +66,28 @@ export async function adoptIntoMedia(
   projectId: string,
   mediaRoot: string
 ): Promise<string> {
-  const destDir = projectMediaDir(mediaRoot, projectId)
-  const dest = join(destDir, basename(srcPath))
+  // Single source of truth for the dest path; validates projectId + basename.
+  const dest = adoptedMediaPath(mediaRoot, projectId, srcPath)
+  const destDir = dirname(dest)
+  // Defense-in-depth: the resolved dest must stay inside the per-project dir.
+  if (!resolve(dest).startsWith(resolve(destDir) + sep)) {
+    throw new MediaStoreError('INVALID', `adopt dest escapes media dir: ${dest}`)
+  }
   try {
     await mkdir(destDir, { recursive: true })
     try {
       await rename(srcPath, dest)
     } catch (err) {
       if (!isErrnoCode(err, 'EXDEV')) throw err
-      // Cross-volume: copy then best-effort remove the source (a leftover temp
-      // file is harmless — OS temp / the sweep reclaim it).
+      // Cross-volume: copy then best-effort remove the source. A leftover temp
+      // file is reclaimed by OS temp cleanup (the launch sweep only scans
+      // <userData>/media, NOT the temp downloads tree).
       await copyFile(srcPath, dest)
       await unlink(srcPath).catch(() => {})
     }
     return dest
   } catch (cause) {
+    if (cause instanceof MediaStoreError) throw cause
     throw new MediaStoreError('IO', `failed to adopt ${srcPath} into media/${projectId}`, cause)
   }
 }

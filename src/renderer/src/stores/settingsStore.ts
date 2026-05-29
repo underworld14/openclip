@@ -70,8 +70,11 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => ({
     set({ modelsLoading: true, modelsError: null })
     try {
       const res = await window.openclip.ai.listModels({ provider, refresh })
+      // Drop a stale completion if the user switched providers mid-fetch.
+      if (get().settings.aiProvider !== provider) return
       set({ models: res.models, modelsFetchedAt: res.fetchedAt, modelsLoading: false })
     } catch (e) {
+      if (get().settings.aiProvider !== provider) return
       // Store only a message string — never any key material.
       set({
         modelsLoading: false,

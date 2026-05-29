@@ -57,11 +57,11 @@ describe('mapRawToModelInfo', () => {
     expect(m.pricePerMTokIn).toBeCloseTo(3)
     expect(m.pricePerMTokOut).toBeCloseTo(15)
   })
-  it('falls back name=id and omits zero/empty pricing', () => {
+  it('falls back name=id; free (0) → 0, empty/unknown → undefined', () => {
     const m = mapRawToModelInfo(raw({ id: 'x/y', pricing: { prompt: '0', completion: '' } }))
     expect(m.name).toBe('x/y')
-    expect(m.pricePerMTokIn).toBeUndefined()
-    expect(m.pricePerMTokOut).toBeUndefined()
+    expect(m.pricePerMTokIn).toBe(0) // free passes through as 0 → renders "Free"
+    expect(m.pricePerMTokOut).toBeUndefined() // empty/unknown
   })
 })
 

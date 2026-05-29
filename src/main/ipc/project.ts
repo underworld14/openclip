@@ -66,11 +66,15 @@ export function registerProjectHandlers(ctx: IpcContext): void {
       _e,
       req: ChannelReq<IPCChannels.DELETE_PROJECT>
     ): Promise<ChannelRes<IPCChannels.DELETE_PROJECT>> => {
-      const res = await deleteProject(projectsDir(), req.id)
-      await deleteProjectMedia(req.id, mediaDir()).catch((err) => {
-        console.error(`[media] failed to reclaim media for project ${req.id}:`, err)
-      })
-      return res
+      try {
+        return await deleteProject(projectsDir(), req.id)
+      } finally {
+        // Reclaim owned media regardless of the .ocproj delete outcome (the
+        // launch sweep is the backstop). Best-effort: never fails the delete.
+        await deleteProjectMedia(req.id, mediaDir()).catch((err) => {
+          console.error(`[media] failed to reclaim media for project ${req.id}:`, err)
+        })
+      }
     }
   )
 }

@@ -76,6 +76,10 @@ describe('adoptIntoMedia', () => {
     await writeFile(src, 'x')
     await expect(adoptIntoMedia(src, '../evil', root)).rejects.toThrow(MediaStoreError)
   })
+
+  it('rejects a source whose basename is .. / . (dest-escape guard)', async () => {
+    await expect(adoptIntoMedia(join(work, '..'), 'p1', root)).rejects.toThrow(MediaStoreError)
+  })
 })
 
 describe('deleteProjectMedia', () => {

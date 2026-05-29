@@ -10,7 +10,7 @@
  * they are unit-tested without a DOM (vitest `node` env).
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { AIProvider } from '@shared/schema'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { Button } from '@renderer/components/ui/button'
@@ -77,6 +77,7 @@ export function SettingsPanel(): React.JSX.Element {
   const models = useSettingsStore((s) => s.models)
   const modelsLoading = useSettingsStore((s) => s.modelsLoading)
   const modelsError = useSettingsStore((s) => s.modelsError)
+  const modelsFetchedAt = useSettingsStore((s) => s.modelsFetchedAt)
   const loadModels = useSettingsStore((s) => s.loadModels)
 
   // Local-only key entry; cleared after submit (never persisted in renderer).
@@ -90,15 +91,21 @@ export function SettingsPanel(): React.JSX.Element {
   const provider = settings.aiProvider
   const status = keyStatus[provider]
 
-  // Auto-load the OpenRouter model list the first time the provider is selected.
+  // Auto-load the OpenRouter model list once per provider selection. Gate on
+  // modelsFetchedAt (a positive "attempted" signal reset to null on provider
+  // change) — NOT models.length, which would re-fire forever if a fetch
+  // legitimately returns zero models (review H: infinite-refetch loop).
   useEffect(() => {
-    if (provider === 'openrouter' && models.length === 0 && !modelsLoading && !modelsError) {
+    if (provider === 'openrouter' && modelsFetchedAt === null && !modelsLoading && !modelsError) {
       void loadModels(false)
     }
-  }, [provider, models.length, modelsLoading, modelsError, loadModels])
+  }, [provider, modelsFetchedAt, modelsLoading, modelsError, loadModels])
 
-  const filtered = filterModels(models, modelQuery)
-  const { recommended, others } = partitionRecommended(filtered)
+  // Memoized so typing in the filter doesn't re-walk the full catalog + re-mount
+  // unchanged rows each render.
+  const { recommended, others } = useMemo(() => {
+    return partitionRecommended(filterModels(models, modelQuery))
+  }, [models, modelQuery])
 
   const onProviderChange = async (value: string): Promise<void> => {
     const p = value as AIProvider
@@ -110,6 +117,8 @@ export function SettingsPanel(): React.JSX.Element {
     if (!keyDraft.trim()) return
     await setApiKey(provider, keyDraft.trim())
     setKeyDraft('') // never keep the raw key around in the renderer
+    // A new key may unlock more models / personalized pricing — refresh the list.
+    if (provider === 'openrouter') void loadModels(true)
   }
 
   return (
@@ -177,7 +186,7 @@ export function SettingsPanel(): React.JSX.Element {
             <ScrollArea className="h-56 rounded-md border">
               {modelsLoading && models.length === 0 ? (
                 <div className="p-3 text-xs text-muted-foreground">Loading models…</div>
-              ) : filtered.length === 0 ? (
+              ) : recommended.length === 0 && others.length === 0 ? (
                 <div className="p-3 text-xs text-muted-foreground">
                   {models.length === 0
                     ? 'No models loaded — add your OpenRouter key, then Refresh.'

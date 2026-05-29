@@ -31,7 +31,7 @@ import { buildJobsApi, installJobPortForwarder } from './api/jobs'
 // ============================================================================
 
 export interface OpenClipBridge {
-  /** video:import, video:import:url, video:export → import, importUrl, export */
+  /** video:import, video:export → import, export */
   video: NamespaceMethods<'video'>
   /** audio:extract → extract */
   audio: NamespaceMethods<'audio'>

@@ -48,7 +48,7 @@ test('ping IPC round-trips and the openclip bridge is exposed', async () => {
     'system',
     'video'
   ])
-  expect(bridge.videoMethods).toEqual(['export', 'import', 'importUrl'])
+  expect(bridge.videoMethods).toEqual(['export', 'import'])
   // F.3: the native file picker auto-derives `system.openDialog` from ChannelMap.
   expect(bridge.systemMethods).toEqual(['checkUpdate', 'openDialog', 'openFolder', 'saveDialog'])
   expect(bridge.hasJobs).toBe(true)

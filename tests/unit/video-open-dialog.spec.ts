@@ -75,14 +75,18 @@ describe('SHOW_OPEN_DIALOG handler (F.3 native file picker)', () => {
     expect(res).toEqual({ canceled: true, filePaths: [] })
   })
 
-  it('honors caller-provided properties/filters overrides', async () => {
+  it('IGNORES caller-supplied properties/filters (G.7 least-privilege lockdown)', async () => {
     showOpenDialog.mockResolvedValue({ canceled: false, filePaths: ['/x'] })
     const { ctx, handlers } = makeCtx()
     registerVideoHandlers(ctx)
     const h = handlers.get(IPCChannels.SHOW_OPEN_DIALOG)!
+    // A misbehaving renderer asks for a directory / all-files; the handler must
+    // not honour it — the picker stays scoped to a single video file.
     await h({}, { properties: ['openDirectory'], filters: [{ name: 'All', extensions: ['*'] }] })
     const opts = showOpenDialog.mock.calls[0][0] as Electron.OpenDialogOptions
-    expect(opts.properties).toEqual(['openDirectory'])
-    expect(opts.filters).toEqual([{ name: 'All', extensions: ['*'] }])
+    expect(opts.properties).toEqual(['openFile'])
+    expect(opts.filters).toEqual([
+      { name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'webm', 'm4v', 'avi'] }
+    ])
   })
 })

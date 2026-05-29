@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { MessageChannel } from 'node:worker_threads'
-import { SidecarManager, type EventPort } from '@main/services/sidecar-manager'
+import { SidecarManager, type EventPort, type JobEmitter } from '@main/services/sidecar-manager'
 import { createUrlDownloadRunner } from '@main/services/jobs/url-download-runner'
 import { jobEvents, type MessagePortLike } from '@renderer/hooks/useJob'
 import type { JobEventFor } from '@shared/jobs'
@@ -61,5 +61,82 @@ describe('url-download-runner: streams progress/byte partials then a contract-va
       expect(done.result.title).toBe('Sample')
       expect(done.result.bytes).toBe(50_000_000)
     }
+  })
+})
+
+// Direct-invocation tests of the runner factory — assert the SAFETY-RELEVANT
+// wiring the SidecarManager-level test can't see: server-side outDir derivation
+// (G.2 trust boundary), pid tracking (PRD §17 kill-on-quit), progress emission,
+// and that a download rejection is NOT swallowed.
+describe('createUrlDownloadRunner: wiring + failure', () => {
+  function fakeEmit(): {
+    emit: JobEmitter<'url-download'>
+    events: Array<{ t: string; pct?: number }>
+  } {
+    const events: Array<{ t: string; pct?: number }> = []
+    return {
+      events,
+      emit: {
+        progress: (pct: number) => events.push({ t: 'progress', pct }),
+        partial: () => events.push({ t: 'partial' }),
+        done: () => events.push({ t: 'done' }),
+        error: () => events.push({ t: 'error' })
+      }
+    }
+  }
+
+  it('derives outDir from jobId (ignoring any renderer-supplied outDir), tracks the pid + signal, emits progress', async () => {
+    const tracked: number[] = []
+    let resolveArg = ''
+    let sawSignal: AbortSignal | undefined
+    const runner = createUrlDownloadRunner({
+      resolveOutDir: (jobId) => {
+        resolveArg = jobId
+        return `/tmp/oc/downloads/${jobId}`
+      },
+      downloadUrl: async (o) => {
+        sawSignal = o.signal
+        // The renderer outDir must NOT reach the download — server-derived only.
+        expect(o.outDir).toBe('/tmp/oc/downloads/JOB1')
+        o.onPid?.(7777)
+        o.onProgress?.({ downloadedBytes: 1, totalBytes: 2, pct: 50 })
+        return { filePath: `${o.outDir}/v.mp4`, bytes: 10 }
+      }
+    })
+    const { emit, events } = fakeEmit()
+    const ctx = {
+      jobId: 'JOB1',
+      signal: new AbortController().signal,
+      trackPid: (p: number) => tracked.push(p)
+    }
+    // Cast: a (malicious) renderer outDir is not in the type, but prove it's ignored.
+    const params = { url: 'https://youtu.be/x', outDir: '/evil/autostart' } as unknown as {
+      url: string
+    }
+    const result = await runner(params, emit, ctx)
+
+    expect(resolveArg).toBe('JOB1')
+    expect(tracked).toContain(7777)
+    expect(sawSignal).toBeInstanceOf(AbortSignal)
+    expect(events.some((e) => e.t === 'progress' && e.pct === 50)).toBe(true)
+    expect(result.filePath).toMatch(/\/tmp\/oc\/downloads\/JOB1\/v\.mp4$/)
+  })
+
+  it('propagates a download rejection (no swallow → maps to a terminal error)', async () => {
+    const runner = createUrlDownloadRunner({
+      resolveOutDir: () => '/tmp/oc/x',
+      downloadUrl: async () => {
+        throw new Error('yt-dlp failed: Video unavailable')
+      }
+    })
+    const { emit } = fakeEmit()
+    const ctx = {
+      jobId: 'J',
+      signal: new AbortController().signal,
+      trackPid: () => {}
+    }
+    await expect(runner({ url: 'https://youtu.be/x' }, emit, ctx)).rejects.toThrow(
+      /Video unavailable/
+    )
   })
 })

@@ -9,7 +9,7 @@
  *   resources/ffmpeg/<plat-arch>/ffmpeg     ← ffmpeg-static (libass + videotoolbox)
  *   resources/ffmpeg/<plat-arch>/ffprobe    ← ffmpeg-ffprobe-static
  *   resources/whisper/<plat-arch>/whisper-cli ← static Metal-embedded build
- *   resources/yt-dlp/<plat-arch>/yt-dlp     ← youtube-dl-exec's auto-installed yt-dlp (F.4)
+ *   resources/yt-dlp/<plat-arch>/yt-dlp     ← pinned standalone yt-dlp_macos release, SHA-256 verified (F.4 / G.6 — no Python)
  *
  * Gate-A invariants honored (verified here, build fails loudly otherwise):
  *   - the bundled ffmpeg MUST expose the libass `subtitles` filter and the
@@ -28,14 +28,23 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, copyFileSync, chmodSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, copyFileSync, chmodSync, statSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
+import { createHash } from 'node:crypto'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '..')
 const require = createRequire(import.meta.url)
+
+/**
+ * Pinned yt-dlp release (G.6): a SPECIFIC tag (not "latest") so the bundle is
+ * reproducible, and we verify the download's SHA-256 against the release's
+ * SHA2-256SUMS so a swapped/MITM'd asset can't be silently bundled + signed.
+ * Override with OPENCLIP_YTDLP_VERSION to bump (then update the build cache).
+ */
+const YTDLP_VERSION = process.env.OPENCLIP_YTDLP_VERSION || '2026.03.17'
 
 const platArch = `${process.platform}-${process.arch}`
 const isMac = process.platform === 'darwin'
@@ -72,12 +81,33 @@ function resolveFfprobeStatic() {
   return m.ffprobePath
 }
 
+/** sha256 of a file, lowercase hex. */
+function sha256File(path) {
+  return createHash('sha256').update(readFileSync(path)).digest('hex')
+}
+
+/** curl a URL to stdout (utf8) — used for the small SHA2-256SUMS manifest. */
+function curlText(url) {
+  const r = spawnSync('curl', ['-fsSL', url], { encoding: 'utf8' })
+  if (r.error || r.status !== 0) {
+    fail(
+      `failed to fetch ${url} (curl status=${r.status}${r.error ? `, ${r.error.message}` : ''}).\n` +
+        `For an offline/air-gapped build, set OPENCLIP_YTDLP_SRC=<path to a yt-dlp binary> ` +
+        `or pre-seed build/yt-dlp-cache/<plat-arch>/.`
+    )
+  }
+  return r.stdout
+}
+
 /**
  * Resolve the SELF-CONTAINED standalone yt-dlp binary (F.4 / F.9). We ship the
  * `yt-dlp_macos` release (a PyInstaller universal2 executable — only libSystem +
  * libz, NO Python dependency) rather than youtube-dl-exec's Python zipapp, which
- * needs python ≥3.10 on the host and fails on macOS's default python3. Downloaded
- * once into a build cache; reused if present.
+ * needs python ≥3.10 on the host and fails on macOS's default python3.
+ *
+ * G.6: PINNED to YTDLP_VERSION (reproducible) and SHA-256 VERIFIED against the
+ * release's SHA2-256SUMS before staging (tamper-evident — a swapped/MITM'd asset
+ * fails the build instead of being silently signed). Cached per plat-arch.
  */
 function resolveYtDlp() {
   if (process.env.OPENCLIP_YTDLP_SRC && existsSync(process.env.OPENCLIP_YTDLP_SRC)) {
@@ -92,12 +122,37 @@ function resolveYtDlp() {
   const outName = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'
   const cacheDir = join(repoRoot, 'build', 'yt-dlp-cache', platArch)
   const cached = join(cacheDir, outName)
-  if (existsSync(cached)) return cached
+  const base = `https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}`
+
+  // Look up the pinned release's expected sha256 for our asset.
+  const sums = curlText(`${base}/SHA2-256SUMS`)
+  const row = sums.split(/\r?\n/).find((l) => l.trim().endsWith(`  ${asset}`))
+  if (!row) fail(`SHA2-256SUMS for yt-dlp ${YTDLP_VERSION} has no entry for ${asset}`)
+  const expected = row.trim().split(/\s+/)[0].toLowerCase()
+
+  // Reuse the cache only if it still matches the pinned checksum.
+  if (existsSync(cached) && sha256File(cached) === expected) return cached
+
   mkdirSync(cacheDir, { recursive: true })
-  const url = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${asset}`
-  log(`downloading standalone yt-dlp (${asset}) → ${cached}`)
-  execFileSync('curl', ['-fsSL', '-o', cached, url], { stdio: 'inherit' })
+  const url = `${base}/${asset}`
+  log(`downloading pinned yt-dlp ${YTDLP_VERSION} (${asset}) → ${cached}`)
+  const dl = spawnSync('curl', ['-fsSL', '-o', cached, url], { stdio: 'inherit' })
+  if (dl.error || dl.status !== 0) {
+    fail(
+      `failed to download ${url} (curl status=${dl.status}${dl.error ? `, ${dl.error.message}` : ''}).\n` +
+        `For an offline/air-gapped build, set OPENCLIP_YTDLP_SRC=<path to a yt-dlp binary> ` +
+        `or pre-seed ${cached}.`
+    )
+  }
+  const actual = sha256File(cached)
+  if (actual !== expected) {
+    fail(
+      `yt-dlp ${YTDLP_VERSION} ${asset} SHA-256 MISMATCH — refusing to bundle a possibly-tampered binary.\n` +
+        `  expected ${expected}\n  actual   ${actual}`
+    )
+  }
   chmodSync(cached, 0o755)
+  log(`yt-dlp ${YTDLP_VERSION} checksum OK (sha256 ${expected.slice(0, 16)}…)`)
   return cached
 }
 
@@ -168,6 +223,23 @@ function verifyPortable(bin, label) {
  * (e.g. "2026.03.17") — a Python traceback or empty output is a hard failure.
  */
 function verifyYtDlpRuns(bin) {
+  // Assert it's a NATIVE executable (Mach-O/ELF/PE), not a `#!` python zipapp —
+  // otherwise a host python3 would satisfy --version (a false pass on the "no
+  // Python" guarantee). Magic-byte check mirrors verify-package.mjs.
+  const head = readFileSync(bin).subarray(0, 4)
+  const be = head.length >= 4 ? head.readUInt32BE(0) : 0
+  const MACHO = [0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca]
+  const isNative =
+    !(head[0] === 0x23 && head[1] === 0x21) && // not '#!'
+    (MACHO.includes(be) ||
+      (head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46) || // ELF
+      (head[0] === 0x4d && head[1] === 0x5a)) // 'MZ' PE
+  if (!isNative) {
+    fail(
+      `bundled yt-dlp is NOT a native standalone executable (looks like a #!/script). ` +
+        `It must be the standalone yt-dlp release (no Python).`
+    )
+  }
   const r = spawnSync(bin, ['--version'], { encoding: 'utf8' })
   const out = (r.stdout ?? '').trim()
   if (r.error || r.status !== 0 || !/^\d{4}\.\d{2}\.\d{2}/.test(out)) {
@@ -176,7 +248,7 @@ function verifyYtDlpRuns(bin) {
         `status=${r.status}). It must be the standalone yt-dlp release (no Python).`
     )
   }
-  log(`yt-dlp OK: self-contained, runs (--version → ${out.split('\n')[0]})`)
+  log(`yt-dlp OK: native standalone, runs (--version → ${out.split('\n')[0]})`)
 }
 
 function verifyWhisperRuns(bin) {
@@ -204,7 +276,15 @@ const dest = {
   ffmpeg: join(repoRoot, 'resources', 'ffmpeg', platArch, 'ffmpeg'),
   ffprobe: join(repoRoot, 'resources', 'ffmpeg', platArch, 'ffprobe'),
   whisper: join(repoRoot, 'resources', 'whisper', platArch, 'whisper-cli'),
-  ytdlp: join(repoRoot, 'resources', 'yt-dlp', platArch, 'yt-dlp')
+  // Keep the .exe on win32 so paths.ytDlpPath() (which appends .exe on Windows)
+  // resolves the staged binary — CreateProcess won't auto-append it (G.7/G.6).
+  ytdlp: join(
+    repoRoot,
+    'resources',
+    'yt-dlp',
+    platArch,
+    process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'
+  )
 }
 
 log(`target plat-arch: ${platArch}`)

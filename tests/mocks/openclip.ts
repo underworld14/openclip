@@ -52,7 +52,6 @@ function toMethodName(channelValue: string, prefix: string): string {
 /** Canned responses keyed by channel value. */
 const CANNED: Partial<Record<string, unknown>> = {
   [IPCChannels.IMPORT_VIDEO]: { sourceVideo: projectFixture.sourceVideo },
-  [IPCChannels.IMPORT_FROM_URL]: { sourceVideo: projectFixture.sourceVideo },
   [IPCChannels.AUDIO_EXTRACT]: { wavPath: '/tmp/openclip/p1/j1/audio.16k.wav' },
   [IPCChannels.EXPORT_CLIP]: { outputPath: '/Users/me/Movies/clip-1.mp4' },
   [IPCChannels.GENERATE_CLIPS]: clipSchemaFixture,

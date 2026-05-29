@@ -123,12 +123,12 @@ export interface JobParams {
   }
   /**
    * Download a remote video (YouTube/URL) to disk via the bundled yt-dlp (F.4).
-   * `outDir` defaults to a per-job temp dir; the merged mp4 path is returned in
-   * the `done` result for the renderer to feed into the import pipeline.
+   * The output dir is derived server-side from the jobId (never renderer-supplied
+   * — G.2 trust boundary); the merged mp4 path is returned in the `done` result
+   * for the renderer to feed into the import pipeline.
    */
   'url-download': {
     url: string
-    outDir?: string
   }
 }
 

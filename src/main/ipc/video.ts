@@ -61,24 +61,19 @@ export function registerVideoHandlers(ctx: IpcContext): void {
   )
 
   // ── System: open dialog (F.3 unified import) ─────────────────────────────
-  // Native file picker for "Choose file…" on the welcome/import screen. Mirrors
-  // SHOW_SAVE_DIALOG. Returns { canceled, filePaths }.
+  // Native file picker for "Choose file…" on the welcome/import screen. The
+  // picker scope is HARD-CODED to a single video file (G.7 least-privilege): we
+  // deliberately IGNORE renderer-supplied properties/filters so a misbehaving
+  // renderer can't coax the user into picking a directory or a non-video file the
+  // import flow doesn't expect. Returns { canceled, filePaths }.
   ctx.ipcMain.handle(
     IPCChannels.SHOW_OPEN_DIALOG,
-    async (
-      _e,
-      req: {
-        filters?: Array<{ name: string; extensions: string[] }>
-        properties?: Array<'openFile' | 'openDirectory' | 'multiSelections'>
-      }
-    ): Promise<{ canceled: boolean; filePaths: string[] }> => {
+    async (): Promise<{ canceled: boolean; filePaths: string[] }> => {
       const win = ctx.getMainWindow()
       const options: Electron.OpenDialogOptions = {
         title: 'Import Video',
-        properties: req?.properties ?? ['openFile'],
-        filters: req?.filters ?? [
-          { name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'webm', 'm4v', 'avi'] }
-        ]
+        properties: ['openFile'],
+        filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'webm', 'm4v', 'avi'] }]
       }
       const result = win
         ? await dialog.showOpenDialog(win, options)

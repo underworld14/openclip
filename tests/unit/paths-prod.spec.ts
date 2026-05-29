@@ -17,6 +17,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import type * as PathsModule from '@main/utils/paths'
 
 const RESOURCES = '/Applications/OpenClip.app/Contents/Resources'
@@ -118,16 +119,30 @@ describe('paths.ts prod branch ↔ electron-builder extraResources (PRD §13)', 
     expect(ytDlpPath()).toBe('/override/yt-dlp')
   })
 
-  it('dev branch resolves yt-dlp to youtube-dl-exec constants.YOUTUBE_DL_PATH (F.4)', async () => {
-    // Force the dev branch and clear the override so the require('youtube-dl-exec')
-    // path is taken (matches whisperCliPath's PATH-lookup dev behaviour).
+  it('dev branch PREFERS the staged standalone yt-dlp, else youtube-dl-exec (F.4)', async () => {
+    // Force the dev branch and clear the override. ytDlpPath() prefers the
+    // self-contained standalone binary staged under resources/ (the documented
+    // precedence — no Python) and only falls back to youtube-dl-exec's managed
+    // binary when it isn't staged. Assert whichever is true on THIS tree so the
+    // suite is green both in a clean checkout and right after bundle-binaries.mjs.
     env.NODE_ENV = 'development'
     vi.resetModules()
-    // `constants` is a runtime export not present in youtube-dl-exec's .d.ts.
-    const ydl = (await import('youtube-dl-exec')) as unknown as {
-      constants: { YOUTUBE_DL_PATH: string }
-    }
+    const staged = join(
+      process.cwd(),
+      'resources',
+      'yt-dlp',
+      `${process.platform}-${process.arch}`,
+      'yt-dlp'
+    )
     const { ytDlpPath } = await loadPaths()
-    expect(ytDlpPath()).toBe(ydl.constants.YOUTUBE_DL_PATH)
+    if (existsSync(staged)) {
+      expect(ytDlpPath()).toBe(staged)
+    } else {
+      // `constants` is a runtime export not present in youtube-dl-exec's .d.ts.
+      const ydl = (await import('youtube-dl-exec')) as unknown as {
+        constants: { YOUTUBE_DL_PATH: string }
+      }
+      expect(ytDlpPath()).toBe(ydl.constants.YOUTUBE_DL_PATH)
+    }
   })
 })

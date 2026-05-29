@@ -15,13 +15,16 @@ import { APP_NAME } from '@shared'
 import type { WhisperModelSize } from '@shared/jobs'
 import { Button } from '@renderer/components/ui/button'
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@renderer/components/ui/dialog'
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle
-} from '@renderer/components/ui/dialog'
-import { Clapperboard, Download, Moon, Plus, Settings as SettingsIcon, Sparkles, Sun } from 'lucide-react'
+  Clapperboard,
+  Download,
+  Moon,
+  Plus,
+  Settings as SettingsIcon,
+  Sparkles,
+  Sun
+} from 'lucide-react'
 
 import { Welcome } from '@renderer/components/Welcome'
 import { Dashboard } from '@renderer/components/Dashboard'
@@ -73,7 +76,12 @@ function App(): React.JSX.Element {
         </div>
         <div className="app-no-drag flex items-center gap-1">
           {showEditor && (
-            <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => setModal('import')}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => setModal('import')}
+            >
               <Plus className="size-4" /> Import
             </Button>
           )}

@@ -1,8 +1,9 @@
 /**
  * preload/api/video.ts — `window.openclip.video` namespace builder (STUB body;
- * owned by spine/T tracks, E.3/E.4). video:import / video:import:url /
- * video:export → import / importUrl / export. Trunk derives the surface from
- * the frozen ChannelMap; tracks wire the matching main handlers.
+ * owned by spine/T tracks, E.3/E.4). video:import / video:export → import /
+ * export. (URL/YouTube import is the `url-download` streaming job, not a video:*
+ * channel — see G.7.) Trunk derives the surface from the frozen ChannelMap;
+ * tracks wire the matching main handlers.
  */
 
 import { buildNamespace } from './_invoke'

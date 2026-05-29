@@ -121,6 +121,20 @@ test('Gate D: the packaged .app runs the full flow with binaries from Contents/R
     const win = await app.firstWindow()
     await win.waitForLoadState('domcontentloaded')
 
+    // (0) BLANK-WINDOW REGRESSION GUARD (F.5 / G.4): in the PACKAGED file:// build
+    // the module script must execute (a CSP/meta/title regression would leave a
+    // blank window). Prove the title is correct AND that React actually mounted
+    // (#root has rendered children — the welcome screen on first run).
+    expect(await win.title()).toBe('OpenClip')
+    await win.waitForFunction(
+      () => {
+        const root = document.getElementById('root')
+        return !!root && root.children.length > 0
+      },
+      { timeout: 10_000 }
+    )
+    await expect(win.getByTestId('welcome')).toBeVisible()
+
     // (1) PROVE prod binary resolution: the diagnostic IPC must report binary
     // paths INSIDE the .app bundle and NOT under node_modules.
     const resolved = await win.evaluate(async () => {

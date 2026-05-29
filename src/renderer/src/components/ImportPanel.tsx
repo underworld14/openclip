@@ -32,17 +32,13 @@ export interface ImportPanelProps {
   onNeedModel?: (model: WhisperModelSize) => void
 }
 
-const VIDEO_FILTERS = [{ name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'webm', 'm4v', 'avi'] }]
-
 export function ImportPanel({ onNeedModel }: ImportPanelProps = {}): React.JSX.Element {
   const ctl = useImportController({ onNeedModel })
   const [value, setValue] = useState('')
 
   const chooseFile = async (): Promise<void> => {
-    const res = await window.openclip.system.openDialog({
-      properties: ['openFile'],
-      filters: VIDEO_FILTERS
-    })
+    // The picker is scoped server-side to a single video file (G.7); no inputs.
+    const res = await window.openclip.system.openDialog({})
     if (!res.canceled && res.filePaths[0]) await ctl.importFile(res.filePaths[0])
   }
 
@@ -69,7 +65,13 @@ export function ImportPanel({ onNeedModel }: ImportPanelProps = {}): React.JSX.E
           className="flex-1"
         />
         <Button data-testid="import-start" onClick={submit} disabled={ctl.busy || !value.trim()}>
-          {ctl.busy ? <Loader2 className="size-4 animate-spin" /> : looksUrl ? 'Download' : 'Import'}
+          {ctl.busy ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : looksUrl ? (
+            'Download'
+          ) : (
+            'Import'
+          )}
         </Button>
       </div>
 
@@ -79,7 +81,12 @@ export function ImportPanel({ onNeedModel }: ImportPanelProps = {}): React.JSX.E
         <span className="h-px flex-1 bg-border" />
       </div>
 
-      <Button variant="outline" onClick={() => void chooseFile()} disabled={ctl.busy} className="gap-2">
+      <Button
+        variant="outline"
+        onClick={() => void chooseFile()}
+        disabled={ctl.busy}
+        className="gap-2"
+      >
         <FolderOpen className="size-4" />
         Choose a video file…
       </Button>

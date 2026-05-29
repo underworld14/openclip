@@ -79,7 +79,7 @@ describe('preload parity: real bridge method-set === mock method-set', () => {
   })
 
   it('derives the expected camelCased method names (spot-check)', () => {
-    expect(methodKeys(realBridge.video)).toEqual(['export', 'import', 'importUrl'])
+    expect(methodKeys(realBridge.video)).toEqual(['export', 'import'])
     expect(methodKeys(realBridge.audio)).toEqual(['extract'])
     expect(methodKeys(realBridge.ai)).toEqual([
       'enhanceCaptions',

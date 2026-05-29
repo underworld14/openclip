@@ -17,7 +17,7 @@
  *     marker tracks playback.
  */
 
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { resolveBounds } from '@shared/clip-bounds'
 import { sourceMediaUrl } from '@renderer/components/source-media'
@@ -36,11 +36,20 @@ export function PreviewPlayer(): React.JSX.Element {
   const setPlayhead = useProjectStore((s) => s.setPlayhead)
   const playhead = useProjectStore((s) => s.playhead)
 
-  const sourcePath = currentProject?.sourceVideo.path ?? null
-  const src = sourceMediaUrl(sourcePath)
+  const sourceVideo = currentProject?.sourceVideo ?? null
+  const src = sourceMediaUrl(sourceVideo?.path ?? null)
 
   const clip = clips.find((c) => c.id === selectedClipId) ?? clips[0] ?? null
-  const bounds = clip ? resolveBounds(clip) : null
+  // With no clip yet (right after an import), fall back to the FULL source span so
+  // the imported video is immediately playable/scrubbable. Otherwise `bounds` is
+  // null → the transport is disabled and the preview looks "not playable" (G.1).
+  // Memoized so the object identity is stable across renders (keeps the
+  // useCallback deps below from changing every render).
+  const bounds = useMemo(
+    () =>
+      clip ? resolveBounds(clip) : sourceVideo ? { start: 0, end: sourceVideo.duration } : null,
+    [clip, sourceVideo]
+  )
 
   // On clip change, seek the <video> to the clip's IN point so the preview
   // starts at the trimmed span (PRD §6.6).
@@ -102,7 +111,7 @@ export function PreviewPlayer(): React.JSX.Element {
             onTimeUpdate={handleTimeUpdate}
             onPlay={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
-            preload="auto"
+            preload="metadata"
           />
         ) : (
           <span className="text-sm text-white/60" data-testid="preview-empty">

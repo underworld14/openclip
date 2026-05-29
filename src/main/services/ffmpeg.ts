@@ -17,6 +17,6 @@
 export * from './ffmpeg-core'
 
 // ── SEAM: fan-out tracks append their re-exports below (one writer per line) ──
-// T-Media:  export * from './ffmpeg-extract'
+export * from './ffmpeg-extract'
 // spine:    export * from './ffmpeg-export'
 // spine:    export * from './ffmpeg-caption'

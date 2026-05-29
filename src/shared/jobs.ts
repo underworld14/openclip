@@ -7,9 +7,23 @@
  *
  * Long-running work (transcription, export, model download) runs in the
  * sidecar `utilityProcess`; control is `invoke('job:start', …)` which returns
- * `{ jobId, port }`, and every emitted event streams over that per-job
- * MessagePort as the `JobEvent` discriminated union below. `invoke('job:cancel',
- * jobId)` stays request/response so cancel can't be starved by a busy port.
+ * `{ jobId }` ONLY, and every emitted event streams over a per-job MessagePort
+ * as the `JobEvent` discriminated union below. `invoke('job:cancel', jobId)`
+ * stays request/response so cancel can't be starved by a busy port.
+ *
+ * PORT DELIVERY (Electron 41, contextIsolation-safe — see preload/api/jobs.ts):
+ * a `MessagePort` is a transferable that CANNOT be returned across
+ * `contextBridge.exposeInMainWorld` (the bridge structure-clones+freezes return
+ * values, yielding a dead plain Object). It also cannot ride `ipcRenderer.invoke`.
+ * So the port is delivered OUT-OF-BAND: main creates a `MessageChannelMain`,
+ * keeps `port1` (the emitter side fed by the sidecar runner) and TRANSFERS
+ * `port2` to the renderer via `event.senderFrame.postMessage(JOB_PORT,{jobId},
+ * [port2])`. The preload receives it (`ipcRenderer.on(JOB_PORT, e=>e.ports[0])`)
+ * and forwards the LIVE port into the renderer's MAIN world with
+ * `window.postMessage(…, [port])` (the supported isolated→main world transfer).
+ * `jobs.start()` therefore resolves `{ jobId }` only; the renderer pairs the
+ * incoming live port to the jobId (see renderer hooks/jobPort.ts) before driving
+ * `jobEvents`.
  *
  * INVARIANT (PRD §10.2 / plan E.7 Gate C): every job ALWAYS terminates with a
  * `done` or `error` event — never a silent hang. Cooperative cancel: main
@@ -147,13 +161,13 @@ export interface JobPartial {
 
 export interface JobsAPI {
   /**
-   * Start a long job. Resolves with the job id and the per-job MessagePort
-   * over which `JobEventFor<K>` events stream until a terminal done|error.
+   * Start a long job. Resolves with the assigned `jobId` ONLY. The per-job
+   * `MessagePort` over which `JobEventFor<K>` events stream until a terminal
+   * done|error is delivered OUT-OF-BAND (it cannot cross the contextBridge as a
+   * return value — see the module header). The renderer acquires the live port
+   * keyed by this `jobId` via `acquireJobPort(jobId)` (renderer hooks/jobPort.ts).
    */
-  start<K extends JobKind>(
-    kind: K,
-    params: JobParams[K]
-  ): Promise<{ jobId: string; port: MessagePort }>
+  start<K extends JobKind>(kind: K, params: JobParams[K]): Promise<{ jobId: string }>
   /** Cooperatively cancel a running job; resolves once cancel is acknowledged. */
   cancel(jobId: string): Promise<void>
 }

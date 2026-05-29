@@ -10,10 +10,12 @@
  *
  * Semantics: these are all request/response (`ipcRenderer.invoke`). Long,
  * streaming work (transcribe/export/model-download) does NOT stream here — it
- * goes through `JOB_START`/`JOB_CANCEL` (see `jobs.ts`), which return a
- * MessagePort. `JOB_START` is intentionally absent from `ChannelMap`'s simple
- * req/resp shape because its response carries a transferable `MessagePort`;
- * it is modeled by `JobsAPI` instead and exposed under `window.openclip.jobs`.
+ * goes through `JOB_START`/`JOB_CANCEL` (see `jobs.ts`). `JOB_START` is now a
+ * plain `invoke` returning `{ jobId }`; the per-job transferable `MessagePort`
+ * is delivered OUT-OF-BAND over `JOB_PORT` (`event.senderFrame.postMessage`),
+ * because a `MessagePort` can neither ride `invoke` nor survive being returned
+ * across the contextBridge. `JobsAPI` (jobs.ts) models the renderer surface and
+ * is exposed under `window.openclip.jobs`.
  */
 
 import type {
@@ -25,7 +27,7 @@ import type {
   SourceVideo,
   Transcript
 } from './schema'
-import type { WhisperModelSize } from './jobs'
+import type { WhisperModelSize, JobKind, JobParams } from './jobs'
 
 // ============================================================================
 // IPCChannels — verbatim from PRD §10.1
@@ -52,9 +54,12 @@ export enum IPCChannels {
   // Models
   MODEL_STATUS = 'model:status',
   MODEL_DOWNLOAD = 'model:download',
-  // Long jobs (start returns { jobId, MessagePort }; cancel by id)
+  // Long jobs: start (invoke) returns { jobId }; the per-job MessagePort is
+  // transferred out-of-band over JOB_PORT (main → renderer). Cancel by id.
   JOB_START = 'job:start',
   JOB_CANCEL = 'job:cancel',
+  /** Out-of-band per-job MessagePort delivery channel (main → renderer). */
+  JOB_PORT = 'job:port',
   // System
   OPEN_FOLDER = 'system:open-folder',
   SHOW_SAVE_DIALOG = 'system:save-dialog',
@@ -134,10 +139,13 @@ export interface UpdateStatus {
   version?: string
 }
 
-/** Result of starting a long job (mirrors JobsAPI.start — transferable port). */
+/**
+ * Result of starting a long job (mirrors `JobsAPI.start`). Carries the `jobId`
+ * ONLY — the per-job `MessagePort` is delivered out-of-band over `JOB_PORT`
+ * (it cannot ride `invoke` nor survive the contextBridge return path).
+ */
 export interface JobStartResult {
   jobId: string
-  port: MessagePort
 }
 
 // ============================================================================
@@ -190,7 +198,13 @@ export interface ChannelMap {
   // MODEL_DOWNLOAD kicks off a streaming job; returns a job handle (port streams progress).
   [IPCChannels.MODEL_DOWNLOAD]: ChannelPayload<{ model: WhisperModelSize }, JobStartResult>
 
-  // --- Long jobs (cancel only here; start is modeled by JobsAPI for the port) ---
+  // --- Long jobs ---
+  // start: invoke({kind,params}) → { jobId }. The per-job MessagePort streams
+  // out-of-band over JOB_PORT (not modeled here — it carries a transferable).
+  [IPCChannels.JOB_START]: ChannelPayload<
+    { kind: JobKind; params: JobParams[JobKind] },
+    JobStartResult
+  >
   [IPCChannels.JOB_CANCEL]: ChannelPayload<{ jobId: string }, void>
 
   // --- System ---

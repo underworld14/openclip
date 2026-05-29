@@ -3,7 +3,9 @@
  * `AsyncIterable<JobEventFor<K>>` (TRUNK INFRA, frozen after Stage 3 — E.2/E.4).
  *
  * The renderer starts a job via `window.openclip.jobs.start(kind, params)`,
- * which resolves `{ jobId, port }`. This module turns that port into:
+ * which resolves `{ jobId }`; the LIVE per-job `MessagePort` is acquired
+ * out-of-band via `acquireJobPort(jobId)` (hooks/jobPort.ts — the contextBridge
+ * blocker fix). This module turns that port into:
  *   - `jobEvents(port)` — a pure `AsyncIterable` of typed events, terminating
  *     after the first `done|error` (the job-termination invariant, PRD §10.2);
  *   - `useJob(kind)` — a React hook exposing `{ start, cancel, progress, stage,
@@ -16,6 +18,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { JobKind, JobParams, JobResult, JobEventFor, JobErrorCode } from '@shared/jobs'
+import { acquireJobPort } from './jobPort'
 
 // ============================================================================
 // The structural port we consume (works for DOM MessagePort and Node's).
@@ -148,13 +151,15 @@ export function useJob<K extends JobKind>(kind: K, options: UseJobOptions<K> = {
       setStatus('running')
       setError(null)
       setResult(null)
-      const { jobId: id, port } = await window.openclip.jobs.start(kind, params)
+      const { jobId: id } = await window.openclip.jobs.start(kind, params)
       setJobId(id)
       jobIdRef.current = id
+      // Acquire the LIVE per-job port (delivered out-of-band, keyed by jobId).
+      const port = await acquireJobPort(id)
       const emitTask = (s: JobStatus, p: number): void =>
         optionsRef.current.onTask?.({ jobId: id, kind, progress: p, status: s })
 
-      for await (const ev of jobEvents<K>(port as unknown as MessagePortLike)) {
+      for await (const ev of jobEvents<K>(port)) {
         switch (ev.t) {
           case 'progress': {
             const s: JobStatus = ev.stage === 'queued' ? 'queued' : 'running'

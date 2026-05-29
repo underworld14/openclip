@@ -23,7 +23,7 @@ import { buildAiApi } from './api/ai'
 import { buildProjectApi } from './api/project'
 import { buildSettingsApi } from './api/settings'
 import { buildModelApi } from './api/model'
-import { buildJobsApi } from './api/jobs'
+import { buildJobsApi, installJobPortForwarder } from './api/jobs'
 
 // ============================================================================
 // OpenClipBridge — the public, derived `window.openclip` type (E.4 namespaces)
@@ -42,7 +42,7 @@ export interface OpenClipBridge {
   settings: NamespaceMethods<'settings'>
   /** model:status|download */
   model: NamespaceMethods<'model'>
-  /** streaming jobs — modeled by JobsAPI (returns a MessagePort), not invoke */
+  /** streaming jobs — modeled by JobsAPI (start→{jobId}; port out-of-band) */
   jobs: JobsAPI
 }
 
@@ -63,6 +63,11 @@ const openclip: OpenClipBridge = {
 // ============================================================================
 // Expose to the renderer (contextIsolation on)
 // ============================================================================
+
+// Forward each transferred per-job MessagePort from the isolated world into the
+// renderer's MAIN world (the only contextIsolation-safe way to hand the renderer
+// a LIVE port — see api/jobs.ts). Installed once, in BOTH isolation modes.
+installJobPortForwarder()
 
 if (process.contextIsolated) {
   try {

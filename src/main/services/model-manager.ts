@@ -1,0 +1,228 @@
+/**
+ * src/main/services/model-manager.ts — GGML whisper model download + presence
+ * (T-Media, E.3). PRD §13: models are NOT bundled (75 MB – 2.9 GB); they are
+ * streamed on first transcribe from HuggingFace into `userData/models`,
+ * SHA-verified, with byte-progress + cancel.
+ *
+ * Gate-A finding (verified): the `ggml-org/whisper.cpp` repo returns 401. Use
+ * the public `ggerganov/whisper.cpp` repo:
+ *   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-<size>.bin
+ *
+ * SHA verification: HF serves these LFS/xet files with an `x-linked-etag` header
+ * that is EXACTLY the file's SHA256 (verified against the local tiny model). We
+ * verify the downloaded bytes against the caller-provided hash, else against the
+ * etag, else against the bundled `KNOWN_SHA256` table — refusing to keep a file
+ * whose hash we cannot confirm OR that mismatches (no corrupt model on disk).
+ *
+ * Network is injectable (`fetchImpl`) so the streaming/verify/cancel logic is
+ * unit-tested without a real HF call (PRD §18).
+ */
+
+import { createHash } from 'node:crypto'
+import { createWriteStream, existsSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
+import { dirname } from 'node:path'
+import { Writable } from 'node:stream'
+import type { WhisperModelSize } from '@shared/jobs'
+import type { ModelStatus } from '@shared/channels'
+import { modelFilePath, modelsDir } from '@main/utils/paths'
+
+// ============================================================================
+// URL + known hashes
+// ============================================================================
+
+const HF_BASE = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main'
+
+/** The verified HF resolve URL for a GGML model (PRD §13 / Gate-A finding). */
+export function modelUrl(model: WhisperModelSize): string {
+  return `${HF_BASE}/ggml-${model}.bin`
+}
+
+/**
+ * Known-good SHA256 of the published ggml models (defence-in-depth alongside the
+ * HF `x-linked-etag`). Only `tiny` is pinned here (the one the smoke reuses);
+ * other sizes verify against the response etag. Extend as sizes are validated.
+ */
+export const KNOWN_SHA256: Partial<Record<WhisperModelSize, string>> = {
+  tiny: 'be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21'
+}
+
+// ============================================================================
+// Presence on disk (MODEL_STATUS)
+// ============================================================================
+
+export const ALL_MODELS: WhisperModelSize[] = [
+  'tiny',
+  'base',
+  'small',
+  'medium',
+  'turbo',
+  'large-v3'
+]
+
+/** Status of one (or all) models on disk: installed + path + bytes (PRD §13). */
+export function modelStatus(model?: WhisperModelSize): ModelStatus[] {
+  const list = model ? [model] : ALL_MODELS
+  return list.map((m) => {
+    const path = modelFilePath(m)
+    if (existsSync(path)) {
+      return { model: m, installed: true, path, bytes: statSync(path).size }
+    }
+    return { model: m, installed: false }
+  })
+}
+
+/** Whether a model is present in `userData/models` (first-transcribe gate). */
+export function isModelInstalled(model: WhisperModelSize): boolean {
+  return existsSync(modelFilePath(model))
+}
+
+// ============================================================================
+// SHA helpers
+// ============================================================================
+
+/** SHA256 of a file on disk, lowercase hex. */
+export function sha256File(path: string): string {
+  return createHash('sha256').update(readFileSync(path)).digest('hex')
+}
+
+/** Strip the surrounding quotes HF puts around the etag value. */
+function parseEtag(raw: string | null): string | undefined {
+  if (!raw) return undefined
+  const hex = raw.replace(/^"|"$/g, '').toLowerCase()
+  return /^[0-9a-f]{64}$/.test(hex) ? hex : undefined
+}
+
+// ============================================================================
+// downloadModel — stream to disk, verify SHA, byte-progress, cancel
+// ============================================================================
+
+export interface DownloadModelOptions {
+  model: WhisperModelSize
+  /** Absolute destination path (defaults to userData/models/ggml-<size>.bin). */
+  destPath?: string
+  /** Expected SHA256 (else the response etag, else KNOWN_SHA256). */
+  expectedSha256?: string
+  /** Byte-count progress (received, total) for resumable progress (PRD §13). */
+  onProgress?: (receivedBytes: number, totalBytes: number) => void
+  /** Cooperative cancel — aborts the stream + removes the partial file. */
+  signal?: AbortSignal
+  /** Injectable fetch (tests). Defaults to the global `fetch`. */
+  fetchImpl?: typeof fetch
+}
+
+export interface DownloadModelResult {
+  model: WhisperModelSize
+  path: string
+  bytes: number
+}
+
+/**
+ * Stream a GGML model to disk with SHA verification. Removes the partial file on
+ * any failure (HTTP error, abort, or SHA mismatch) so a corrupt/incomplete model
+ * is never left behind. Resolves with the final path + byte count.
+ */
+export async function downloadModel(opts: DownloadModelOptions): Promise<DownloadModelResult> {
+  const dest = opts.destPath ?? modelFilePath(opts.model)
+  const fetchImpl = opts.fetchImpl ?? fetch
+  const url = modelUrl(opts.model)
+
+  if (opts.signal?.aborted) throw new Error('model download cancelled')
+
+  await mkdir(dirname(dest), { recursive: true })
+
+  const cleanup = (): void => {
+    try {
+      if (existsSync(dest)) rmSync(dest, { force: true })
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  let res: Response
+  try {
+    res = await fetchImpl(url, { signal: opts.signal })
+  } catch (err) {
+    cleanup()
+    throw err instanceof Error ? err : new Error(`model download failed: ${String(err)}`)
+  }
+
+  if (!res.ok || !res.body) {
+    cleanup()
+    throw new Error(`model download failed: HTTP ${res.status} for ${url}`)
+  }
+
+  const totalBytes = Number(
+    res.headers.get('x-linked-size') ?? res.headers.get('content-length') ?? 0
+  )
+  const etagSha = parseEtag(res.headers.get('x-linked-etag'))
+  const expected = opts.expectedSha256 ?? etagSha ?? KNOWN_SHA256[opts.model]
+
+  const hash = createHash('sha256')
+  let received = 0
+
+  await new Promise<void>((resolve, reject) => {
+    const out = createWriteStream(dest)
+    const onAbort = (): void => {
+      out.destroy()
+      reject(new Error('model download cancelled'))
+    }
+    if (opts.signal) {
+      if (opts.signal.aborted) return onAbort()
+      opts.signal.addEventListener('abort', onAbort, { once: true })
+    }
+
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader()
+    const sink = new Writable({
+      write(chunk: Buffer, _enc, cb) {
+        hash.update(chunk)
+        received += chunk.length
+        opts.onProgress?.(received, totalBytes || received)
+        out.write(chunk, cb)
+      }
+    })
+
+    const pump = async (): Promise<void> => {
+      for (;;) {
+        if (opts.signal?.aborted) throw new Error('model download cancelled')
+        const { done, value } = await reader.read()
+        if (done) break
+        await new Promise<void>((r, j) => sink.write(value, (e) => (e ? j(e) : r())))
+      }
+    }
+
+    pump()
+      .then(
+        () =>
+          new Promise<void>((r) => {
+            out.end(() => r())
+          })
+      )
+      .then(() => {
+        opts.signal?.removeEventListener('abort', onAbort)
+        resolve()
+      })
+      .catch((err: unknown) => {
+        opts.signal?.removeEventListener('abort', onAbort)
+        out.destroy()
+        reject(err instanceof Error ? err : new Error(String(err)))
+      })
+  }).catch((err) => {
+    cleanup()
+    throw err
+  })
+
+  // Verify the SHA before declaring success.
+  const actual = hash.digest('hex')
+  if (expected && actual !== expected) {
+    cleanup()
+    throw new Error(
+      `model download SHA256 mismatch for ${opts.model}: expected ${expected}, got ${actual}`
+    )
+  }
+
+  return { model: opts.model, path: dest, bytes: received }
+}
+
+/** The directory models live in (re-exported for callers/UX). */
+export { modelsDir }

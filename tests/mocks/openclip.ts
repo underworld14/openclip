@@ -6,15 +6,19 @@
  * It is typed as the derived `OpenClipBridge`, so it CANNOT silently diverge
  * from the real preload surface — `preload-parity.spec.ts` asserts the two
  * expose identical method sets. Control-plane methods return canned contract
- * fixtures; `jobs.start()` is MessageChannel-driven (a real Node MessageChannel
- * playing a `JobScript` via the fake harness) so `useJob` can be exercised
- * end-to-end against a real port.
+ * fixtures; `jobs.start()` resolves `{ jobId }` (matching the real bridge after
+ * the contextBridge port-handoff fix) and REGISTERS a real Node-MessageChannel
+ * port into the renderer's `jobPort` registry — so the production consumers
+ * (`useJob`/`import-pipeline`/`model-download`) acquire the port by jobId
+ * exactly as they do in the real app, and drive a `JobScript` to completion.
  */
 
 import { MessageChannel } from 'node:worker_threads'
 import { IPCChannels } from '@shared/channels'
 import type { OpenClipBridge } from '@preload/index'
 import type { JobKind, JobParams, JobsAPI } from '@shared/jobs'
+import { registerJobPort } from '@renderer/hooks/jobPort'
+import type { MessagePortLike } from '@renderer/hooks/useJob'
 import { driveScriptOverChannel, type JobScript } from '../harness/fake-utility-process'
 import {
   projectFixture,
@@ -70,7 +74,7 @@ const CANNED: Partial<Record<string, unknown>> = {
   [IPCChannels.GET_API_KEY_STATUS]: apiKeyStatusFixture,
   [IPCChannels.SET_API_KEY]: apiKeyStatusFixture,
   [IPCChannels.MODEL_STATUS]: modelStatusFixture,
-  [IPCChannels.MODEL_DOWNLOAD]: { jobId: 'model-1', port: null },
+  [IPCChannels.MODEL_DOWNLOAD]: { jobId: 'model-1' },
   [IPCChannels.OPEN_FOLDER]: undefined,
   [IPCChannels.SHOW_SAVE_DIALOG]: { canceled: false, filePath: '/Users/me/Movies/clip-1.mp4' },
   [IPCChannels.CHECK_UPDATE]: { updateAvailable: false }
@@ -129,28 +133,31 @@ export interface MockOptions {
 }
 
 /**
- * A mock JobsAPI driven by a real Node MessageChannel. `start()` resolves with
- * `{ jobId, port }` where `port` is one end of a channel; the other end plays
- * the kind's script through `driveScriptOverChannel`. The returned `port` is
- * cast to the DOM `MessagePort` the contract types (Node's MessagePort is
- * structurally compatible for the message-event consumption useJob does).
+ * A mock JobsAPI driven by a real Node MessageChannel, mirroring the real
+ * bridge's out-of-band port handoff. `start()` resolves `{ jobId }` and
+ * REGISTERS `port1` (a real Node MessageChannel port) into the renderer's
+ * `jobPort` registry keyed by that jobId — so `acquireJobPort(jobId)` resolves
+ * with it, exactly as the window-message forwarder does in the real app. The
+ * other end plays the kind's `JobScript` through `driveScriptOverChannel`.
  */
 function buildMockJobs(opts: MockOptions): JobsAPI {
+  const seq: Partial<Record<JobKind, number>> = {}
   return {
-    async start<K extends JobKind>(
-      kind: K,
-      _params: JobParams[K]
-    ): Promise<{ jobId: string; port: MessagePort }> {
+    async start<K extends JobKind>(kind: K, _params: JobParams[K]): Promise<{ jobId: string }> {
       void _params
       const { port1, port2 } = new MessageChannel()
       const script = (opts.scripts?.[kind] ?? DEFAULT_SCRIPTS[kind]) as JobScript<K>
-      const jobId = `${kind}-mock-1`
+      const n = (seq[kind] = (seq[kind] ?? 0) + 1)
+      const jobId = `${kind}-mock-${n}`
       port1.start()
+      // Register the live port BEFORE returning so a consumer that awaits
+      // start() then acquireJobPort(jobId) finds it (registry buffers either way).
+      registerJobPort(jobId, port1 as unknown as MessagePortLike)
       // Drive the script on the next tick so the consumer can attach first.
       queueMicrotask(() => {
         void driveScriptOverChannel(port2, script, { jobId })
       })
-      return { jobId, port: port1 as unknown as MessagePort }
+      return { jobId }
     },
     async cancel(_jobId: string): Promise<void> {
       void _jobId

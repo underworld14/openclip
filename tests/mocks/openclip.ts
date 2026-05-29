@@ -57,6 +57,30 @@ const CANNED: Partial<Record<string, unknown>> = {
   [IPCChannels.GENERATE_CLIPS]: clipSchemaFixture,
   [IPCChannels.GENERATE_TITLES]: { options: [] },
   [IPCChannels.ENHANCE_CAPTIONS]: { enhanced_captions: [] },
+  [IPCChannels.AI_LIST_MODELS]: {
+    provider: 'openrouter',
+    models: [
+      {
+        id: 'anthropic/claude-sonnet-4.5',
+        name: 'Anthropic: Claude Sonnet 4.5',
+        supportsStructured: true,
+        recommended: true,
+        pricePerMTokIn: 3,
+        pricePerMTokOut: 15
+      },
+      {
+        id: 'some/other-model',
+        name: 'Some Other Model',
+        supportsStructured: true,
+        recommended: false
+      }
+    ],
+    fetchedAt: 0,
+    fromCache: true
+  },
+  [IPCChannels.MEDIA_ADOPT_SOURCE]: {
+    path: '/Users/me/Library/Application Support/OpenClip/media/p1/source.mp4'
+  },
   [IPCChannels.SAVE_PROJECT]: { path: '/Users/me/.../projects/p1.ocproj' },
   [IPCChannels.LOAD_PROJECT]: projectFixture,
   [IPCChannels.LIST_PROJECTS]: [
@@ -190,6 +214,7 @@ export function createMockOpenclip(opts: MockOptions = {}): OpenClipBridge {
     video: buildMockNamespace('video') as OpenClipBridge['video'],
     audio: buildMockNamespace('audio') as OpenClipBridge['audio'],
     ai: buildMockNamespace('ai') as OpenClipBridge['ai'],
+    media: buildMockNamespace('media') as OpenClipBridge['media'],
     project: buildMockNamespace('project') as OpenClipBridge['project'],
     settings: buildMockNamespace('settings') as OpenClipBridge['settings'],
     model: buildMockNamespace('model') as OpenClipBridge['model'],

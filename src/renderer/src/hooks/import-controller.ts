@@ -75,6 +75,12 @@ export interface ImportControllerDeps {
   onNeedModel?(model: WhisperModelSize): void
   /** id generator (default crypto.randomUUID) — used for both the audio-cache projectId and the new project id. */
   genId?(): string
+  /**
+   * Move a downloaded file into the app's managed per-project media store (Part
+   * H) and return its new path. Defaults to `bridge.media.adoptSource`. Only used
+   * for URL imports (the downloaded file is app-owned); file imports skip it.
+   */
+  adoptSource?(projectId: string, filePath: string): Promise<{ path: string }>
   /** Injectable pipeline fns (default the real ones) so the core is testable headless. */
   runImportPipeline?: typeof defaultRunImportPipeline
   runUrlDownload?: typeof defaultRunUrlDownload
@@ -103,6 +109,9 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
   const runImport = deps.runImportPipeline ?? defaultRunImportPipeline
   const runUrl = deps.runUrlDownload ?? defaultRunUrlDownload
   const genId = deps.genId ?? ((): string => crypto.randomUUID())
+  const adoptSource =
+    deps.adoptSource ??
+    ((pid, fp) => deps.bridge.media.adoptSource({ projectId: pid, filePath: fp }))
   const storage: StorageLike | null =
     deps.storage !== undefined
       ? deps.storage
@@ -140,12 +149,24 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     filePath: string,
     name: string,
     base: number,
-    span: number
+    span: number,
+    appOwned: boolean
   ): Promise<void> {
     const projectId = genId()
+    // For an app-owned (URL/YouTube) download, ADOPT the file into the persistent
+    // per-project media store BEFORE probing/extracting, so the source lives at
+    // its permanent path from the start and survives OS temp cleanup (Part H). An
+    // adopt failure throws (caught by the caller) — we do NOT fall back to the
+    // temp path, which would re-introduce the vanish-on-cleanup bug. File imports
+    // keep the user's original path untouched.
+    let sourcePath = filePath
+    if (appOwned) {
+      const adopted = await adoptSource(projectId, filePath)
+      sourcePath = adopted.path
+    }
     const result = await runImport({
       bridge: deps.bridge,
-      filePath,
+      filePath: sourcePath,
       projectId,
       model,
       onProgress: (p, s) => {
@@ -169,7 +190,11 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
         /* best-effort flush — don't block the new import on a save error */
       }
     }
-    const blank = deps.createBlankProject(name, result.sourceVideo)
+    // Stamp the permanent source path + ownership (Part H): for URL imports the
+    // probe ran on the adopted path, but force it explicitly + mark app-owned so
+    // project-delete reclaims it; file imports keep their original path, not owned.
+    const sourceVideo = { ...result.sourceVideo, path: sourcePath, appOwned }
+    const blank = deps.createBlankProject(name, sourceVideo)
     deps.store.setCurrentProject({ ...blank, id: projectId, transcript: result.transcript })
     deps.ui?.setView?.('editor')
   }
@@ -182,7 +207,7 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
         set({ busy: false })
         return
       }
-      await runPipeline(path, basename(path), 0, 100)
+      await runPipeline(path, basename(path), 0, 100, false) // file import: user's original, not app-owned
       set({ stage: 'done' })
     } catch (e) {
       set({ error: asMessage(e) })
@@ -213,7 +238,7 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
         url: u,
         onProgress: (p) => set({ pct: Math.round(p * 0.2), stage: 'downloading' }) // 0..20% band
       })
-      await runPipeline(dl.filePath, dl.title ?? 'Imported video', 20, 80)
+      await runPipeline(dl.filePath, dl.title ?? 'Imported video', 20, 80, true) // URL import: app-owned download
       set({ stage: 'done' })
     } catch (e) {
       set({ error: asMessage(e) })

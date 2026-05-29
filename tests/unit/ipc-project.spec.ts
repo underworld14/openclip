@@ -15,11 +15,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 let dir: string
+let mediaRoot: string
 
-// Mock the trunk-frozen paths module so projectsDir() points at our temp dir
-// (the real one calls Electron app.getPath('userData'), unavailable in unit env).
+// Mock the trunk-frozen paths module so projectsDir()/mediaDir() point at our temp
+// dirs (the real ones call Electron app.getPath('userData'), unavailable here).
 vi.mock('@main/utils/paths', () => ({
-  projectsDir: (): string => dir
+  projectsDir: (): string => dir,
+  mediaDir: (): string => mediaRoot
 }))
 
 import { registerProjectHandlers } from '@main/ipc/project'
@@ -58,9 +60,11 @@ function makeFakeContext(): {
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'openclip-ipc-'))
+  mediaRoot = await mkdtemp(join(tmpdir(), 'openclip-media-'))
 })
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true })
+  await rm(mediaRoot, { recursive: true, force: true })
   vi.clearAllMocks()
 })
 
@@ -125,6 +129,25 @@ describe('registerProjectHandlers wires the project channels', () => {
     }
     expect(del).toEqual({ deleted: true })
     await expect(invoke(IPCChannels.LOAD_PROJECT, { id: projectFixture.id })).rejects.toThrow()
+  })
+
+  it('DELETE reclaims the project OWNED media dir but never a file outside mediaDir (Part H)', async () => {
+    const { mkdir, writeFile, stat } = await import('node:fs/promises')
+    const { ctx, invoke } = makeFakeContext()
+    registerProjectHandlers(ctx)
+    await invoke(IPCChannels.SAVE_PROJECT, { project: projectFixture })
+
+    // Owned media for this project + a user's original OUTSIDE mediaDir.
+    const owned = join(mediaRoot, projectFixture.id)
+    await mkdir(owned, { recursive: true })
+    await writeFile(join(owned, 'source.mp4'), 'video')
+    const userOriginal = join(dir, 'my-original.mp4') // outside mediaRoot
+    await writeFile(userOriginal, 'user file')
+
+    await invoke(IPCChannels.DELETE_PROJECT, { id: projectFixture.id })
+
+    await expect(stat(owned)).rejects.toThrow() // owned media reclaimed
+    await expect(stat(userOriginal)).resolves.toBeTruthy() // user's original untouched
   })
 
   it('LOAD of a tampered/missing project rejects (typed error propagates over IPC)', async () => {

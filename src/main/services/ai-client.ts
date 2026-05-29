@@ -533,6 +533,11 @@ export function buildOllamaTransport(client: OllamaLike, model: string): RawTran
 // id + model + decrypted key (the key is used MAIN-SIDE only; PRD §12.2).
 // ============================================================================
 
+/** OpenRouter (Part H) — OpenAI-compatible gateway base URL + attribution headers. */
+export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
+export const OPENROUTER_APP_URL = 'https://openclip.app'
+export const OPENROUTER_APP_TITLE = 'OpenClip'
+
 export interface TransportFactoryArgs {
   provider: AIProvider
   model: string
@@ -550,6 +555,19 @@ export async function createTransport(args: TransportFactoryArgs): Promise<RawTr
     case 'openai': {
       const { default: OpenAI } = await import('openai')
       const client = new OpenAI({ apiKey: args.apiKey ?? '', baseURL: args.baseUrl })
+      return buildOpenAITransport(client as unknown as OpenAILike, args.model)
+    }
+    case 'openrouter': {
+      // OpenRouter is OpenAI-API-compatible (Part H): reuse the OpenAI transport
+      // (json_schema strict) with the OpenRouter base URL + the optional
+      // attribution headers. The repair ladder covers any model whose structured
+      // output isn't perfect; the picker only lists structured-capable models.
+      const { default: OpenAI } = await import('openai')
+      const client = new OpenAI({
+        apiKey: args.apiKey ?? '',
+        baseURL: args.baseUrl ?? OPENROUTER_BASE_URL,
+        defaultHeaders: { 'HTTP-Referer': OPENROUTER_APP_URL, 'X-Title': OPENROUTER_APP_TITLE }
+      })
       return buildOpenAITransport(client as unknown as OpenAILike, args.model)
     }
     case 'anthropic': {

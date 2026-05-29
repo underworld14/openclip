@@ -15,8 +15,9 @@
 import type { IpcContext } from './index'
 import { IPCChannels } from '@shared/channels'
 import type { ChannelReq, ChannelRes } from '@shared/channels'
-import { projectsDir } from '@main/utils/paths'
+import { projectsDir, mediaDir } from '@main/utils/paths'
 import { saveProject, loadProject, listProjects, deleteProject } from '@main/services/project-store'
+import { deleteProjectMedia } from '@main/services/media-store'
 
 export function registerProjectHandlers(ctx: IpcContext): void {
   const { ipcMain } = ctx
@@ -54,14 +55,22 @@ export function registerProjectHandlers(ctx: IpcContext): void {
     }
   )
 
-  // project:delete — idempotent removal of a .ocproj file.
+  // project:delete — idempotent removal of a .ocproj file. Also reclaims the
+  // project's OWNED media dir <userData>/media/<id>/ (Part H) — best-effort, so a
+  // media-rm failure never fails the project delete (the launch sweep is the
+  // backstop). This only ever touches media/<id>/; a file-import original (outside
+  // mediaDir, appOwned:false) is structurally unreachable.
   ipcMain.handle(
     IPCChannels.DELETE_PROJECT,
     async (
       _e,
       req: ChannelReq<IPCChannels.DELETE_PROJECT>
     ): Promise<ChannelRes<IPCChannels.DELETE_PROJECT>> => {
-      return deleteProject(projectsDir(), req.id)
+      const res = await deleteProject(projectsDir(), req.id)
+      await deleteProjectMedia(req.id, mediaDir()).catch((err) => {
+        console.error(`[media] failed to reclaim media for project ${req.id}:`, err)
+      })
+      return res
     }
   )
 }

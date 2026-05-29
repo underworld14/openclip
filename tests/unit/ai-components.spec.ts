@@ -17,9 +17,17 @@ import {
   sortClipsForSidebar,
   type ClipViewModel
 } from '@renderer/components/clipView'
-import { providerLabel, keyStatusLabel } from '@renderer/components/settingsView'
+import {
+  providerLabel,
+  keyStatusLabel,
+  PROVIDERS,
+  filterModels,
+  partitionRecommended,
+  formatModelPrice
+} from '@renderer/components/settingsView'
 import { clipsFixture } from '../fixtures/contract'
 import type { Clip } from '@shared/schema'
+import type { ModelInfo } from '@shared/channels'
 
 describe('formatTimecode', () => {
   it('formats seconds as M:SS', () => {
@@ -72,11 +80,13 @@ describe('sortClipsForSidebar', () => {
 })
 
 describe('SettingsPanel presentation helpers', () => {
-  it('labels each provider', () => {
+  it('labels each provider (incl. OpenRouter, Part H)', () => {
     expect(providerLabel('openai')).toBe('OpenAI')
     expect(providerLabel('anthropic')).toBe('Anthropic')
     expect(providerLabel('google')).toBe('Google Gemini')
     expect(providerLabel('ollama')).toBe('Ollama (local)')
+    expect(providerLabel('openrouter')).toBe('OpenRouter')
+    expect(PROVIDERS).toContain('openrouter')
   })
 
   it('summarizes key status without ever exposing the key', () => {
@@ -84,5 +94,40 @@ describe('SettingsPanel presentation helpers', () => {
     expect(keyStatusLabel({ provider: 'openai', hasKey: true, last4: 'ABCD' })).toBe(
       'Key set ••••ABCD'
     )
+  })
+})
+
+describe('model-picker helpers (Part H — OpenRouter)', () => {
+  const mk = (over: Partial<ModelInfo> & { id: string }): ModelInfo => ({
+    name: over.id,
+    supportsStructured: true,
+    recommended: false,
+    ...over
+  })
+  const models: ModelInfo[] = [
+    mk({ id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', recommended: true }),
+    mk({ id: 'openai/gpt-5', name: 'GPT-5', recommended: true }),
+    mk({ id: 'meta/llama', name: 'Llama', description: 'open weights' })
+  ]
+
+  it('filterModels matches id/name/description case-insensitively; empty → all', () => {
+    expect(filterModels(models, '').length).toBe(3)
+    expect(filterModels(models, 'claude').map((m) => m.id)).toEqual(['anthropic/claude-sonnet-4.5'])
+    expect(filterModels(models, 'GPT').map((m) => m.id)).toEqual(['openai/gpt-5'])
+    expect(filterModels(models, 'open weights').map((m) => m.id)).toEqual(['meta/llama'])
+  })
+
+  it('partitionRecommended splits on the recommended flag, preserving order', () => {
+    const { recommended, others } = partitionRecommended(models)
+    expect(recommended.map((m) => m.id)).toEqual(['anthropic/claude-sonnet-4.5', 'openai/gpt-5'])
+    expect(others.map((m) => m.id)).toEqual(['meta/llama'])
+  })
+
+  it('formatModelPrice formats both prices, Free for $0, blank when unknown', () => {
+    expect(formatModelPrice(mk({ id: 'a', pricePerMTokIn: 3, pricePerMTokOut: 15 }))).toBe(
+      '$3.00 / $15.00 per 1M'
+    )
+    expect(formatModelPrice(mk({ id: 'b', pricePerMTokIn: 0, pricePerMTokOut: 0 }))).toBe('Free')
+    expect(formatModelPrice(mk({ id: 'c' }))).toBe('')
   })
 })

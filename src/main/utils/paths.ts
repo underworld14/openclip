@@ -204,6 +204,17 @@ export function projectsDir(): string {
   return join(electronApp().getPath('userData'), 'projects')
 }
 
+/**
+ * `userData/media` — PERSISTENT store for app-OWNED source videos (URL/YouTube
+ * downloads), one subdir per project: `<userData>/media/<projectId>/<file>` (Part
+ * H). Unlike temp, this survives OS temp cleanup; it's reclaimed on project
+ * delete + a launch-time orphan sweep. File-imported originals live OUTSIDE this
+ * dir and are never touched.
+ */
+export function mediaDir(): string {
+  return join(electronApp().getPath('userData'), 'media')
+}
+
 // ============================================================================
 // Temp-file lifecycle roots (PRD §17) — pure given a base temp dir
 // ============================================================================

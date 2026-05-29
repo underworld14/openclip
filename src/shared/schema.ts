@@ -216,7 +216,12 @@ export const SourceVideo = z.object({
   duration: z.number(), // seconds
   resolution: VideoResolution,
   fps: z.number(),
-  format: z.string()
+  format: z.string(),
+  // True when OpenClip downloaded/owns this file (URL imports → it lives under
+  // <userData>/media/<projectId>/ and is deleted with the project, Part H). A
+  // file import sets this false/absent — the user's original is NEVER touched.
+  // Optional so pre-Part-H .ocproj documents still validate (absent ⇒ not owned).
+  appOwned: z.boolean().optional()
 })
 export type SourceVideo = z.infer<typeof SourceVideo>
 
@@ -253,7 +258,7 @@ export const Project = z.object({
 export type Project = z.infer<typeof Project>
 
 /** App-global `Settings` (PRD §11.2 Settings screen, plan `settingsStore`). */
-export const AIProvider = z.enum(['openai', 'anthropic', 'google', 'ollama'])
+export const AIProvider = z.enum(['openai', 'anthropic', 'google', 'ollama', 'openrouter'])
 export type AIProvider = z.infer<typeof AIProvider>
 
 export const Settings = z.object({

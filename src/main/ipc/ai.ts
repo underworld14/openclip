@@ -13,13 +13,19 @@
  */
 
 import { IPCChannels } from '@shared/channels'
-import type { GenerateClipsRequest } from '@shared/channels'
+import type { GenerateClipsRequest, ListModelsRequest, ListModelsResult } from '@shared/channels'
 import type { AIProvider } from '@shared/schema'
 import {
   createTransport,
   generateClips as runGenerate,
   type RawTransport
 } from '@main/services/ai-client'
+import {
+  fetchOpenRouterModels,
+  ModelListCache,
+  RECOMMENDED_OPENROUTER_MODELS,
+  type ModelsFetcher
+} from '@main/services/openrouter-models'
 import type { IpcContext } from './index'
 
 // ============================================================================
@@ -39,6 +45,15 @@ let transportFactoryOverride: TransportFactory | null = null
 /** TEST-ONLY: override (or clear with null) the provider transport factory. */
 export function __setTransportFactoryForTests(factory: TransportFactory | null): void {
   transportFactoryOverride = factory
+}
+
+// Test seam + cache for the OpenRouter model list (Part H).
+let modelsFetcherOverride: ModelsFetcher | null = null
+const modelListCache = new ModelListCache()
+
+/** TEST-ONLY: override (or clear with null) the OpenRouter models fetcher. */
+export function __setModelsFetcherForTests(fetcher: ModelsFetcher | null): void {
+  modelsFetcherOverride = fetcher
 }
 
 /**
@@ -135,4 +150,41 @@ export function registerAiHandlers(ctx: IpcContext): void {
   ctx.ipcMain.handle(IPCChannels.ENHANCE_CAPTIONS, async () => {
     return { enhanced_captions: [] }
   })
+
+  // List a provider's models for the picker (Part H — OpenRouter only for now).
+  // The key (if any) is decrypted MAIN-SIDE and only used to authorize the fetch;
+  // it never crosses IPC. Cached in-memory with a short TTL; `refresh` bypasses.
+  ctx.ipcMain.handle(
+    IPCChannels.AI_LIST_MODELS,
+    async (_e, req: ListModelsRequest): Promise<ListModelsResult> => {
+      if (req.provider !== 'openrouter') {
+        return { provider: req.provider, models: [], fetchedAt: Date.now(), fromCache: false }
+      }
+      if (!req.refresh) {
+        const cached = modelListCache.get()
+        if (cached) {
+          return {
+            provider: req.provider,
+            models: cached.models,
+            fetchedAt: cached.fetchedAt,
+            fromCache: true
+          }
+        }
+      }
+      const apiKey = ctx.keyVault.getKey(req.provider)
+      const fetcher = modelsFetcherOverride ?? undefined
+      const models = await fetchOpenRouterModels({
+        apiKey,
+        fetcher,
+        recommended: RECOMMENDED_OPENROUTER_MODELS
+      })
+      const entry = modelListCache.set(models)
+      return {
+        provider: req.provider,
+        models: entry.models,
+        fetchedAt: entry.fetchedAt,
+        fromCache: false
+      }
+    }
+  )
 }

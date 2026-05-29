@@ -139,4 +139,46 @@ describe('settingsStore', () => {
       hasKey: false
     })
   })
+
+  it('loadModels() pulls the provider model list via the bridge (Part H)', async () => {
+    const listModels = vi.fn(async () => ({
+      provider: 'openrouter' as const,
+      models: [
+        {
+          id: 'anthropic/claude-sonnet-4.5',
+          name: 'Claude',
+          supportsStructured: true,
+          recommended: true
+        }
+      ],
+      fetchedAt: 123,
+      fromCache: false
+    }))
+    const bridge = createMockOpenclip()
+    bridge.ai.listModels = listModels as never
+    installBridge(bridge)
+
+    const { useSettingsStore } = await import('@renderer/stores/settingsStore')
+    useSettingsStore.setState({ settings: { ...settingsFixture, aiProvider: 'openrouter' } })
+    await useSettingsStore.getState().loadModels(true)
+    expect(listModels).toHaveBeenCalledWith({ provider: 'openrouter', refresh: true })
+    expect(useSettingsStore.getState().models).toHaveLength(1)
+    expect(useSettingsStore.getState().modelsLoading).toBe(false)
+    expect(useSettingsStore.getState().modelsFetchedAt).toBe(123)
+  })
+
+  it('loadModels() stores an error message (no key material) when the bridge throws', async () => {
+    const listModels = vi.fn(async () => {
+      throw new Error('OpenRouter model list failed: HTTP 401')
+    })
+    const bridge = createMockOpenclip()
+    bridge.ai.listModels = listModels as never
+    installBridge(bridge)
+
+    const { useSettingsStore } = await import('@renderer/stores/settingsStore')
+    useSettingsStore.setState({ settings: { ...settingsFixture, aiProvider: 'openrouter' } })
+    await useSettingsStore.getState().loadModels()
+    expect(useSettingsStore.getState().modelsError).toMatch(/HTTP 401/)
+    expect(useSettingsStore.getState().modelsLoading).toBe(false)
+  })
 })

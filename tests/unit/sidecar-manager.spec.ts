@@ -19,7 +19,7 @@ import {
   type EventPort
 } from '@main/services/sidecar-manager'
 import { scriptedRunner } from '../harness/fake-utility-process'
-import { transcribeResultFixture } from '../fixtures/contract'
+import { transcribeResultFixture, transcribePartialFixture } from '../fixtures/contract'
 
 // Register fake runners for every kind exactly once (registry is module-global).
 registerRunner(
@@ -27,7 +27,7 @@ registerRunner(
   scriptedRunner({
     steps: [
       { t: 'progress', pct: 50, stage: 'transcribing' },
-      { t: 'partial', data: { segments: transcribeResultFixture.segments.slice(0, 1) } },
+      { t: 'partial', data: transcribePartialFixture },
       { t: 'done', result: transcribeResultFixture }
     ]
   })

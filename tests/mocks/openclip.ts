@@ -22,7 +22,8 @@ import {
   clipSchemaFixture,
   apiKeyStatusFixture,
   modelStatusFixture,
-  transcribeResultFixture
+  transcribeResultFixture,
+  transcribePartialFixture
 } from '../fixtures/contract'
 
 // ============================================================================
@@ -95,7 +96,7 @@ const DEFAULT_SCRIPTS: { [K in JobKind]: JobScript<K> } = {
     steps: [
       { t: 'progress', pct: 10, stage: 'extracting' },
       { t: 'progress', pct: 60, stage: 'transcribing' },
-      { t: 'partial', data: { segments: transcribeResultFixture.segments.slice(0, 1) } },
+      { t: 'partial', data: transcribePartialFixture },
       { t: 'done', result: transcribeResultFixture }
     ]
   },

@@ -1,0 +1,353 @@
+{
+	"systeminfo": "WHISPER : COREML = 0 | OPENVINO = 0 | MTL : EMBED_LIBRARY = 1 | CPU : NEON = 1 | ARM_FMA = 1 | FP16_VA = 1 | MATMUL_INT8 = 1 | DOTPROD = 1 | SME = 1 | ACCELERATE = 1 | OPENMP = 1 | REPACK = 1 | ",
+	"model": {
+		"type": "tiny",
+		"multilingual": true,
+		"vocab": 51865,
+		"audio": {
+			"ctx": 1500,
+			"state": 384,
+			"head": 6,
+			"layer": 4
+		},
+		"text": {
+			"ctx": 448,
+			"state": 384,
+			"head": 6,
+			"layer": 4
+		},
+		"mels": 80,
+		"ftype": 1
+	},
+	"params": {
+		"model": "/tmp/openclip-smoke/models/ggml-tiny.bin",
+		"language": "en",
+		"translate": false
+	},
+	"result": {
+		"language": "en"
+	},
+	"transcription": [
+		{
+			"timestamps": {
+				"from": "00:00:00,000",
+				"to": "00:00:04,640"
+			},
+			"offsets": {
+				"from": 0,
+				"to": 4640
+			},
+			"text": " Hello world! This is a test of the Open Clip Transcription Pipeline running on metal.",
+			"tokens": [
+				{
+					"text": "[_BEG_]",
+					"timestamps": {
+						"from": "00:00:00,000",
+						"to": "00:00:00,000"
+					},
+					"offsets": {
+						"from": 0,
+						"to": 0
+					},
+					"id": 50364,
+					"p": 0.995118,
+					"t_dtw": -1
+				},
+				{
+					"text": " Hello",
+					"timestamps": {
+						"from": "00:00:00,050",
+						"to": "00:00:00,470"
+					},
+					"offsets": {
+						"from": 50,
+						"to": 470
+					},
+					"id": 2425,
+					"p": 0.936351,
+					"t_dtw": -1
+				},
+				{
+					"text": " world",
+					"timestamps": {
+						"from": "00:00:00,470",
+						"to": "00:00:00,750"
+					},
+					"offsets": {
+						"from": 470,
+						"to": 750
+					},
+					"id": 1002,
+					"p": 0.53651,
+					"t_dtw": -1
+				},
+				{
+					"text": "!",
+					"timestamps": {
+						"from": "00:00:01,230",
+						"to": "00:00:01,230"
+					},
+					"offsets": {
+						"from": 1230,
+						"to": 1230
+					},
+					"id": 0,
+					"p": 0.469958,
+					"t_dtw": -1
+				},
+				{
+					"text": " This",
+					"timestamps": {
+						"from": "00:00:01,240",
+						"to": "00:00:01,460"
+					},
+					"offsets": {
+						"from": 1240,
+						"to": 1460
+					},
+					"id": 639,
+					"p": 0.711902,
+					"t_dtw": -1
+				},
+				{
+					"text": " is",
+					"timestamps": {
+						"from": "00:00:01,460",
+						"to": "00:00:01,570"
+					},
+					"offsets": {
+						"from": 1460,
+						"to": 1570
+					},
+					"id": 307,
+					"p": 0.994803,
+					"t_dtw": -1
+				},
+				{
+					"text": " a",
+					"timestamps": {
+						"from": "00:00:01,570",
+						"to": "00:00:01,570"
+					},
+					"offsets": {
+						"from": 1570,
+						"to": 1570
+					},
+					"id": 257,
+					"p": 0.973502,
+					"t_dtw": -1
+				},
+				{
+					"text": " test",
+					"timestamps": {
+						"from": "00:00:01,620",
+						"to": "00:00:01,830"
+					},
+					"offsets": {
+						"from": 1620,
+						"to": 1830
+					},
+					"id": 1500,
+					"p": 0.980582,
+					"t_dtw": -1
+				},
+				{
+					"text": " of",
+					"timestamps": {
+						"from": "00:00:01,920",
+						"to": "00:00:01,950"
+					},
+					"offsets": {
+						"from": 1920,
+						"to": 1950
+					},
+					"id": 295,
+					"p": 0.982958,
+					"t_dtw": -1
+				},
+				{
+					"text": " the",
+					"timestamps": {
+						"from": "00:00:01,950",
+						"to": "00:00:02,120"
+					},
+					"offsets": {
+						"from": 1950,
+						"to": 2120
+					},
+					"id": 264,
+					"p": 0.980277,
+					"t_dtw": -1
+				},
+				{
+					"text": " Open",
+					"timestamps": {
+						"from": "00:00:02,120",
+						"to": "00:00:02,340"
+					},
+					"offsets": {
+						"from": 2120,
+						"to": 2340
+					},
+					"id": 7238,
+					"p": 0.661433,
+					"t_dtw": -1
+				},
+				{
+					"text": " Cl",
+					"timestamps": {
+						"from": "00:00:02,340",
+						"to": "00:00:02,410"
+					},
+					"offsets": {
+						"from": 2340,
+						"to": 2410
+					},
+					"id": 2033,
+					"p": 0.286981,
+					"t_dtw": -1
+				},
+				{
+					"text": "ip",
+					"timestamps": {
+						"from": "00:00:02,470",
+						"to": "00:00:02,560"
+					},
+					"offsets": {
+						"from": 2470,
+						"to": 2560
+					},
+					"id": 647,
+					"p": 0.962353,
+					"t_dtw": -1
+				},
+				{
+					"text": " Trans",
+					"timestamps": {
+						"from": "00:00:02,560",
+						"to": "00:00:02,840"
+					},
+					"offsets": {
+						"from": 2560,
+						"to": 2840
+					},
+					"id": 6531,
+					"p": 0.637142,
+					"t_dtw": -1
+				},
+				{
+					"text": "cription",
+					"timestamps": {
+						"from": "00:00:02,840",
+						"to": "00:00:03,270"
+					},
+					"offsets": {
+						"from": 2840,
+						"to": 3270
+					},
+					"id": 12432,
+					"p": 0.981852,
+					"t_dtw": -1
+				},
+				{
+					"text": " Pip",
+					"timestamps": {
+						"from": "00:00:03,310",
+						"to": "00:00:03,460"
+					},
+					"offsets": {
+						"from": 3310,
+						"to": 3460
+					},
+					"id": 35396,
+					"p": 0.673954,
+					"t_dtw": -1
+				},
+				{
+					"text": "eline",
+					"timestamps": {
+						"from": "00:00:03,460",
+						"to": "00:00:03,800"
+					},
+					"offsets": {
+						"from": 3460,
+						"to": 3800
+					},
+					"id": 5440,
+					"p": 0.996149,
+					"t_dtw": -1
+				},
+				{
+					"text": " running",
+					"timestamps": {
+						"from": "00:00:03,800",
+						"to": "00:00:04,020"
+					},
+					"offsets": {
+						"from": 3800,
+						"to": 4020
+					},
+					"id": 2614,
+					"p": 0.601095,
+					"t_dtw": -1
+				},
+				{
+					"text": " on",
+					"timestamps": {
+						"from": "00:00:04,020",
+						"to": "00:00:04,120"
+					},
+					"offsets": {
+						"from": 4020,
+						"to": 4120
+					},
+					"id": 322,
+					"p": 0.973732,
+					"t_dtw": -1
+				},
+				{
+					"text": " metal",
+					"timestamps": {
+						"from": "00:00:04,120",
+						"to": "00:00:04,470"
+					},
+					"offsets": {
+						"from": 4120,
+						"to": 4470
+					},
+					"id": 5760,
+					"p": 0.451032,
+					"t_dtw": -1
+				},
+				{
+					"text": ".",
+					"timestamps": {
+						"from": "00:00:04,470",
+						"to": "00:00:04,530"
+					},
+					"offsets": {
+						"from": 4470,
+						"to": 4530
+					},
+					"id": 13,
+					"p": 0.874297,
+					"t_dtw": -1
+				},
+				{
+					"text": "[_TT_232]",
+					"timestamps": {
+						"from": "00:00:04,640",
+						"to": "00:00:04,640"
+					},
+					"offsets": {
+						"from": 4640,
+						"to": 4640
+					},
+					"id": 50596,
+					"p": 0.0821934,
+					"t_dtw": -1
+				}
+			]
+		}
+	]
+}

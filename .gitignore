@@ -15,6 +15,18 @@ playwright-report
 # generated test fixtures (synthetic media, never committed — PRD §18)
 tests/fixtures/.generated
 
+# media de-risk smoke cache (real GGML model + media, NEVER committed — PRD §13/§18)
+.smoke-cache/
+
+# stray model weights / media binaries anywhere (PRD §13: models downloaded on demand)
+*.bin
+*.mp4
+*.wav
+*.mov
+*.aiff
+# …but DO keep the bundled libre caption font (PRD §6.4 / §20)
+!build/fonts/*.ttf
+
 # secrets / local env
 .env
 .env.*

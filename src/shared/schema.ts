@@ -23,32 +23,53 @@
 import { z } from 'zod'
 
 // ============================================================================
-// PROVISIONAL — media-derived shapes (plan E.2 Wave-2 / tag `contracts-v1`)
+// FINALIZED (was provisional) — media-derived shapes. Frozen at `contracts-v1`.
 // ============================================================================
-// PROVISIONAL: finalized by media smoke (Stage 4). The exact word/segment
-// fields are *discovered* by running the real bundled `whisper-cli` with
-// `-ml 1` over a fixture and inspecting its JSON. Until Stage 4 captures that
-// shape, downstream tracks (T-Media/T-AI) consume these behind a thin adapter
-// and accept exactly ONE scheduled re-pull at `contracts-v1`. Do not treat the
-// fields below as final.
+// Discovered by the Stage-4 media de-risk smoke: the REAL bundled `whisper-cli`
+// (whisper.cpp 1.8.4) run on Metal over a fixture with `-ml 1 --split-on-word
+// --output-json-full --print-confidence`. Its on-disk JSON shape is:
+//
+//   { systeminfo, model, params, result: { language },
+//     transcription: [ {
+//       timestamps: { from: "HH:MM:SS,mmm", to: "HH:MM:SS,mmm" },  // string form
+//       offsets:    { from: <ms int>,      to: <ms int> },         // MILLISECONDS
+//       text: " word",                                             // leading space
+//       tokens: [ { text, timestamps, offsets, id, p: <0..1 prob>, t_dtw } ]
+//     }, … ] }
+//
+// Mapping to the PRD §9.3 shapes below (done in `parseWhisperJson`, see
+// services/whisper-parse + tests/fixtures/whisper/):
+//   • times are converted ms→seconds (`offsets.from/to / 1000`), ABSOLUTE.
+//   • a WORD = one `transcription[]` entry (with `--split-on-word` each entry is
+//     a whole word, not a sub-token piece); blank/empty-text entries (the leading
+//     `[_BEG_]` and trailing `[_TT_*]` special-token entries) are dropped.
+//   • `confidence` is DERIVED — whisper has no first-class word confidence; we use
+//     the MEAN of the entry's non-special token `p` (probability) values, in 0..1.
+//   • SEGMENTS (sentences) are grouped from the word stream on sentence-ending
+//     punctuation (the LLM only ever sees segment-level text — PRD §16 budget);
+//     a segment's `confidence` is the mean of its words' confidences.
+//   • `result.language` → `Transcript.language` / `JobResult.transcribe.language`.
+//
+// These three types are now FROZEN as part of `contracts-v1`. Any further change
+// is a serialized contract-change request through the trunk owner (plan E.2).
 
-/** PROVISIONAL: finalized by media smoke (Stage 4). PRD §9.3 `WordTimestamp`. */
+/** PRD §9.3 `WordTimestamp`. One whisper word (see derivation note above). */
 export const WordTimestamp = z.object({
-  word: z.string(),
-  start: z.number(), // seconds, absolute from start of source
-  end: z.number(), // seconds, absolute from start of source
-  confidence: z.number()
+  word: z.string(), // trimmed entry text, e.g. "Hello" (no leading space)
+  start: z.number(), // seconds, absolute (offsets.from / 1000)
+  end: z.number(), // seconds, absolute (offsets.to / 1000)
+  confidence: z.number() // 0..1, mean of the word's token `p` values
 })
 export type WordTimestamp = z.infer<typeof WordTimestamp>
 
-/** PROVISIONAL: finalized by media smoke (Stage 4). PRD §9.3 `TranscriptSegment`. */
+/** PRD §9.3 `TranscriptSegment`. A sentence grouped from the word stream. */
 export const TranscriptSegment = z.object({
-  id: z.string(),
-  start: z.number(), // seconds, absolute
-  end: z.number(), // seconds, absolute
-  text: z.string(),
+  id: z.string(), // stable id, e.g. "seg-0", "seg-1", …
+  start: z.number(), // seconds, absolute (first word's start)
+  end: z.number(), // seconds, absolute (last word's end)
+  text: z.string(), // joined word text, single-spaced + trimmed
   speakerId: z.string().optional(), // v0.4 (diarization)
-  confidence: z.number()
+  confidence: z.number() // 0..1, mean of the segment's word confidences
 })
 export type TranscriptSegment = z.infer<typeof TranscriptSegment>
 
@@ -204,10 +225,10 @@ export type SourceVideo = z.infer<typeof SourceVideo>
 // ============================================================================
 
 export const Transcript = z.object({
-  language: z.string(),
+  language: z.string(), // from whisper `result.language` (PRD §6.2 auto-detect)
   segments: z.array(TranscriptSegment),
-  // PROVISIONAL: word shape finalized by media smoke (Stage 4). Kept LOCAL
-  // (drives captions); never sent to the LLM (PRD §16 token budget).
+  // Word stream is kept LOCAL (drives karaoke captions); never sent to the LLM
+  // (PRD §16 token budget). Shape finalized at `contracts-v1` (Stage-4 smoke).
   words: z.array(WordTimestamp),
   speakers: z.array(Speaker).optional() // v0.4
 })

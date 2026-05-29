@@ -127,14 +127,31 @@ export function whisperResourcesDir(): string {
 /**
  * Directory passed to libass as `subtitles=…:fontsdir=<dir>` so caption burns
  * resolve a bundled font regardless of the host's installed fonts (PRD §6.4,
- * plan E.2 media smoke). dev → repo `resources/fonts`; prod → extraResource.
+ * plan E.2 media smoke). dev → repo `build/fonts`; prod → `<resources>/fonts`.
  * `OPENCLIP_FONTS_DIR` overrides (smoke harness / tests).
+ *
+ * IMPORTANT (verified by the Stage-4 libass smoke): libass attempts to parse
+ * EVERY file in this directory as a font, so it MUST contain only font files —
+ * the DejaVu license lives in `build/licenses/`, not here. The bundled face is
+ * `DejaVuSans.ttf` (libre, OFL-compatible Bitstream-Vera derivative — PRD §20).
+ * Its ASS `Fontname` is exactly `DejaVu Sans` (the family name libass reports as
+ * `fontselect: (DejaVu Sans, …) -> DejaVuSans`); `DEFAULT_CAPTION_FONT` mirrors
+ * that so `CaptionStyle.fontFamily` and the burn filtergraph stay in sync.
+ *
+ * `electron-builder.yml` must ship `build/fonts/` as `extraResources` →
+ * `<resources>/fonts/` (packaging phase, plan E.6) so the prod path resolves.
  */
 export function fontsDir(): string {
   if (process.env.OPENCLIP_FONTS_DIR) return process.env.OPENCLIP_FONTS_DIR
-  if (isDev()) return join(process.cwd(), 'resources', 'fonts')
+  if (isDev()) return join(process.cwd(), 'build', 'fonts')
   return join(process.resourcesPath, 'fonts')
 }
+
+/**
+ * The bundled caption font's ASS `Fontname` / `CaptionStyle.fontFamily` default.
+ * Must match the family libass resolves from `build/fonts/DejaVuSans.ttf`.
+ */
+export const DEFAULT_CAPTION_FONT = 'DejaVu Sans'
 
 // ============================================================================
 // userData-rooted directories (models, projects)

@@ -40,7 +40,7 @@ export const sourceVideoFixture: SourceVideo = {
   format: 'mp4'
 }
 
-// ── Word / segment / transcript (PROVISIONAL — re-pulled at contracts-v1) ─────
+// ── Word / segment / transcript (FINALIZED at contracts-v1 — Stage-4 smoke) ───
 export const wordTimestampFixture: WordTimestamp = {
   word: 'hello',
   start: 1.2,
@@ -217,6 +217,8 @@ export const modelDownloadResultFixture: JobResult['model-download'] = {
 }
 
 export const transcribePartialFixture: JobPartial['transcribe'] = {
+  // Finalized at contracts-v1: per-word stream + any sentence that just closed.
+  words: transcriptFixture.words,
   segments: [transcriptSegmentsFixture[0]]
 }
 export const modelDownloadPartialFixture: JobPartial['model-download'] = {

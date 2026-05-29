@@ -1,9 +1,9 @@
 /**
  * src/shared/jobs.ts — the streaming-job contract (PRD §10.2 + plan Part B/E).
  *
- * FROZEN as part of the OUTER contract (plan E.2, tag `contracts-outer`),
- * EXCEPT the `transcribe` result/partial payloads which are PROVISIONAL until
- * the media smoke (Stage 4 / tag `contracts-v1`) — see the inline markers.
+ * FROZEN as part of the OUTER contract (plan E.2, tag `contracts-outer`). The
+ * `transcribe` result/partial payloads — provisional through Stage 3 — are now
+ * FINALIZED against real `whisper-cli` JSON and frozen at `contracts-v1`.
  *
  * Long-running work (transcription, export, model download) runs in the
  * sidecar `utilityProcess`; control is `invoke('job:start', …)` which returns
@@ -17,7 +17,7 @@
  * A renderer crash (port close) is treated as an implicit cancel.
  */
 
-import type { TranscriptSegment, WordTimestamp } from './schema'
+import type { Transcript, TranscriptSegment, WordTimestamp } from './schema'
 
 // ============================================================================
 // Job taxonomy
@@ -92,14 +92,13 @@ export interface JobParams {
 // ============================================================================
 
 export interface JobResult {
-  // PROVISIONAL: finalized by media smoke (Stage 4). The transcript result is
-  // built from whisper-cli's real JSON — segment/word fields may gain/rename
-  // members once captured. Re-pulled exactly once at `contracts-v1`.
-  transcribe: {
-    language: string
-    segments: TranscriptSegment[]
-    words: WordTimestamp[]
-  }
+  // FINALIZED at `contracts-v1` (Stage-4 media smoke). The terminal transcript:
+  // `language` from whisper `result.language`; `segments` grouped from the word
+  // stream (LLM-facing, PRD §16); `words` kept local for karaoke captions. This
+  // is exactly the `Transcript` body sans the v0.4 `speakers` field — so it
+  // drops straight into `Project.transcript` (PRD §9.3).
+  transcribe: Pick<Transcript, 'language' | 'segments' | 'words'>
+
   export: {
     outputPath: string
     width: number
@@ -120,12 +119,17 @@ export interface JobResult {
 // ============================================================================
 
 export interface JobPartial {
-  // PROVISIONAL: finalized by media smoke (Stage 4). Streamed transcript
-  // segments arrive incrementally as whisper emits them; the precise per-event
-  // shape is confirmed against real whisper-cli output and re-pulled once at
-  // `contracts-v1`.
+  // FINALIZED at `contracts-v1` (Stage-4 media smoke). whisper-cli prints each
+  // word as it is decoded (one stderr line per `transcription[]` entry under
+  // `-ml 1 --split-on-word`); the runner maps those to `words` and emits any
+  // sentence that just CLOSED on terminal punctuation as `segments`. Both arrays
+  // carry only what is NEW since the previous `partial` (absolute timestamps);
+  // `segments` may be empty on word-only emits. The renderer appends them to
+  // build a live transcript while progress streams (PRD §6.2 searchable sidebar).
   transcribe: {
-    /** Segments decoded so far this emit (absolute timestamps). */
+    /** Words decoded since the previous partial (absolute timestamps). */
+    words: WordTimestamp[]
+    /** Sentences that closed since the previous partial (may be empty). */
     segments: TranscriptSegment[]
   }
   /** Export has no meaningful partial payload (progress-only). */

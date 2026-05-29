@@ -19,7 +19,7 @@ import { MessageChannel } from 'node:worker_threads'
 import { jobEvents, type MessagePortLike, type JobStatus } from '@renderer/hooks/useJob'
 import { driveScriptOverChannel } from '../harness/fake-utility-process'
 import { createMockOpenclip } from '../mocks/openclip'
-import { transcribeResultFixture } from '../fixtures/contract'
+import { transcribeResultFixture, transcribePartialFixture } from '../fixtures/contract'
 import type { JobEventFor } from '@shared/jobs'
 
 describe('jobEvents: MessagePort → AsyncIterable<JobEvent>', () => {
@@ -31,7 +31,7 @@ describe('jobEvents: MessagePort → AsyncIterable<JobEvent>', () => {
       steps: [
         { t: 'progress', pct: 10, stage: 'extracting' },
         { t: 'progress', pct: 70, stage: 'transcribing' },
-        { t: 'partial', data: { segments: transcribeResultFixture.segments.slice(0, 1) } },
+        { t: 'partial', data: transcribePartialFixture },
         { t: 'done', result: transcribeResultFixture }
       ]
     })

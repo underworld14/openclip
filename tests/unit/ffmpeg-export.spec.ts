@@ -13,7 +13,6 @@ import {
   exportClipArgs,
   exportClipArgsMultiRange,
   exportClipArgsSplit,
-  staticizeForCompressedTimeline,
   thumbnailArgs,
   buildVf,
   cropExpr,
@@ -216,17 +215,19 @@ describe('exportClipArgsMultiRange (Part I.4 jump-cuts)', () => {
     [44, 58.5]
   ]
 
-  it('builds a select+setpts filtergraph over the kept spans (no -ss/-to)', () => {
+  it('seeks with -ss/-t and selects CLIP-RELATIVE kept spans, crop BEFORE select', () => {
     const args = exportClipArgsMultiRange({ ...base, keepRanges })
     const fc = args[args.indexOf('-filter_complex') + 1]
-    // video: OR of between() over kept spans, re-stamped, then crop+scale.
+    // -ss/-t rebase to clip-relative time; keep ranges are start-subtracted
+    // (30→0, 40→10, 44→14, 58.5→28.5). Crop (center here) runs BEFORE select.
+    expect(args.indexOf('-ss')).toBeLessThan(args.indexOf('-i'))
+    expect(args[args.indexOf('-ss') + 1]).toBe('30')
+    expect(args[args.indexOf('-t') + 1]).toBe('28.5') // duration = 58.5 - 30
     expect(fc).toContain(
-      "[0:v]select='between(t,30,40)+between(t,44,58.5)',setpts=N/FRAME_RATE/TB,crop=ih*9/16:ih,scale=1080:1920[v]"
+      "[0:v]crop=ih*9/16:ih,select='between(t,0,10)+between(t,14,28.5)',setpts=N/FRAME_RATE/TB,scale=1080:1920[v]"
     )
-    // audio: same selection, re-stamped.
-    expect(fc).toContain("[0:a]aselect='between(t,30,40)+between(t,44,58.5)',asetpts=N/SR/TB[a]")
+    expect(fc).toContain("[0:a]aselect='between(t,0,10)+between(t,14,28.5)',asetpts=N/SR/TB[a]")
     expect(args).toEqual(expect.arrayContaining(['-map', '[v]', '-map', '[a]']))
-    expect(args).not.toContain('-ss') // the select handles the ranges, not a seek
     expect(args.at(-1)).toBe('/out/clip.mp4')
   })
 
@@ -245,30 +246,10 @@ describe('exportClipArgsMultiRange (Part I.4 jump-cuts)', () => {
     expect(() => exportClipArgsMultiRange({ ...base })).toThrow(/keepRanges/)
   })
 
-  it('staticizeForCompressedTimeline: pan → static cropX; static/split/null pass through', () => {
-    const pan: ReframePlan = {
-      mode: 'pan',
-      cropW: 608,
-      cropH: 1080,
-      xExpr: 'min(1312,200+50*t)',
-      cropX: 240
-    }
-    expect(staticizeForCompressedTimeline(pan)).toEqual({
-      mode: 'static',
-      cropW: 608,
-      cropH: 1080,
-      cropX: 240
-    })
-    const stat: ReframePlan = { mode: 'static', cropW: 608, cropH: 1080, cropX: 100 }
-    expect(staticizeForCompressedTimeline(stat)).toBe(stat) // unchanged
-    expect(staticizeForCompressedTimeline(null)).toBeNull()
-    expect(staticizeForCompressedTimeline(undefined)).toBeUndefined()
-  })
-
-  it('coerces a PAN plan to its static cropX on the compressed jump-cut timeline (Part J review fix)', () => {
-    // After select,setpts the timeline is silence-COMPRESSED, so the pan xExpr
-    // (authored in the clip's uncompressed time) can't apply — the multi-range
-    // path crops at the pan's representative cropX (a constant) instead.
+  it('composes a PAN crop BEFORE select so the clip-relative xExpr survives the jump-cut (Part J)', () => {
+    // Crop-before-select means the pan `xExpr` reads each frame's UNcompressed
+    // clip-relative `t` (correct), THEN select/setpts compress the survivors — so
+    // the speaker-follow pan is preserved even while removing silences.
     const args = exportClipArgsMultiRange({
       ...base,
       keepRanges,
@@ -276,19 +257,20 @@ describe('exportClipArgsMultiRange (Part I.4 jump-cuts)', () => {
     })
     const fc = args[args.indexOf('-filter_complex') + 1]
     expect(fc).toContain(
-      "[0:v]select='between(t,30,40)+between(t,44,58.5)',setpts=N/FRAME_RATE/TB,crop=608:1080:x=240:y=0,scale=1080:1920[v]"
+      "[0:v]crop=608:1080:x='min(1312,200+50*t)':y=0,select='between(t,0,10)+between(t,14,28.5)',setpts=N/FRAME_RATE/TB,scale=1080:1920[v]"
     )
-    expect(fc).not.toContain("x='min(1312,200+50*t)'") // the time-expr is NOT used here
   })
 
-  it('composes a static reframe crop in the multi-range chain (Part J)', () => {
+  it('composes a static reframe crop BEFORE select in the multi-range chain (Part J)', () => {
     const args = exportClipArgsMultiRange({
       ...base,
       keepRanges,
       reframePlan: { mode: 'static', cropW: 608, cropH: 1080, cropX: 240 }
     })
     const fc = args[args.indexOf('-filter_complex') + 1]
-    expect(fc).toContain('setpts=N/FRAME_RATE/TB,crop=608:1080:x=240:y=0,scale=1080:1920[v]')
+    expect(fc).toContain(
+      "[0:v]crop=608:1080:x=240:y=0,select='between(t,0,10)+between(t,14,28.5)',setpts=N/FRAME_RATE/TB,scale=1080:1920[v]"
+    )
   })
 })
 

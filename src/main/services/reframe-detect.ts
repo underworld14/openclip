@@ -559,6 +559,26 @@ function defaultYuNetDetector(
   }
 }
 
+/**
+ * Load the bundled YuNet model through the REAL runtime path
+ * (`require('onnxruntime-web')` + `wasmPaths = reframeWasmDir()`) and run ONE dummy
+ * `[1,3,modelSize,modelSize]` inference, returning the output tensor names. THROWS
+ * on any failure. Used by the Gate-D `diag:reframe-probe` IPC to prove the PACKAGED
+ * main process can load + run the model from `<Resources>/onnx` (the asar-resolved
+ * JS entry + the unpacked wasm) — the real reframe runtime, not just an asset stat.
+ */
+export async function probeReframeModel(modelSize = 640): Promise<{ outputNames: string[] }> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const ort = require('onnxruntime-web') as typeof OrtModule
+  ort.env.wasm.wasmPaths = reframeWasmDir() + '/'
+  ort.env.wasm.numThreads = 1
+  const session = await ort.InferenceSession.create(reframeModelPath())
+  const data = new Float32Array(3 * modelSize * modelSize)
+  const tensor = new ort.Tensor('float32', data, [1, 3, modelSize, modelSize])
+  const out = await session.run({ [session.inputNames[0]]: tensor })
+  return { outputNames: Object.keys(out) }
+}
+
 // ============================================================================
 // Orchestrator: detect → cluster → (optional motion) → ReframePlan (Part J)
 // ============================================================================

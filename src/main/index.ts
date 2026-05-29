@@ -270,6 +270,16 @@ app.whenReady().then(async () => {
     }
   })
 
+  // Gate-D auto-reframe diagnostic (Part J): load + run the bundled YuNet model
+  // through the REAL runtime path (require('onnxruntime-web') resolved from
+  // app.asar + wasm/model from <Resources>/onnx). Proves the packaged main process
+  // can actually run on-device face detection, not just that the files exist.
+  // Lazy import so onnxruntime-web is only loaded when the diagnostic is invoked.
+  ipcMain.handle('diag:reframe-probe', async () => {
+    const { probeReframeModel } = await import('./services/reframe-detect')
+    return probeReframeModel()
+  })
+
   // DI seam: build the context once and loop the frozen registrars (E.4).
   const ctx: IpcContext = {
     ipcMain,

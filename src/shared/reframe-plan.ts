@@ -65,10 +65,10 @@ export interface CropRegion {
  */
 export type ReframePlan =
   | { mode: 'static'; cropW: number; cropH: number; cropX: number }
-  // `xExpr` is a CLIP-RELATIVE time (`t` 0-based from the clip start, matching the
-  // `-ss`-rebased PTS ffmpeg feeds `crop`). `cropX` is a representative STATIC
-  // fallback used where a time-varying expr can't apply (the jump-cut multi-range
-  // path renders on a silence-COMPRESSED timeline, so it crops at `cropX`).
+  // `xExpr` is in CLIP-RELATIVE time (`t` 0-based from the clip start, matching the
+  // `-ss`-rebased PTS ffmpeg feeds `crop` in BOTH the single-cut and the multi-range
+  // jump-cut paths). `cropX` is the pan's representative "home" position (a valid
+  // static crop) — metadata for a coarse preview/thumbnail.
   | { mode: 'pan'; cropW: number; cropH: number; xExpr: string; cropX: number }
   | { mode: 'split'; regions: [CropRegion, CropRegion] }
 

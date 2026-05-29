@@ -283,12 +283,22 @@ describe('exportClipArgsSplit (Part J 2-up split-screen)', () => {
     ]
   }
 
-  it('builds a split→crop→scale 1080:960→vstack filter_complex', () => {
+  it('bounds the encode with -ss/-t (NOT the whole source) and cover-fits each tile', () => {
     const args = exportClipArgsSplit({ ...base, reframePlan: splitPlan })
     const fc = args[args.indexOf('-filter_complex') + 1]
+    // CRITICAL (review fix): the split MUST be bounded to the clip span — without
+    // -ss/-t it re-encoded the ENTIRE source. base is [30, 58.5] → -ss 30 -t 28.5.
+    expect(args.indexOf('-ss')).toBeLessThan(args.indexOf('-i'))
+    expect(args[args.indexOf('-ss') + 1]).toBe('30')
+    expect(args[args.indexOf('-t') + 1]).toBe('28.5')
     expect(fc).toContain('[0:v]split=2[l][r]')
-    expect(fc).toContain('[l]crop=960:540:x=0:y=0,scale=1080:960[lv]')
-    expect(fc).toContain('[r]crop=960:540:x=960:y=0,scale=1080:960[rv]')
+    // Cover-fit: scale up preserving aspect → center-crop to the tile (no stretch).
+    expect(fc).toContain(
+      '[l]crop=960:540:x=0:y=0,scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960[lv]'
+    )
+    expect(fc).toContain(
+      '[r]crop=960:540:x=960:y=0,scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960[rv]'
+    )
     expect(fc).toContain('[lv][rv]vstack=inputs=2[v]')
     // No jump-cut ⇒ audio mapped straight from 0:a (no aselect chain).
     expect(fc).not.toContain('aselect')
@@ -317,10 +327,11 @@ describe('exportClipArgsSplit (Part J 2-up split-screen)', () => {
       ]
     })
     const fc = args[args.indexOf('-filter_complex') + 1]
+    // Clip-relative keep ranges (start-subtracted) on the -ss-rebased timeline.
     expect(fc).toContain(
-      "[0:v]select='between(t,30,40)+between(t,44,58.5)',setpts=N/FRAME_RATE/TB,split=2[l][r]"
+      "[0:v]select='between(t,0,10)+between(t,14,28.5)',setpts=N/FRAME_RATE/TB,split=2[l][r]"
     )
-    expect(fc).toContain("[0:a]aselect='between(t,30,40)+between(t,44,58.5)',asetpts=N/SR/TB[a]")
+    expect(fc).toContain("[0:a]aselect='between(t,0,10)+between(t,14,28.5)',asetpts=N/SR/TB[a]")
     expect(args).toEqual(expect.arrayContaining(['-map', '[v]', '-map', '[a]']))
   })
 

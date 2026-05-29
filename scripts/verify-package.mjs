@@ -207,11 +207,15 @@ log(
 
 /**
  * Prove the bundled YuNet model loads + infers via onnxruntime-web with the
- * bundled WASM (Part J Gate). In Node, `InferenceSession.create` is given the
- * model BYTES (a path string would be `fetch()`ed and fail), and
- * `ort.env.wasm.wasmPaths` is pointed at the bundled onnx dir so the runtime
- * loads ort-wasm-simd-threaded.wasm from disk. numThreads=1 (no SharedArrayBuffer
- * / cross-origin-isolation requirement). Prints OK on success; fails loudly otherwise.
+ * bundled WASM (Part J Gate). This proof imports the `onnxruntime-web/wasm`
+ * (browser-style) entry, which has no fs loader — so HERE the model must be passed
+ * as BYTES (this entry would `fetch()` a path string and fail). NOTE: the PRODUCTION
+ * runtime instead uses `require('onnxruntime-web')` (the `node` entry), which DOES
+ * accept the model PATH directly; the packaged-app Gate-D e2e covers that real path
+ * via the `diag:reframe-probe` IPC. Both honor `ort.env.wasm.wasmPaths` (pointed at
+ * the bundled onnx dir) and load the SAME ort-wasm-simd-threaded.wasm from disk.
+ * numThreads=1 (no SharedArrayBuffer / cross-origin-isolation requirement).
+ * Prints OK on success; fails loudly otherwise.
  */
 async function verifyOnnxModelLoads(dir, modelPath) {
   let ort

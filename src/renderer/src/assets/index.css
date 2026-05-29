@@ -114,7 +114,37 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  /* Transparent base so macOS window vibrancy shows through the chrome regions.
+     The center editor canvas paints its own opaque dark surface on top. Off-mac,
+     the BrowserWindow backgroundColor (dark) shows behind the transparent body. */
   body {
-    @apply bg-background text-foreground;
+    @apply text-foreground;
+    background: transparent;
+    font-family:
+      -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+}
+
+@layer utilities {
+  /* macOS custom-title-bar drag regions (titleBarStyle: 'hiddenInset'). Any
+     interactive control inside a drag region MUST carry .app-no-drag or it
+     becomes unclickable (clicks are swallowed by the drag region). */
+  .app-drag {
+    -webkit-app-region: drag;
+  }
+  .app-no-drag {
+    -webkit-app-region: no-drag;
+  }
+  /* Translucent sidebar surface that lets window vibrancy through while keeping
+     content legible. */
+  .vibrant-sidebar {
+    background: color-mix(in oklch, var(--sidebar) 55%, transparent);
   }
 }

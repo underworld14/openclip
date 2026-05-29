@@ -88,3 +88,54 @@ export async function runImportPipeline(
   if (!transcript) throw new Error('transcribe ended without a result')
   return { sourceVideo, wavPath, transcript }
 }
+
+/** True for an http(s) URL (used by the unified smart-import field, F.4). */
+export function isUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim())
+}
+
+export interface UrlDownloadOptions {
+  bridge: OpenClipBridge
+  url: string
+  outDir?: string
+  /** 0..100 download progress + stage label. */
+  onProgress?: (pct: number, stage: string) => void
+}
+
+/**
+ * Download a remote/YouTube URL via the `url-download` streaming job (yt-dlp in
+ * the main process), reusing the proven per-job MessagePort path (F.4). Resolves
+ * the local file path of the downloaded+merged mp4. Throws on a terminal error
+ * (never hangs) so the caller can surface a retriable toast.
+ */
+export async function runUrlDownload(
+  opts: UrlDownloadOptions
+): Promise<JobResult['url-download']> {
+  const { jobId } = await opts.bridge.jobs.start('url-download', {
+    url: opts.url,
+    outDir: opts.outDir
+  })
+  const port = await acquireJobPort(jobId)
+  let result: JobResult['url-download'] | null = null
+
+  for await (const ev of jobEvents<'url-download'>(port)) {
+    const e = ev as JobEventFor<'url-download'>
+    switch (e.t) {
+      case 'progress':
+        opts.onProgress?.(e.pct, e.stage)
+        break
+      case 'partial':
+        opts.onProgress?.(e.data.pct, 'downloading')
+        break
+      case 'done':
+        result = e.result
+        opts.onProgress?.(100, 'downloaded')
+        break
+      case 'error':
+        throw new Error(`download failed [${e.code}]: ${e.message}`)
+    }
+  }
+
+  if (!result) throw new Error('download ended without a result')
+  return result
+}

@@ -122,6 +122,22 @@ export interface JobParams {
      * captions onto the compressed timeline. Absent/false ⇒ the normal single cut.
      */
     removeSilence?: boolean | { noiseDb?: number; minSilenceSec?: number; padSec?: number }
+    /**
+     * Auto-reframe (Part J, opt-in). 'off' (default) ⇒ static center-crop;
+     * 'auto' ⇒ follow the speaker's face (static/pan, 1–2 speakers); 'split' ⇒
+     * 2-speaker split-screen (falls back to 'auto' when not two faces). The runner
+     * runs on-device face detection (YuNet via WASM) → a ReframePlan; any failure
+     * degrades to center-crop (never blocks the export).
+     */
+    reframe?: 'off' | 'auto' | 'split'
+    /**
+     * Source video pixel size (from `Project.sourceVideo`), supplied by the renderer
+     * so the reframe face-detection step needn't re-ffprobe — REQUIRED when reframe
+     * != off (absent ⇒ reframe is skipped → center-crop). `fps` is informational
+     * (the detector samples at its own fixed rate); kept for future tuning.
+     */
+    sourceResolution?: { width: number; height: number }
+    fps?: number
     quality: '720p' | '1080p'
   }
   /** Stream a GGML model from HuggingFace to userData/models (PRD §13). */

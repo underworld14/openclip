@@ -86,6 +86,8 @@ export function buildExportParams(args: {
   captionStyle?: CaptionStyle
   /** Remove long silences via jump-cuts (Part I.4, opt-in). */
   removeSilence?: JobParams['export']['removeSilence']
+  /** Auto-reframe mode (Part J, opt-in): follow the speaker / split-screen. */
+  reframe?: JobParams['export']['reframe']
 }): JobParams['export'] {
   const { start, end } = resolveBounds(args.clip)
   if (!(end > start)) {
@@ -105,6 +107,14 @@ export function buildExportParams(args: {
         ? { words: args.words, style: args.captionStyle }
         : undefined,
     removeSilence: args.removeSilence,
+    // Auto-reframe (Part J): pass the source pixel size + fps so the runner's
+    // face-detection step needn't re-ffprobe. Only meaningful when reframe != off.
+    reframe: args.reframe,
+    sourceResolution: {
+      width: args.source.resolution.width,
+      height: args.source.resolution.height
+    },
+    fps: args.source.fps,
     quality: args.quality ?? '1080p'
   }
 }

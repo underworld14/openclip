@@ -7,7 +7,9 @@ import eslintPluginReactRefresh from 'eslint-plugin-react-refresh'
 import eslintPluginImport from 'eslint-plugin-import'
 
 export default defineConfig(
-  { ignores: ['**/node_modules', '**/dist', '**/out'] },
+  // build/onnx holds vendored binary assets (the YuNet model + the copied
+  // onnxruntime-web wasm loader .mjs) — not our source; never lint them.
+  { ignores: ['**/node_modules', '**/dist', '**/out', 'build/onnx'] },
   tseslint.configs.recommended,
   eslintPluginReact.configs.flat.recommended,
   eslintPluginReact.configs.flat['jsx-runtime'],

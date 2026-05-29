@@ -14,6 +14,14 @@
  * Also confirms the bundled libass font (`fonts/DejaVuSans.ttf`) is present so
  * the caption burn filtergraph (`subtitles=…:fontsdir=…`) resolves a font.
  *
+ * AND the auto-reframe ONNX assets (Part J): asserts
+ * `Contents/Resources/onnx/face_detection_yunet_2023mar.onnx` +
+ * `ort-wasm-simd-threaded.wasm` exist, then a GATE-style proof that
+ * onnxruntime-web can `InferenceSession.create` the BUNDLED model (with
+ * `wasmPaths` = the bundled onnx dir, `numThreads=1`) and run one
+ * `[1,3,640,640]` dummy inference — so a broken extraResources mapping or a
+ * model/runtime mismatch is caught before shipping.
+ *
  * This is the bundle-level counterpart to scripts/bundle-binaries.mjs --verify
  * (which checks the staging `resources/` tree): this script checks the FINAL
  * packaged `.app` so a broken extraResources mapping / asarUnpack regression is
@@ -26,7 +34,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, statSync, openSync, readSync, closeSync } from 'node:fs'
+import { existsSync, statSync, openSync, readSync, closeSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -173,4 +181,75 @@ const font = join(resourcesDir, 'fonts', 'DejaVuSans.ttf')
 if (!existsSync(font)) fail(`bundled caption font missing: ${font}`)
 log(`bundled caption font OK: ${font}`)
 
-log('packaged bundle verified ✓ (4 sidecars exist + run from Contents/Resources; font present)')
+// 5) auto-reframe ONNX assets (Part J): the YuNet model + the onnxruntime-web
+// WASM the detector loads via `ort.env.wasm.wasmPaths`. Both ship under
+// <Resources>/onnx (electron-builder extraResources → paths.ts reframeOnnxDir()).
+const REFRAME_MODEL_FILE = 'face_detection_yunet_2023mar.onnx'
+const onnxDir = join(resourcesDir, 'onnx')
+const onnxModel = join(onnxDir, REFRAME_MODEL_FILE)
+const onnxWasm = join(onnxDir, 'ort-wasm-simd-threaded.wasm')
+if (!existsSync(onnxModel)) fail(`bundled YuNet model missing: ${onnxModel}`)
+if (!existsSync(onnxWasm)) fail(`bundled onnxruntime-web wasm missing: ${onnxWasm}`)
+log(`bundled onnx model OK: ${onnxModel} (${(statSync(onnxModel).size / 1024).toFixed(0)} KB)`)
+log(`bundled onnx wasm OK: ${onnxWasm} (${(statSync(onnxWasm).size / 1024).toFixed(0)} KB)`)
+
+// GATE proof: onnxruntime-web must `InferenceSession.create` the BUNDLED model
+// (wasmPaths = the bundled onnx dir, single-threaded) and run one [1,3,640,640]
+// dummy inference. Catches a model/runtime mismatch or a broken extraResources
+// mapping before shipping. Uses the external-wasm entry (onnxruntime-web/wasm)
+// so the runtime loads ort-wasm-simd-threaded.wasm from the bundled dir, not a CDN.
+await verifyOnnxModelLoads(onnxDir, onnxModel)
+
+log(
+  'packaged bundle verified ✓ (4 sidecars exist + run from Contents/Resources; ' +
+    'font present; onnx model + wasm present and load-tested)'
+)
+
+/**
+ * Prove the bundled YuNet model loads + infers via onnxruntime-web with the
+ * bundled WASM (Part J Gate). In Node, `InferenceSession.create` is given the
+ * model BYTES (a path string would be `fetch()`ed and fail), and
+ * `ort.env.wasm.wasmPaths` is pointed at the bundled onnx dir so the runtime
+ * loads ort-wasm-simd-threaded.wasm from disk. numThreads=1 (no SharedArrayBuffer
+ * / cross-origin-isolation requirement). Prints OK on success; fails loudly otherwise.
+ */
+async function verifyOnnxModelLoads(dir, modelPath) {
+  let ort
+  try {
+    ort = await import('onnxruntime-web/wasm')
+  } catch (e) {
+    fail(`could not import onnxruntime-web/wasm for the model-load proof: ${e.message}`)
+  }
+  // wasmPaths must end with a separator so the loader appends the .wasm name.
+  ort.env.wasm.wasmPaths = dir.endsWith('/') ? dir : `${dir}/`
+  ort.env.wasm.numThreads = 1
+  ort.env.logLevel = 'error'
+  try {
+    const bytes = new Uint8Array(readFileSync(modelPath))
+    const session = await ort.InferenceSession.create(bytes, { executionProviders: ['wasm'] })
+    const inputName = session.inputNames[0]
+    if (inputName !== 'input') {
+      fail(`bundled YuNet model has unexpected input name "${inputName}" (expected "input")`)
+    }
+    if (session.outputNames.length !== 12) {
+      fail(
+        `bundled YuNet model has ${session.outputNames.length} outputs (expected 12 — ` +
+          `cls/obj/bbox/kps at strides 8/16/32). Model/runtime mismatch.`
+      )
+    }
+    // One dummy [1,3,640,640] NCHW float32 inference — the model's FIXED input shape.
+    const input = new ort.Tensor('float32', new Float32Array(1 * 3 * 640 * 640), [1, 3, 640, 640])
+    const results = await session.run({ [inputName]: input })
+    if (Object.keys(results).length !== 12) {
+      fail(`bundled YuNet inference returned ${Object.keys(results).length} tensors (expected 12)`)
+    }
+    log(
+      `onnx model-load proof OK: InferenceSession.create + 1×[1,3,640,640] inference (12 outputs)`
+    )
+  } catch (e) {
+    fail(
+      `bundled YuNet model failed to load/infer via onnxruntime-web (wasmPaths=${ort.env.wasm.wasmPaths}): ` +
+        `${e && e.message ? e.message : e}`
+    )
+  }
+}

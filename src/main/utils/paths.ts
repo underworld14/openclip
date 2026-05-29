@@ -186,6 +186,36 @@ export function fontsDir(): string {
 export const DEFAULT_CAPTION_FONT = 'DejaVu Sans'
 
 // ============================================================================
+// Auto-reframe ONNX assets (Part J — the YuNet face model + onnxruntime-web
+// WASM, bundled so detection is local + cross-platform with NO native addon).
+// ============================================================================
+
+/** The bundled YuNet face-detection model file name (OpenCV Zoo 2023mar, MIT). */
+export const REFRAME_MODEL_FILE = 'face_detection_yunet_2023mar.onnx'
+
+/**
+ * Directory holding the YuNet `.onnx` model AND the `onnxruntime-web` `.wasm`
+ * (the detector sets `ort.env.wasm.wasmPaths` to this). dev → repo `build/onnx`;
+ * prod → `<resources>/onnx` (shipped via `electron-builder.yml` extraResources).
+ * `OPENCLIP_ONNX_DIR` overrides (tests / smoke).
+ */
+export function reframeOnnxDir(): string {
+  if (process.env.OPENCLIP_ONNX_DIR) return process.env.OPENCLIP_ONNX_DIR
+  if (isDev()) return join(process.cwd(), 'build', 'onnx')
+  return join(process.resourcesPath, 'onnx')
+}
+
+/** Absolute path to the bundled YuNet model. */
+export function reframeModelPath(): string {
+  return join(reframeOnnxDir(), REFRAME_MODEL_FILE)
+}
+
+/** Directory passed to `onnxruntime-web` as `ort.env.wasm.wasmPaths` (the `.wasm` lives beside the model). */
+export function reframeWasmDir(): string {
+  return reframeOnnxDir()
+}
+
+// ============================================================================
 // userData-rooted directories (models, projects)
 // ============================================================================
 

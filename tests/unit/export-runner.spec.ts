@@ -195,3 +195,58 @@ describe('export-runner — silence jump-cuts (Part I.4)', () => {
     expect(exportClip).toHaveBeenCalledWith(expect.objectContaining({ keepRanges: undefined }))
   })
 })
+
+describe('export-runner — auto-reframe (Part J)', () => {
+  const REFRAME_BASE: JobParams['export'] = {
+    ...BASE,
+    sourceResolution: { width: 1920, height: 1080 }
+  }
+  const PLAN = { mode: 'static', cropW: 608, cropH: 1080, cropX: 200 } as const
+
+  it('plans reframe and threads the plan into exportClip when reframe != off', async () => {
+    const exportClip = vi.fn().mockResolvedValue(EXPORT_RESULT)
+    const planReframe = vi.fn(async () => PLAN)
+    const runner = createExportRunner({ exportClip, planReframe, fontsDir: () => '/fonts' })
+    await runner({ ...REFRAME_BASE, reframe: 'auto' }, fakeEmitter(), fakeCtx())
+
+    expect(planReframe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourcePath: '/src/in.mp4',
+        startTime: 10,
+        endTime: 13,
+        source: { width: 1920, height: 1080 },
+        aspect: '9:16',
+        mode: 'auto'
+      })
+    )
+    expect(exportClip).toHaveBeenCalledWith(expect.objectContaining({ reframePlan: PLAN }))
+  })
+
+  it('does NOT plan reframe when reframe is off (center-crop)', async () => {
+    const exportClip = vi.fn().mockResolvedValue(EXPORT_RESULT)
+    const planReframe = vi.fn()
+    const runner = createExportRunner({ exportClip, planReframe, fontsDir: () => '/fonts' })
+    await runner({ ...REFRAME_BASE, reframe: 'off' }, fakeEmitter(), fakeCtx())
+    expect(planReframe).not.toHaveBeenCalled()
+    expect(exportClip).toHaveBeenCalledWith(expect.objectContaining({ reframePlan: null }))
+  })
+
+  it('skips reframe when sourceResolution is missing (cannot size the crop)', async () => {
+    const exportClip = vi.fn().mockResolvedValue(EXPORT_RESULT)
+    const planReframe = vi.fn()
+    const runner = createExportRunner({ exportClip, planReframe, fontsDir: () => '/fonts' })
+    await runner({ ...BASE, reframe: 'auto' }, fakeEmitter(), fakeCtx()) // no sourceResolution
+    expect(planReframe).not.toHaveBeenCalled()
+  })
+
+  it('best-effort: a planReframe failure falls back to center-crop (reframePlan null)', async () => {
+    const exportClip = vi.fn().mockResolvedValue(EXPORT_RESULT)
+    const planReframe = vi.fn(async () => {
+      throw new Error('onnx unavailable')
+    })
+    const runner = createExportRunner({ exportClip, planReframe, fontsDir: () => '/fonts' })
+    const result = await runner({ ...REFRAME_BASE, reframe: 'auto' }, fakeEmitter(), fakeCtx())
+    expect(result).toEqual(EXPORT_RESULT)
+    expect(exportClip).toHaveBeenCalledWith(expect.objectContaining({ reframePlan: null }))
+  })
+})

@@ -31,7 +31,9 @@ import {
 } from '@main/services/ffmpeg-export'
 import { writeClipCaptions as defaultWriteClipCaptions } from '@main/services/ffmpeg-caption'
 import { detectSilences as defaultDetectSilences } from '@main/services/silence-detect'
+import { planReframe as defaultPlanReframe } from '@main/services/reframe-detect'
 import { computeKeepRanges, removesAnything, type Range } from '@shared/keep-ranges'
+import type { ReframePlan } from '@shared/reframe-plan'
 import { fontsDir as defaultFontsDir, jobTempDir, TEMP_NAMES } from '@main/utils/paths'
 
 export interface ExportRunnerDeps {
@@ -46,6 +48,7 @@ export interface ExportRunnerDeps {
     assPath?: string
     fontsDir?: string
     keepRanges?: Range[]
+    reframePlan?: ReframePlan | null
     onProgress?: (pct: number) => void
     signal?: AbortSignal
   }) => Promise<ExportClipResult>
@@ -69,6 +72,16 @@ export interface ExportRunnerDeps {
     minSilenceSec?: number
     signal?: AbortSignal
   }) => Promise<Range[]>
+  /** Plan auto-reframe (detect faces → crop plan, Part J — injected for tests). */
+  planReframe?: (opts: {
+    sourcePath: string
+    startTime: number
+    endTime: number
+    source: { width: number; height: number }
+    aspect: JobParams['export']['aspectRatio']
+    mode: 'auto' | 'split'
+    signal?: AbortSignal
+  }) => Promise<ReframePlan | null>
   /** Resolve the per-job temp .ass path (injected for tests). */
   resolveAssPath?: (projectId: string, jobId: string, clipId: string) => string
 }
@@ -84,6 +97,7 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
   const resolveFontsDir = deps.fontsDir ?? defaultFontsDir
   const writeClipCaptions = deps.writeClipCaptions ?? defaultWriteClipCaptions
   const detectSilences = deps.detectSilences ?? defaultDetectSilences
+  const planReframe = deps.planReframe ?? defaultPlanReframe
   const resolveAssPath =
     deps.resolveAssPath ??
     ((projectId, jobId, clipId) =>
@@ -94,7 +108,10 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
     emit: JobEmitter<'export'>,
     ctx: JobRunnerContext
   ): Promise<JobResult['export']> => {
-    emit.progress(0, 'encoding')
+    // Lead with a stage that matches what runs first: an 'analyzing' pass when we
+    // detect silences/faces, else straight to 'encoding' (keeps progress monotonic).
+    const willAnalyze = !!params.removeSilence || (!!params.reframe && params.reframe !== 'off')
+    emit.progress(0, willAnalyze ? 'analyzing' : 'encoding')
 
     // Jump-cut (Part I.4, opt-in): detect silences in the clip span → compute the
     // spans to keep. Best-effort — a detection failure (or no removable silence)
@@ -120,6 +137,32 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
         if (removesAnything(kr, params.startTime, params.endTime)) keepRanges = kr
       } catch {
         /* silence detection failed → normal single cut (never block the export) */
+      }
+    }
+
+    // Auto-reframe (Part J, opt-in): detect faces → a crop plan (static / pan /
+    // split). Best-effort — any failure, no faces, or a missing source size leaves
+    // the plan null ⇒ the static center-crop (export never fails because of this).
+    let reframePlan: ReframePlan | null = null
+    if (params.reframe && params.reframe !== 'off' && params.sourceResolution) {
+      try {
+        reframePlan = await planReframe({
+          sourcePath: params.sourcePath,
+          startTime: params.startTime,
+          endTime: params.endTime,
+          source: params.sourceResolution,
+          aspect: params.aspectRatio,
+          mode: params.reframe,
+          signal: ctx.signal
+        })
+      } catch (e) {
+        // Best-effort → static center-crop (never block the export). LOG it, though:
+        // a missing/broken model is otherwise indistinguishable from "no faces found".
+        console.warn(
+          `[export] reframe detection failed; falling back to center-crop: ${
+            e instanceof Error ? e.message : String(e)
+          }`
+        )
       }
     }
 
@@ -151,6 +194,7 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
       // Only needed when captions are burned; harmless otherwise.
       fontsDir: assPath ? resolveFontsDir() : undefined,
       keepRanges,
+      reframePlan,
       onProgress: (pct) => emit.progress(pct, 'encoding'),
       signal: ctx.signal
     })

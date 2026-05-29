@@ -6,6 +6,7 @@
 #   resources/whisper → <Resources>/whisper/<plat-arch>/whisper-cli
 #   resources/yt-dlp  → <Resources>/yt-dlp/<plat-arch>/yt-dlp   (URL/YouTube import, F.4)
 #   build/fonts       → <Resources>/fonts/DejaVuSans.ttf   (libass fontsdir)
+#   build/onnx        → <Resources>/onnx/   (YuNet model + onnxruntime-web wasm — auto-reframe, Part J)
 # These directories are populated by scripts/bundle-binaries.mjs (run in the
 # `beforePack` hook below) so the bundle is reproducible and not committed.
 #
@@ -54,6 +55,16 @@ extraResources:
     to: fonts
     filter:
       - '**/*.ttf'
+  # Auto-reframe (Part J): the YuNet model + the onnxruntime-web WASM/loader that
+  # scripts/bundle-binaries.mjs stages into build/onnx. Resolved in prod by
+  # src/main/utils/paths.ts → reframeOnnxDir() as <Resources>/onnx (and used as
+  # ort.env.wasm.wasmPaths so the .wasm loads beside the model).
+  - from: build/onnx
+    to: onnx
+    filter:
+      - '**/*.onnx'
+      - '**/*.wasm'
+      - '**/*.mjs'
 mac:
   category: public.app-category.video
   target:

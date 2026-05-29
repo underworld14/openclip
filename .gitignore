@@ -27,6 +27,13 @@ tests/fixtures/.generated
 # …but DO keep the bundled libre caption font (PRD §6.4 / §20)
 !build/fonts/*.ttf
 
+# auto-reframe ONNX runtime (Part J): the onnxruntime-web WASM + loader are LARGE
+# and copied at build time from node_modules by scripts/bundle-binaries.mjs — NOT
+# committed. The small YuNet model (face_detection_yunet_2023mar.onnx) + SOURCES.md
+# ARE committed (see build/onnx/SOURCES.md).
+build/onnx/*.wasm
+build/onnx/*.mjs
+
 # bundled native sidecars — copied at build time by scripts/bundle-binaries.mjs,
 # NEVER committed (large; reproducible from node_modules + the whisper build — P7/§13)
 resources/ffmpeg/

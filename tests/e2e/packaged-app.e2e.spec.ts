@@ -37,6 +37,10 @@ const APP_EXE = join(APP_DIR, 'Contents', 'MacOS', 'OpenClip')
 const APP_RESOURCES = join(APP_DIR, 'Contents', 'Resources')
 const BUNDLED_FFMPEG = join(APP_RESOURCES, 'ffmpeg', 'darwin-arm64', 'ffmpeg')
 const BUNDLED_FFPROBE = join(APP_RESOURCES, 'ffmpeg', 'darwin-arm64', 'ffprobe')
+// Auto-reframe (Part J): the YuNet model + onnxruntime-web wasm ship under
+// <Resources>/onnx (electron-builder extraResources → paths.ts reframeOnnxDir()).
+const BUNDLED_ONNX_MODEL = join(APP_RESOURCES, 'onnx', 'face_detection_yunet_2023mar.onnx')
+const BUNDLED_ONNX_WASM = join(APP_RESOURCES, 'onnx', 'ort-wasm-simd-threaded.wasm')
 const TINY_MODEL = join(process.cwd(), '.smoke-cache', 'models', 'ggml-tiny.bin')
 
 const HAVE_APP = existsSync(APP_EXE) && existsSync(BUNDLED_FFMPEG)
@@ -164,6 +168,17 @@ test('Gate D: the packaged .app runs the full flow with binaries from Contents/R
       expect(p).toContain('OpenClip.app/Contents/Resources')
       expect(p).not.toContain('node_modules')
     }
+
+    // (1b) AUTO-REFRAME ASSETS (Part J): the YuNet model + the onnxruntime-web
+    // WASM the detector loads via `ort.env.wasm.wasmPaths` must ship under
+    // Contents/Resources/onnx (extraResources → paths.ts reframeOnnxDir()), the
+    // same bundle-not-node_modules guarantee as the sidecars/font above.
+    expect(existsSync(BUNDLED_ONNX_MODEL)).toBe(true)
+    expect(statSync(BUNDLED_ONNX_MODEL).size).toBeGreaterThan(0)
+    expect(existsSync(BUNDLED_ONNX_WASM)).toBe(true)
+    expect(statSync(BUNDLED_ONNX_WASM).size).toBeGreaterThan(0)
+    expect(BUNDLED_ONNX_MODEL).toContain('OpenClip.app/Contents/Resources')
+    expect(BUNDLED_ONNX_WASM).toContain('OpenClip.app/Contents/Resources')
 
     // (2) RUN THE FULL FLOW through the real renderer orchestration → real bridge
     // → real SidecarManager → BUNDLED binaries. import+extract+REAL transcribe.

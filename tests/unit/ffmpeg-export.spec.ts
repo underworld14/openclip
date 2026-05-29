@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   exportClipArgs,
   exportClipArgsMultiRange,
+  exportClipArgsSplit,
   thumbnailArgs,
   buildVf,
   cropExpr,
@@ -23,6 +24,7 @@ import {
 import { createExportRunner } from '@main/services/jobs/export-runner'
 import type { JobParams } from '@shared/jobs'
 import type { JobEmitter, JobRunnerContext } from '@main/services/sidecar-manager'
+import type { ReframePlan } from '@shared/reframe-plan'
 
 const base: ExportArgsOptions = {
   sourcePath: '/src/in.mp4',
@@ -60,6 +62,57 @@ describe('cropExpr / buildVf', () => {
     expect(escapeFilterPath('/a b/c:d.ass')).toBe('/a b/c\\:d.ass')
     const vf = buildVf({ aspectRatio: '9:16', assPath: '/Vol:1/x.ass' })
     expect(vf).toContain('subtitles=/Vol\\:1/x.ass')
+  })
+})
+
+describe('buildVf with a reframePlan (Part J auto-reframe)', () => {
+  it('falls back to the center-crop when reframePlan is null (golden unchanged)', () => {
+    expect(buildVf({ aspectRatio: '9:16', reframePlan: null })).toBe(
+      'crop=ih*9/16:ih,scale=1080:1920'
+    )
+  })
+
+  it('replaces the center-crop with a static face-centered crop=W:H:x=INT:y=0', () => {
+    const plan: ReframePlan = { mode: 'static', cropW: 608, cropH: 1080, cropX: 240 }
+    expect(buildVf({ aspectRatio: '9:16', reframePlan: plan })).toBe(
+      'crop=608:1080:x=240:y=0,scale=1080:1920'
+    )
+  })
+
+  it('single-quotes the pan xExpr so its commas stay literal to the filtergraph', () => {
+    const plan: ReframePlan = {
+      mode: 'pan',
+      cropW: 608,
+      cropH: 1080,
+      xExpr: 'max(0,min(1312,200+50*t))'
+    }
+    expect(buildVf({ aspectRatio: '9:16', reframePlan: plan })).toBe(
+      "crop=608:1080:x='max(0,min(1312,200+50*t))':y=0,scale=1080:1920"
+    )
+  })
+
+  it('still appends the subtitles burn AFTER the reframe crop+scale (caption seam)', () => {
+    const plan: ReframePlan = { mode: 'static', cropW: 608, cropH: 1080, cropX: 240 }
+    const vf = buildVf({
+      aspectRatio: '9:16',
+      reframePlan: plan,
+      assPath: '/t/c.ass',
+      fontsDir: '/t/fonts'
+    })
+    expect(vf).toBe('crop=608:1080:x=240:y=0,scale=1080:1920,subtitles=/t/c.ass:fontsdir=/t/fonts')
+  })
+
+  it('falls back to the center-crop for a split plan (split is rendered by filter_complex)', () => {
+    const plan: ReframePlan = {
+      mode: 'split',
+      regions: [
+        { cropX: 0, cropY: 0, cropW: 960, cropH: 540 },
+        { cropX: 960, cropY: 0, cropW: 960, cropH: 540 }
+      ]
+    }
+    expect(buildVf({ aspectRatio: '9:16', reframePlan: plan })).toBe(
+      'crop=ih*9/16:ih,scale=1080:1920'
+    )
   })
 })
 
@@ -129,6 +182,26 @@ describe('exportClipArgs (the verified command)', () => {
     )
   })
 
+  it('threads a static/pan reframePlan crop into the single -vf (Part J)', () => {
+    const staticArgs = exportClipArgs({
+      ...base,
+      reframePlan: { mode: 'static', cropW: 608, cropH: 1080, cropX: 240 }
+    })
+    expect(staticArgs[staticArgs.indexOf('-vf') + 1]).toBe(
+      'crop=608:1080:x=240:y=0,scale=1080:1920'
+    )
+    const panArgs = exportClipArgs({
+      ...base,
+      reframePlan: { mode: 'pan', cropW: 608, cropH: 1080, xExpr: 'min(1312,200+50*t)' }
+    })
+    expect(panArgs[panArgs.indexOf('-vf') + 1]).toBe(
+      "crop=608:1080:x='min(1312,200+50*t)':y=0,scale=1080:1920"
+    )
+    // The cut is still the single -ss/-to (the crop reads source t).
+    expect(staticArgs.indexOf('-ss')).toBeLessThan(staticArgs.indexOf('-i'))
+    expect(staticArgs[staticArgs.indexOf('-to') + 1]).toBe('28.5')
+  })
+
   it('throws on a non-positive span (caller surfaces INPUT_INVALID)', () => {
     expect(() => exportClipArgs({ ...base, startTime: 40, endTime: 40 })).toThrow(/non-positive/)
     expect(() => exportClipArgs({ ...base, startTime: 40, endTime: 10 })).toThrow(/non-positive/)
@@ -168,6 +241,90 @@ describe('exportClipArgsMultiRange (Part I.4 jump-cuts)', () => {
 
   it('throws without keep ranges (use the single-range path instead)', () => {
     expect(() => exportClipArgsMultiRange({ ...base })).toThrow(/keepRanges/)
+  })
+
+  it('composes a pan reframe crop AFTER select,setpts (crop reads source t, Part J)', () => {
+    const args = exportClipArgsMultiRange({
+      ...base,
+      keepRanges,
+      reframePlan: { mode: 'pan', cropW: 608, cropH: 1080, xExpr: 'min(1312,200+50*t)' }
+    })
+    const fc = args[args.indexOf('-filter_complex') + 1]
+    // The reframe crop sits where cropExpr was: after setpts, before scale.
+    expect(fc).toContain(
+      "[0:v]select='between(t,30,40)+between(t,44,58.5)',setpts=N/FRAME_RATE/TB,crop=608:1080:x='min(1312,200+50*t)':y=0,scale=1080:1920[v]"
+    )
+  })
+
+  it('composes a static reframe crop in the multi-range chain (Part J)', () => {
+    const args = exportClipArgsMultiRange({
+      ...base,
+      keepRanges,
+      reframePlan: { mode: 'static', cropW: 608, cropH: 1080, cropX: 240 }
+    })
+    const fc = args[args.indexOf('-filter_complex') + 1]
+    expect(fc).toContain('setpts=N/FRAME_RATE/TB,crop=608:1080:x=240:y=0,scale=1080:1920[v]')
+  })
+})
+
+describe('exportClipArgsSplit (Part J 2-up split-screen)', () => {
+  const splitPlan: ReframePlan = {
+    mode: 'split',
+    regions: [
+      { cropX: 0, cropY: 0, cropW: 960, cropH: 540 },
+      { cropX: 960, cropY: 0, cropW: 960, cropH: 540 }
+    ]
+  }
+
+  it('builds a split→crop→scale 1080:960→vstack filter_complex', () => {
+    const args = exportClipArgsSplit({ ...base, reframePlan: splitPlan })
+    const fc = args[args.indexOf('-filter_complex') + 1]
+    expect(fc).toContain('[0:v]split=2[l][r]')
+    expect(fc).toContain('[l]crop=960:540:x=0:y=0,scale=1080:960[lv]')
+    expect(fc).toContain('[r]crop=960:540:x=960:y=0,scale=1080:960[rv]')
+    expect(fc).toContain('[lv][rv]vstack=inputs=2[v]')
+    // No jump-cut ⇒ audio mapped straight from 0:a (no aselect chain).
+    expect(fc).not.toContain('aselect')
+    expect(args).toEqual(expect.arrayContaining(['-map', '[v]', '-map', '0:a']))
+    expect(args.at(-1)).toBe('/out/clip.mp4')
+  })
+
+  it('burns the subtitles AFTER the vstack (caption-burn order)', () => {
+    const args = exportClipArgsSplit({
+      ...base,
+      reframePlan: splitPlan,
+      assPath: '/t/c.ass',
+      fontsDir: '/t/fonts'
+    })
+    const fc = args[args.indexOf('-filter_complex') + 1]
+    expect(fc).toContain('[lv][rv]vstack=inputs=2,subtitles=/t/c.ass:fontsdir=/t/fonts[v]')
+  })
+
+  it('folds jump-cut select/setpts before the split and aselect on the audio', () => {
+    const args = exportClipArgsSplit({
+      ...base,
+      reframePlan: splitPlan,
+      keepRanges: [
+        [30, 40],
+        [44, 58.5]
+      ]
+    })
+    const fc = args[args.indexOf('-filter_complex') + 1]
+    expect(fc).toContain(
+      "[0:v]select='between(t,30,40)+between(t,44,58.5)',setpts=N/FRAME_RATE/TB,split=2[l][r]"
+    )
+    expect(fc).toContain("[0:a]aselect='between(t,30,40)+between(t,44,58.5)',asetpts=N/SR/TB[a]")
+    expect(args).toEqual(expect.arrayContaining(['-map', '[v]', '-map', '[a]']))
+  })
+
+  it('throws when the plan is not a split', () => {
+    expect(() =>
+      exportClipArgsSplit({
+        ...base,
+        reframePlan: { mode: 'static', cropW: 608, cropH: 1080, cropX: 0 }
+      })
+    ).toThrow(/split/)
+    expect(() => exportClipArgsSplit({ ...base })).toThrow(/split/)
   })
 })
 

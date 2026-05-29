@@ -11,6 +11,18 @@
  *   resources/whisper/<plat-arch>/whisper-cli ← static Metal-embedded build
  *   resources/yt-dlp/<plat-arch>/yt-dlp     ← pinned standalone yt-dlp_macos release, SHA-256 verified (F.4 / G.6 — no Python)
  *
+ * It ALSO stages the auto-reframe ONNX runtime (Part J) into a SINGLE shared dir
+ * (not per-arch — the wasm is portable + the model is platform-agnostic):
+ *
+ *   build/onnx/face_detection_yunet_2023mar.onnx  ← committed YuNet model (must exist)
+ *   build/onnx/ort-wasm-simd-threaded.wasm        ← onnxruntime-web WASM (from node_modules)
+ *   build/onnx/ort-wasm-simd-threaded.mjs         ← onnxruntime-web WASM loader (from node_modules)
+ *
+ * This makes DEV work (paths.ts reframeOnnxDir() → build/onnx, used as
+ * ort.env.wasm.wasmPaths) AND stages the dir so electron-builder ships it as
+ * <Resources>/onnx. The wasm/loader are NOT committed (large); we fail loudly if
+ * node_modules is missing them, and assert the committed model is present.
+ *
  * Gate-A invariants honored (verified here, build fails loudly otherwise):
  *   - the bundled ffmpeg MUST expose the libass `subtitles` filter and the
  *     `h264_videotoolbox` encoder (caption burns + HW export).
@@ -177,6 +189,84 @@ function resolveWhisperCli() {
   )
 }
 
+// ── Auto-reframe ONNX runtime (Part J) ───────────────────────────────────────
+
+/**
+ * The bundled YuNet model file name. Mirrors `REFRAME_MODEL_FILE` in
+ * src/main/utils/paths.ts (this build script is plain .mjs, so it can't import
+ * the TS contract — kept in lock-step here the way verify-package.mjs hardcodes
+ * the sidecar names). The model itself IS committed at build/onnx/<this>.
+ */
+const REFRAME_MODEL_FILE = 'face_detection_yunet_2023mar.onnx'
+
+/**
+ * The onnxruntime-web WASM + loader the detector loads via `ort.env.wasm.wasmPaths`.
+ * We ship the SIMD + multithreaded build (`ort-wasm-simd-threaded.*`) — detection
+ * runs single-threaded (numThreads=1), but this is the only WASM the package's
+ * external-wasm entry (`onnxruntime-web/wasm`) references by name. These are LARGE
+ * and copied from node_modules at build time (NOT committed — see build/onnx/SOURCES.md).
+ */
+const ONNX_WASM_FILES = ['ort-wasm-simd-threaded.wasm', 'ort-wasm-simd-threaded.mjs']
+
+/** Resolve onnxruntime-web's dist dir (where its prebuilt .wasm/.mjs ship). */
+function resolveOnnxDistDir() {
+  // The package's main entry resolves inside dist/; take its directory so we find
+  // the sibling ort-wasm-simd-threaded.{wasm,mjs} regardless of the entry file.
+  const entry = require.resolve('onnxruntime-web')
+  const dist = dirname(entry)
+  if (!existsSync(dist)) fail(`onnxruntime-web dist dir not found: ${dist}`)
+  return dist
+}
+
+/**
+ * Stage the auto-reframe ONNX assets into build/onnx (a single shared dir):
+ *   - assert the COMMITTED YuNet model is present (it backs dev + prod detection);
+ *   - copy the onnxruntime-web WASM + loader out of node_modules (fail loudly if
+ *     either is missing — a CDN/embedded fallback would break the offline,
+ *     resources-resolved prod path).
+ * Data files (not executables), so we copy without chmod +x.
+ */
+function bundleOnnx() {
+  const onnxDir = join(repoRoot, 'build', 'onnx')
+  mkdirSync(onnxDir, { recursive: true })
+
+  const model = join(onnxDir, REFRAME_MODEL_FILE)
+  if (!existsSync(model)) {
+    fail(
+      `committed YuNet model missing: ${model}\n` +
+        `It must be checked in at build/onnx/${REFRAME_MODEL_FILE} ` +
+        `(OpenCV Zoo 2023mar, MIT — see build/onnx/SOURCES.md).`
+    )
+  }
+  log(`onnx model OK: ${model} (${(statSync(model).size / 1024).toFixed(0)} KB)`)
+
+  const dist = resolveOnnxDistDir()
+  for (const name of ONNX_WASM_FILES) {
+    const src = join(dist, name)
+    if (!existsSync(src)) {
+      fail(
+        `onnxruntime-web is missing ${name} in ${dist}.\n` +
+          `Reinstall dependencies (the prebuilt WASM ships with onnxruntime-web) — ` +
+          `we refuse to bundle an incomplete onnx runtime.`
+      )
+    }
+    const dest = join(onnxDir, name)
+    copyFileSync(src, dest)
+    const kb = (statSync(dest).size / 1024).toFixed(0)
+    log(`copied ${src} → ${dest} (${kb} KB)`)
+  }
+}
+
+/** Assert build/onnx has the model + the staged onnxruntime-web WASM/loader. */
+function verifyOnnx() {
+  const onnxDir = join(repoRoot, 'build', 'onnx')
+  for (const name of [REFRAME_MODEL_FILE, ...ONNX_WASM_FILES]) {
+    const p = join(onnxDir, name)
+    if (!existsSync(p)) fail(`expected onnx asset missing: ${p}`)
+  }
+  log(`onnx OK: model + onnxruntime-web wasm/loader staged in ${onnxDir}`)
+}
+
 // ── Verification helpers ────────────────────────────────────────────────────
 
 function verifyFfmpeg(ffmpegBin) {
@@ -294,6 +384,9 @@ if (!verifyOnly) {
   installBinary(resolveFfprobeStatic(), dest.ffprobe)
   installBinary(resolveWhisperCli(), dest.whisper)
   installBinary(resolveYtDlp(), dest.ytdlp)
+  // Auto-reframe ONNX runtime (Part J): assert the committed YuNet model + stage
+  // the onnxruntime-web WASM/loader from node_modules into build/onnx.
+  bundleOnnx()
 }
 
 // Verify whatever is now bundled (works for both modes).
@@ -308,6 +401,8 @@ verifyWhisperRuns(dest.whisper)
 // yt-dlp is a self-contained standalone executable (not a dylib-linking Mach-O
 // in the relocatable sense), so we only assert it RUNS — no otool linkage check.
 verifyYtDlpRuns(dest.ytdlp)
+// Auto-reframe ONNX assets staged in build/onnx (model + onnxruntime-web wasm).
+verifyOnnx()
 
 log('all sidecars bundled and verified ✓')
 

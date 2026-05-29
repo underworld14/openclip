@@ -34,10 +34,18 @@ export interface SettingsStore {
   keyStatus: Partial<Record<AIProvider, ApiKeyStatus>>
   setSettings: (patch: Partial<Settings>) => void
   setKeyStatus: (status: ApiKeyStatus) => void
-  /** Load settings from main (body owned by T-AI). */
+  /** Load settings + the current provider's key status from main. */
   load: () => Promise<void>
-  /** Persist settings via the bridge (body owned by T-AI). */
+  /** Persist a settings patch via the bridge; updates local state with the result. */
   save: (patch: Partial<Settings>) => Promise<void>
+  /**
+   * Send a user-typed API key to main (it crosses to MAIN, which persists it via
+   * safeStorage and returns ONLY the status — the raw key is never returned and
+   * is never stored in this renderer store; PRD §12.2).
+   */
+  setApiKey: (provider: AIProvider, key: string) => Promise<void>
+  /** Pull the {provider,hasKey,last4} status for one provider (no key material). */
+  refreshKeyStatus: (provider: AIProvider) => Promise<void>
 }
 
 export const useSettingsStore = create<SettingsStore>()((set) => ({
@@ -47,10 +55,23 @@ export const useSettingsStore = create<SettingsStore>()((set) => ({
   setKeyStatus: (status) =>
     set((s) => ({ keyStatus: { ...s.keyStatus, [status.provider]: status } })),
   load: async () => {
-    // Thin action: T-AI fills to `window.openclip.settings.get()`.
+    const settings = await window.openclip.settings.get()
+    const status = await window.openclip.settings.apiKeyStatus({ provider: settings.aiProvider })
+    set((s) => ({
+      settings,
+      keyStatus: { ...s.keyStatus, [status.provider]: status }
+    }))
   },
   save: async (patch) => {
-    // Thin action: T-AI fills to `window.openclip.settings.set({ settings })`.
-    void patch
+    const settings = await window.openclip.settings.set({ settings: patch })
+    set({ settings })
+  },
+  setApiKey: async (provider, key) => {
+    const status = await window.openclip.settings.setApiKey({ provider, key })
+    set((s) => ({ keyStatus: { ...s.keyStatus, [status.provider]: status } }))
+  },
+  refreshKeyStatus: async (provider) => {
+    const status = await window.openclip.settings.apiKeyStatus({ provider })
+    set((s) => ({ keyStatus: { ...s.keyStatus, [status.provider]: status } }))
   }
 }))

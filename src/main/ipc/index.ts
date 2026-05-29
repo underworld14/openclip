@@ -36,7 +36,13 @@ export interface IpcContext {
   readonly ipcMain: IpcMain
   /** Resolves the focused/main BrowserWindow (for dialogs, port handoff). */
   getMainWindow(): BrowserWindow | null
-  /** The sidecar host: job routing, queues, PID kill-on-quit. */
+  /**
+   * The sidecar host: job routing, queues, PID kill-on-quit. NOTE: job RUNNERS
+   * are NOT registered on this instance — `SidecarManager` has no
+   * `registerRunner`. Tracks register their runner via the module-level
+   * `registerRunner(kind, runner)` export from `@main/services/sidecar-manager`
+   * (the `JOB_RUNNERS` registry seam); `startJob` then looks the runner up.
+   */
   readonly sidecar: SidecarManager
   /** API-key vault (safeStorage); raw keys NEVER cross IPC (PRD §12.2). */
   readonly keyVault: KeyVault

@@ -9,20 +9,25 @@
  * wrapper is a trivial `useMemo` over the same core (asserted to exist + be
  * shaped correctly without rendering).
  *
- * Store hydration of OTHER tracks' slices (transcript/clips/settings) is a
- * documented integration TODO — those setters are built concurrently by
- * T-Media / T-AI; here we only exercise the core-slice hydration this track owns.
+ * Wave-1 integration: hydration now restores OTHER tracks' slices too
+ * (transcript via T-Media's transcriptSlice, clips via T-AI's clipsSlice) since
+ * all slices co-exist on the combined store. We assert the FULL restore below.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMockOpenclip } from '../mocks/openclip'
 import { projectFixture } from '../fixtures/contract'
-import { projectActions, hydrateCoreFromProject } from '@renderer/hooks/useProject'
+import { projectActions, hydrateFromProject } from '@renderer/hooks/useProject'
 import { useProjectStore } from '@renderer/stores/projectStore'
 
 beforeEach(() => {
-  // reset the store between tests
-  useProjectStore.setState({ currentProject: null, recentProjects: [] })
+  // reset the store between tests (incl. cross-track slices)
+  useProjectStore.setState({
+    currentProject: null,
+    recentProjects: [],
+    transcript: null,
+    clips: []
+  })
 })
 afterEach(() => {
   vi.restoreAllMocks()
@@ -40,7 +45,7 @@ describe('projectActions: bridge-calling core', () => {
     expect(recents[0]).toMatchObject({ id: projectFixture.id, name: projectFixture.name })
   })
 
-  it('open(id) loads via the bridge and hydrates currentProject', async () => {
+  it('open(id) loads via the bridge and hydrates currentProject + transcript + clips', async () => {
     const bridge = createMockOpenclip()
     const loadSpy = vi.spyOn(bridge.project, 'load')
     const actions = projectActions(bridge, useProjectStore)
@@ -48,7 +53,11 @@ describe('projectActions: bridge-calling core', () => {
     await actions.open(projectFixture.id)
 
     expect(loadSpy).toHaveBeenCalledWith({ id: projectFixture.id })
-    expect(useProjectStore.getState().currentProject).toEqual(projectFixture)
+    const st = useProjectStore.getState()
+    expect(st.currentProject).toEqual(projectFixture)
+    // Wave-1 cross-track restore: transcript + clips come back too.
+    expect(st.transcript).toEqual(projectFixture.transcript)
+    expect(st.clips).toEqual(projectFixture.clips)
   })
 
   it('save() persists the currentProject via the bridge and returns the path', async () => {
@@ -103,9 +112,12 @@ describe('projectActions: bridge-calling core', () => {
   })
 })
 
-describe('hydrateCoreFromProject (core-slice hydration owned by this track)', () => {
-  it('sets currentProject', () => {
-    hydrateCoreFromProject(useProjectStore, projectFixture)
-    expect(useProjectStore.getState().currentProject).toEqual(projectFixture)
+describe('hydrateFromProject (Wave-1 full cross-slice hydration)', () => {
+  it('restores currentProject, transcript, and clips from a loaded Project', () => {
+    hydrateFromProject(useProjectStore, projectFixture)
+    const st = useProjectStore.getState()
+    expect(st.currentProject).toEqual(projectFixture)
+    expect(st.transcript).toEqual(projectFixture.transcript)
+    expect(st.clips).toEqual(projectFixture.clips)
   })
 })

@@ -13,8 +13,9 @@
  * import graph (and thus the type surface each track fills) is fixed up front.
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { APP_NAME } from '@shared'
+import type { WhisperModelSize } from '@shared/jobs'
 import { Button } from '@renderer/components/ui/button'
 import { Separator } from '@renderer/components/ui/separator'
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
@@ -29,12 +30,33 @@ import { Timeline } from '@renderer/components/Timeline'
 import { ExportPanel } from '@renderer/components/ExportPanel'
 import { SettingsPanel } from '@renderer/components/SettingsPanel'
 import { ModelDownloadDialog } from '@renderer/components/ModelDownloadDialog'
+import { useProjectStore } from '@renderer/stores/projectStore'
+import { installAutosave } from '@renderer/stores/projectStore/autosave'
 
 type Drawer = 'none' | 'import' | 'transcript' | 'export' | 'settings'
 
 function App(): React.JSX.Element {
   const [drawer, setDrawer] = useState<Drawer>('none')
   const [modelDialogOpen, setModelDialogOpen] = useState(false)
+  const [neededModel, setNeededModel] = useState<WhisperModelSize | undefined>(undefined)
+
+  // The single canonical transcript view lives in the center pane (Wave-1
+  // dedupe — the ImportPanel inline workaround was removed). Show it once a
+  // transcript exists, or when the user explicitly opens the transcript drawer.
+  const hasTranscript = useProjectStore((s) => (s.transcript?.segments.length ?? 0) > 0)
+  const showTranscript = drawer === 'transcript' || hasTranscript
+
+  // Wave-1 integration: wire the debounced autosave subscriber to the store
+  // (T-Persist shipped createAutosave with no subscriber). One install for the
+  // app lifetime; tears down on unmount.
+  useEffect(() => installAutosave(), [])
+
+  // ImportPanel's first-transcribe model gate (PRD §13): open the download
+  // dialog for the requested model.
+  const handleNeedModel = (model: WhisperModelSize): void => {
+    setNeededModel(model)
+    setModelDialogOpen(true)
+  }
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
@@ -65,8 +87,7 @@ function App(): React.JSX.Element {
         <aside className="flex w-60 shrink-0 flex-col border-r">
           <ScrollArea className="flex-1">
             <Dashboard />
-            {drawer === 'import' && <ImportPanel />}
-            {drawer === 'transcript' && <TranscriptPanel />}
+            {drawer === 'import' && <ImportPanel onNeedModel={handleNeedModel} />}
           </ScrollArea>
           <Separator />
           <div className="p-2">
@@ -76,11 +97,12 @@ function App(): React.JSX.Element {
           </div>
         </aside>
 
-        {/* CENTER — preview player above the (minimal) timeline. */}
+        {/* CENTER — preview player above the (minimal) timeline. The single
+            canonical TranscriptPanel lives here (PRD §11.1 center pane). */}
         <main className="flex min-w-0 flex-1 flex-col gap-3 p-3">
           <PreviewPlayer />
           <Timeline />
-          {drawer === 'transcript' && <TranscriptPanel />}
+          {showTranscript && <TranscriptPanel />}
           {drawer === 'export' && <ExportPanel />}
           {drawer === 'settings' && <SettingsPanel />}
         </main>
@@ -118,8 +140,14 @@ function App(): React.JSX.Element {
         </span>
       </footer>
 
-      {/* First-run model download dialog (PRD §13). */}
-      <ModelDownloadDialog open={modelDialogOpen} />
+      {/* First-run model download dialog (PRD §13). Opened either via the
+          "Models" affordance or by ImportPanel's first-transcribe model gate
+          (onNeedModel → handleNeedModel), pre-selecting the needed model. */}
+      <ModelDownloadDialog
+        open={modelDialogOpen}
+        initialModel={neededModel}
+        onDownloaded={() => setModelDialogOpen(false)}
+      />
     </div>
   )
 }

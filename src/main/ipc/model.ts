@@ -9,8 +9,11 @@
  *     (the only way to transfer a MessagePort — PRD §10.2). The invoke channel
  *     itself returns the assigned jobId so a caller can correlate / cancel.
  *
- * Registers the `model-download` runner via `ctx.sidecar.registerRunner` — the
- * startup seam (E.3): main/index.ts loops HANDLER_REGISTRARS at init.
+ * Registers the `model-download` runner via the module-level `registerRunner`
+ * export from `sidecar-manager.ts` (NOT a method on `ctx.sidecar` — the
+ * `SidecarManager` instance owns job routing/queues/PID-kill, while the runner
+ * registry is a module-level seam). The startup seam (E.3): main/index.ts loops
+ * HANDLER_REGISTRARS at init, which runs this registrar.
  */
 
 import { IPCChannels } from '@shared/channels'

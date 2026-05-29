@@ -11,13 +11,13 @@
  *   - `useProject()` — memoizes `projectActions` over the real `window.openclip`
  *     and the singleton store; refreshes recents on mount.
  *
- * INTEGRATION TODO (post-I1): on `open()`, the loaded `Project` also carries
- * `transcript` and `clips` — those belong to slices OWNED BY OTHER TRACKS
- * (T-Media's `transcriptSlice`, T-AI's `clipsSlice`) which are built
- * concurrently. We hydrate ONLY the core slice here. When the slices land at
- * integration, extend `hydrateFromProject` to also call
- * `store.getState().setTranscript(project.transcript)` and `setClips(...)`.
- * Those setters are intentionally NOT touched now (one-writer-per-file, E.4).
+ * INTEGRATION (Wave-1, done): on `open()`, the loaded `Project` also carries
+ * `transcript` and `clips` — those live in slices owned by OTHER tracks
+ * (T-Media's `transcriptSlice`, T-AI's `clipsSlice`). Now that all three slices
+ * co-exist on the combined store, `hydrateFromProject` restores ALL of them:
+ * the core slice (`setCurrentProject`), the transcript slice (`setTranscript`),
+ * and the clips slice (`setClips`). This is integration-owned cross-wiring
+ * (the integration agent owns the trunk), not a per-track edit.
  */
 
 import { useEffect, useMemo } from 'react'
@@ -36,9 +36,17 @@ export type Bridge = Window['openclip']
 // Minimal store surface the core needs (so the core is store-shape agnostic).
 // ============================================================================
 
-/** The zustand store API subset `projectActions` reads/writes. */
+/**
+ * The zustand store API subset `projectActions` reads/writes. Wave-1 integration
+ * widens this beyond the core slice to also include the transcript/clips setters
+ * (owned by T-Media / T-AI) so a loaded project restores ALL slices, not just the
+ * project document. `useProjectStore` (the full combined store) satisfies this.
+ */
 export interface CoreStoreApi {
-  getState: () => Pick<ProjectStore, 'currentProject' | 'setCurrentProject' | 'setRecentProjects'>
+  getState: () => Pick<
+    ProjectStore,
+    'currentProject' | 'setCurrentProject' | 'setRecentProjects' | 'setTranscript' | 'setClips'
+  >
 }
 
 // ============================================================================
@@ -77,13 +85,27 @@ export function createBlankProject(name: string, sourceVideo: SourceVideo): Proj
 }
 
 /**
- * Hydrate the projectStore CORE slice from a loaded Project. Only the core slice
- * (currentProject) is this track's to write. See the INTEGRATION TODO at the top
- * of the file for the transcript/clips slices owned by other tracks.
+ * Hydrate ALL projectStore slices from a loaded Project (Wave-1 integration
+ * cross-wiring). Restores the core project document, the transcript slice
+ * (T-Media's `transcriptSlice`), and the clips slice (T-AI's `clipsSlice`) so a
+ * reopened project comes back whole (PRD §5 "Project Save/Load"; plan P5
+ * done-when: "quit/reopen restores the full project — source, transcript, clips,
+ * edits, settings"). The `Project` schema guarantees `transcript` and `clips`
+ * are present (clips defaults to []), so no null-guards are needed.
  */
-export function hydrateCoreFromProject(store: CoreStoreApi, project: Project): void {
-  store.getState().setCurrentProject(project)
+export function hydrateFromProject(store: CoreStoreApi, project: Project): void {
+  const state = store.getState()
+  state.setCurrentProject(project)
+  state.setTranscript(project.transcript)
+  state.setClips(project.clips)
 }
+
+/**
+ * @deprecated Wave-1 integration superseded core-only hydration with full
+ * cross-slice hydration. Retained as an alias for callers/tests that referenced
+ * the core-slice helper; it now hydrates every slice via {@link hydrateFromProject}.
+ */
+export const hydrateCoreFromProject = hydrateFromProject
 
 // ============================================================================
 // projectActions — the framework-free core (tested against the mock bridge)
@@ -118,7 +140,7 @@ export function projectActions(bridge: Bridge, store: CoreStoreApi): ProjectActi
 
     open: async (id: string): Promise<Project> => {
       const project = await bridge.project.load({ id })
-      hydrateCoreFromProject(store, project)
+      hydrateFromProject(store, project)
       return project
     },
 
@@ -139,7 +161,7 @@ export function projectActions(bridge: Bridge, store: CoreStoreApi): ProjectActi
 
     createNew: async (name: string, sourceVideo: SourceVideo): Promise<Project> => {
       const project = createBlankProject(name, sourceVideo)
-      hydrateCoreFromProject(store, project)
+      hydrateFromProject(store, project)
       return project
     }
   }

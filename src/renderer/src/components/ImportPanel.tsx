@@ -12,7 +12,6 @@
 import { useCallback, useState } from 'react'
 import type { WhisperModelSize } from '@shared/jobs'
 import { runImportPipeline } from '@renderer/components/import-pipeline'
-import { TranscriptPanel } from '@renderer/components/TranscriptPanel'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useUiStore } from '@renderer/stores/uiStore'
 import { Button } from '@renderer/components/ui/button'
@@ -33,7 +32,6 @@ export function ImportPanel({ onNeedModel }: ImportPanelProps = {}): React.JSX.E
   const appendPartial = useProjectStore((s) => s.appendTranscriptPartial)
   const hydrate = useProjectStore((s) => s.hydrateTranscript)
   const setSource = useProjectStore((s) => s.setSource)
-  const transcript = useProjectStore((s) => s.transcript)
   const upsertTask = useUiStore((s) => s.upsertTask)
 
   const runImport = useCallback(
@@ -112,10 +110,9 @@ export function ImportPanel({ onNeedModel }: ImportPanelProps = {}): React.JSX.E
           {err}
         </span>
       )}
-      {/* Once transcribed, surface the live transcript view inline (PRD §6.2).
-          The frozen App shell does not yet route a "transcript" drawer; the
-          integration phase can hoist this TranscriptPanel into the center pane. */}
-      {transcript && transcript.segments.length > 0 && <TranscriptPanel />}
+      {/* The live transcript renders in the App center pane's TranscriptPanel,
+          which reads the same transcriptSlice this import hydrates (Wave-1
+          dedupe — the inline workaround was removed; the transcript renders once). */}
     </div>
   )
 }

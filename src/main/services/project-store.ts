@@ -25,12 +25,19 @@ import { readFile, writeFile, mkdir, readdir, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Project } from '@shared/schema'
 import type { Project as ProjectType } from '@shared/schema'
+// Wave-1 integration: the pure autosave debounce moved to the shared leaf so the
+// renderer can consume it too (it could not import from src/main). Re-exported
+// here for backward compatibility with the main-side callers/tests.
+import {
+  createAutosave as createAutosaveImpl,
+  DEFAULT_AUTOSAVE_DELAY_MS,
+  type Autosave as AutosaveGeneric
+} from '@shared/autosave'
 
 /** Canonical OpenClip project file extension (PRD §6.9 "Export project file"). */
 export const OCPROJ_EXT = '.ocproj' as const
 
-/** Default autosave quiet window (ms) before a coalesced save fires. */
-export const DEFAULT_AUTOSAVE_DELAY_MS = 800 as const
+export { DEFAULT_AUTOSAVE_DELAY_MS }
 
 // ============================================================================
 // Typed errors — callers branch on `.code`, never on message strings.
@@ -206,61 +213,25 @@ export async function deleteProject(dir: string, id: string): Promise<{ deleted:
 
 // ============================================================================
 // Debounced autosave helper (E.3 done-when: "autosave debounce tested")
+//
+// The implementation lives in `@shared/autosave` (Wave-1 integration relocation
+// — see that file's header). These aliases keep the `Project`-specialized public
+// surface that main-side callers/tests depend on.
 // ============================================================================
 
 /** A debounced autosave callable: invoke with the latest project to schedule a save. */
-export interface Autosave {
-  (project: ProjectType): void
-  /** Save the pending project immediately and cancel the pending timer. */
-  flush(): Promise<void>
-  /** Drop any pending save without writing. */
-  cancel(): void
-}
+export type Autosave = AutosaveGeneric<ProjectType>
 
 /**
- * Wrap a `save(project)` callback in a trailing-edge debounce: rapid calls
- * within `delayMs` coalesce into a SINGLE save of the LATEST project once the
- * stream goes quiet. Independent of the filesystem — the renderer pipes its
- * `save()` (which routes through the bridge) here; unit tests pass a spy.
+ * Wrap a `save(project)` callback in a trailing-edge debounce (see
+ * `@shared/autosave#createAutosave`). Rapid calls within `delayMs` coalesce into
+ * a SINGLE save of the LATEST project once the stream goes quiet.
  */
 export function createAutosave(
   save: (project: ProjectType) => Promise<void> | void,
   delayMs: number = DEFAULT_AUTOSAVE_DELAY_MS
 ): Autosave {
-  let timer: ReturnType<typeof setTimeout> | null = null
-  let pending: ProjectType | null = null
-
-  const fire = async (): Promise<void> => {
-    timer = null
-    if (pending === null) return
-    const snapshot = pending
-    pending = null
-    await save(snapshot)
-  }
-
-  const autosave = ((project: ProjectType): void => {
-    pending = project
-    if (timer) clearTimeout(timer)
-    timer = setTimeout(() => void fire(), delayMs)
-  }) as Autosave
-
-  autosave.flush = async (): Promise<void> => {
-    if (timer) {
-      clearTimeout(timer)
-      timer = null
-    }
-    await fire()
-  }
-
-  autosave.cancel = (): void => {
-    if (timer) {
-      clearTimeout(timer)
-      timer = null
-    }
-    pending = null
-  }
-
-  return autosave
+  return createAutosaveImpl<ProjectType>(save, delayMs)
 }
 
 // ============================================================================

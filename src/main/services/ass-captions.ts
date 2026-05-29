@@ -302,13 +302,24 @@ export function animationOverride(animation: CaptionStyle['animation']): string 
 export function buildStyleLine(style: CaptionStyle): string {
   const fontColor = toAssColor(style.fontColor) // pre-highlight (SecondaryColour)
   const bg = toAssColor(style.backgroundColor) // box (BackColour)
+  // Part I caption presets — all optional; the defaults reproduce the pre-Part-I
+  // output byte-for-byte (yellow highlight, opaque-black outline width 3, no shadow).
+  const highlight = style.highlightColor ? toAssColor(style.highlightColor) : HIGHLIGHT_COLOR_ASS
+  const outlineColor = style.strokeColor ? toAssColor(style.strokeColor) : '&H00000000'
+  const outlineWidth = style.strokeWidth ?? 3
+  const shadow = style.shadow ? 2 : 0
+  // A fully-TRANSPARENT background (ASS alpha FF) renders outlined text with NO
+  // box (BorderStyle 1, the punchy preset look); a semi/opaque background draws
+  // an opaque box (BorderStyle 3 — the pre-Part-I default, so existing styles
+  // with an opaque `backgroundColor` are unchanged).
+  const borderStyle = /^&HFF/i.test(bg) ? 1 : 3
   const fields = [
     'Karaoke', // Name
     style.fontFamily, // Fontname
     String(style.fontSize), // Fontsize
-    HIGHLIGHT_COLOR_ASS, // PrimaryColour (highlight)
+    highlight, // PrimaryColour (highlight / karaoke fill)
     fontColor, // SecondaryColour (pre-highlight word)
-    '&H00000000', // OutlineColour (opaque black)
+    outlineColor, // OutlineColour
     bg, // BackColour (box)
     '0', // Bold
     '0', // Italic
@@ -318,9 +329,9 @@ export function buildStyleLine(style: CaptionStyle): string {
     '100', // ScaleY
     '0', // Spacing
     '0', // Angle
-    '3', // BorderStyle (3 = opaque box)
-    '3', // Outline
-    '0', // Shadow
+    String(borderStyle), // BorderStyle (3 = opaque box, 1 = outline only)
+    String(outlineWidth), // Outline
+    String(shadow), // Shadow
     String(alignmentFor(style.position)), // Alignment
     '60', // MarginL
     '60', // MarginR

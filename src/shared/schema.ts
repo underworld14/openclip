@@ -86,7 +86,15 @@ export const CaptionStyle = z.object({
   position: z.enum(['top', 'middle', 'bottom']),
   animation: z.enum(['none', 'pop', 'fade', 'typewriter']),
   highlightCurrentWord: z.boolean(),
-  emojiEnabled: z.boolean()
+  emojiEnabled: z.boolean(),
+  // Part I — caption-preset styling (Hormozi/MrBeast/TikTok/…). All OPTIONAL so
+  // pre-Part-I `.ocproj` still validate and ass-captions reproduces today's
+  // output byte-for-byte when absent (defaults: yellow highlight, black outline
+  // width 3, no shadow).
+  highlightColor: z.string().optional(), // karaoke current-word fill (PrimaryColour)
+  strokeColor: z.string().optional(), // text outline (OutlineColour)
+  strokeWidth: z.number().optional(), // outline thickness (ASS Outline)
+  shadow: z.boolean().optional() // drop shadow on/off (ASS Shadow)
 })
 export type CaptionStyle = z.infer<typeof CaptionStyle>
 

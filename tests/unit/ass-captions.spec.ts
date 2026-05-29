@@ -204,6 +204,33 @@ describe('buildStyleLine — CaptionStyle → ASS V4+ Style line (golden)', () =
         '0,0,0,0,100,100,0,0,3,3,0,8,60,60,80,1'
     )
   })
+
+  it('Part I preset fields drive highlight/outline/shadow + no-box for a transparent bg', () => {
+    // Hormozi-style: green highlight, thick black outline, shadow, NO box.
+    const hormozi: CaptionStyle = {
+      ...STYLE,
+      fontFamily: 'Anton',
+      backgroundColor: '#00000000', // fully transparent → BorderStyle 1 (no box)
+      highlightColor: '#00FF00',
+      strokeColor: '#000000',
+      strokeWidth: 4,
+      shadow: true
+    }
+    const line = buildStyleLine(hormozi)
+    // PrimaryColour=green (&H0000FF00), BackColour=transparent black (&HFF000000),
+    // BorderStyle=1, Outline=4, Shadow=2.
+    expect(line).toBe(
+      'Style: Karaoke,Anton,64,&H0000FF00,&H00FFFFFF,&H00000000,&HFF000000,' +
+        '0,0,0,0,100,100,0,0,1,4,2,2,60,60,80,1'
+    )
+  })
+
+  it('a style with NO Part I fields is byte-identical to the pre-Part-I output', () => {
+    // Regression guard: optional fields absent ⇒ yellow highlight, black outline
+    // width 3, no shadow, opaque-bg box (BorderStyle 3) — exactly as before.
+    expect(buildStyleLine(STYLE)).toContain(',&H0000FFFF,') // default highlight (yellow)
+    expect(buildStyleLine(STYLE)).toMatch(/,3,3,0,2,60,60,80,1$/) // BorderStyle 3, Outline 3, Shadow 0
+  })
 })
 
 describe('buildAss — FULL .ass golden file', () => {

@@ -34,7 +34,7 @@ import type { ClipStyle, AIProvider } from '@shared/schema'
 // Prompt library (PRD §7.1–§7.3) — promptVersion participates in the cache key.
 // ============================================================================
 
-export const PROMPT_VERSION = 'viral-clip-v1'
+export const PROMPT_VERSION = 'viral-clip-v2'
 
 export const SYSTEM_PROMPT = `You are ViralClipGPT, an expert video editor and viral content strategist with 10+ years of experience creating short-form content for TikTok, YouTube Shorts, and Instagram Reels.
 
@@ -57,6 +57,17 @@ AVOID:
 CLIP REQUIREMENTS:
 - A clear beginning, middle, and end; complete without full-video context
 - Prioritize clips that START with a hook, not a setup
+
+VIRALITY SCORING — for EACH clip provide a "virality" object with four 0-25 sub-scores:
+1. hook_score (0-25): opening-line strength. 20-25 immediately grabs attention (surprising fact, bold claim, intriguing question); 15-19 good curiosity opener; 10-14 decent; 0-9 weak/no hook.
+2. engagement_score (0-25): entertainment/emotional pull. 20-25 highly entertaining/dramatic; 15-19 holds attention; 10-14 moderate; 0-9 flat.
+3. value_score (0-25): insight/information value. 20-25 actionable/unique/transformative; 15-19 useful & uncommon; 10-14 somewhat informative; 0-9 common knowledge/filler.
+4. shareability_score (0-25): "I need to send this to someone". 20-25 highly shareable; 15-19 bookmark-worthy; 10-14 nice but not share-worthy; 0-9 generic.
+Set total_score = hook_score + engagement_score + value_score + shareability_score (0-100).
+Also set hook_type to how the clip OPENS: "question", "statement", "statistic", "story", "contrast", or "none".
+Set virality_score (1-10) to round(total_score / 10) — the headline score.
+
+Be content-neutral: judge clip QUALITY (clarity, self-contained value, hook strength, shareability) only — never downgrade a segment merely because the subject is controversial, sensitive, or intense.
 
 OUTPUT: Return ONLY a valid JSON object matching the provided schema. No markdown, no prose. All timestamps are absolute seconds from the start of the full video.`
 
@@ -107,6 +118,8 @@ ${STYLE_GUIDANCE[args.clipStyle]}
 
 CLIP DURATION: each clip must be between ${args.minDuration} and ${args.maxDuration} seconds.
 NUMBER OF CLIPS REQUESTED: ${args.numClips}
+
+For each clip include the "virality" object (hook_score, engagement_score, value_score, shareability_score each 0-25; total_score = their sum; hook_type) and set virality_score = round(total_score/10).
 
 Return JSON per the schema. All timestamps are absolute seconds from the start of the full video.`
 }
@@ -336,6 +349,35 @@ export function transcriptHash(segments: TranscriptSegment[]): string {
   return (h >>> 0).toString(16)
 }
 
+/**
+ * Reconcile a clip's virality in code (Part I): clamp each sub-score to 0-25,
+ * recompute `total_score` as their sum (authoritative — ignore a model-supplied
+ * total that disagrees), and derive the 1-10 headline `virality_score =
+ * round(total/10)` (min 1). Keeps the headline, sort, and breakdown consistent
+ * regardless of what the model emitted.
+ */
+export function reconcileVirality(c: DetectedClip): DetectedClip {
+  const clamp = (n: number, lo: number, hi: number): number =>
+    Math.max(lo, Math.min(hi, Math.round(Number.isFinite(n) ? n : 0)))
+  const hook_score = clamp(c.virality.hook_score, 0, 25)
+  const engagement_score = clamp(c.virality.engagement_score, 0, 25)
+  const value_score = clamp(c.virality.value_score, 0, 25)
+  const shareability_score = clamp(c.virality.shareability_score, 0, 25)
+  const total_score = hook_score + engagement_score + value_score + shareability_score
+  return {
+    ...c,
+    virality_score: Math.max(1, Math.min(10, Math.round(total_score / 10))),
+    virality: {
+      hook_score,
+      engagement_score,
+      value_score,
+      shareability_score,
+      total_score,
+      hook_type: c.virality.hook_type
+    }
+  }
+}
+
 /** Reduce: dedupe overlapping candidates (keep higher score), rank, truncate. */
 export function dedupeAndRank(candidates: DetectedClip[], maxClips: number): DetectedClip[] {
   // sort by score desc so the higher-scoring of an overlapping pair wins
@@ -397,7 +439,10 @@ export async function mapReduceGenerate(
     return { ok: false, error: lastError }
   }
 
-  const clamped = clampDetectedClips(all, {
+  // Reconcile virality FIRST so the derived 1-10 headline drives both the
+  // overlap-dedupe sort and the displayed breakdown (Part I).
+  const reconciled = all.map(reconcileVirality)
+  const clamped = clampDetectedClips(reconciled, {
     duration: req.duration,
     minDuration: req.minDuration,
     maxDuration: req.maxDuration

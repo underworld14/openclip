@@ -98,7 +98,10 @@ export const clipFixture: Clip = {
   editedStart: 13.0,
   editedEnd: 40.0,
   captions: [captionFixture],
-  thumbnailPath: '/tmp/openclip/thumb-1.jpg'
+  thumbnailPath: '/tmp/openclip/thumb-1.jpg',
+  // Part I — optional 4-D breakdown + hook type (sum 90 → headline 9).
+  virality: { hook: 24, engagement: 22, value: 22, shareability: 22, total: 90 },
+  hookType: 'statement'
 }
 
 export const clipsFixture: Clip[] = [clipFixture]
@@ -158,6 +161,14 @@ export const clipSchemaFixture: ClipSchema = {
       title: 'The wildest take of the year',
       hook: 'You will not believe what was said next.',
       virality_score: 9,
+      virality: {
+        hook_score: 24,
+        engagement_score: 22,
+        value_score: 22,
+        shareability_score: 22,
+        total_score: 90,
+        hook_type: 'statement'
+      },
       clip_type: 'hook',
       keywords: ['wild', 'take'],
       suggested_caption: 'This take broke the internet',

@@ -5,7 +5,7 @@
  * (react-refresh/only-export-components).
  */
 
-import type { Clip } from '@shared/schema'
+import type { Clip, ClipVirality } from '@shared/schema'
 
 /** Format absolute seconds as M:SS. */
 export function formatTimecode(seconds: number): string {
@@ -13,6 +13,15 @@ export function formatTimecode(seconds: number): string {
   const m = Math.floor(total / 60)
   const s = total % 60
   return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+/** One bar in the virality breakdown (label + raw 0-25 score, for the card). */
+export interface ViralityBar {
+  label: string
+  /** Raw sub-score, 0-25. */
+  score: number
+  /** 0-1 fill ratio (score/25) for the bar width. */
+  ratio: number
 }
 
 export interface ClipViewModel {
@@ -28,6 +37,21 @@ export interface ClipViewModel {
   isApproved: boolean
   canApprove: boolean
   canReject: boolean
+  /** Part I — 0-100 virality total + the four sub-score bars (undefined on old clips). */
+  viralityTotal?: number
+  viralityBars?: ViralityBar[]
+  /** Part I — opening-hook type chip (undefined when not classified). */
+  hookType?: string
+}
+
+/** Build the four sub-score bars from a Clip's persisted 4-D breakdown. */
+export function viralityBars(v: ClipVirality): ViralityBar[] {
+  return [
+    { label: 'Hook', score: v.hook, ratio: v.hook / 25 },
+    { label: 'Engage', score: v.engagement, ratio: v.engagement / 25 },
+    { label: 'Value', score: v.value, ratio: v.value / 25 },
+    { label: 'Share', score: v.shareability, ratio: v.shareability / 25 }
+  ]
 }
 
 /** Derive the renderable view model from a Clip (PRD §9.3). */
@@ -45,7 +69,10 @@ export function clipViewModel(clip: Clip): ClipViewModel {
     status: clip.status,
     isApproved: clip.status === 'approved',
     canApprove: clip.status === 'suggested' || clip.status === 'edited',
-    canReject: clip.status !== 'exported'
+    canReject: clip.status !== 'exported',
+    viralityTotal: clip.virality?.total,
+    viralityBars: clip.virality ? viralityBars(clip.virality) : undefined,
+    hookType: clip.hookType
   }
 }
 

@@ -62,6 +62,22 @@ describe('clipViewModel (drives ClipCard rendering)', () => {
     const approved = clipViewModel({ ...clipsFixture[0], status: 'approved' })
     expect(approved.isApproved).toBe(true)
   })
+
+  it('exposes the 4-D virality total + bars + hook type when present (Part I)', () => {
+    const vm = clipViewModel(clipsFixture[0]) // fixture: total 90, hookType statement
+    expect(vm.viralityTotal).toBe(90)
+    expect(vm.hookType).toBe('statement')
+    expect(vm.viralityBars?.map((b) => b.label)).toEqual(['Hook', 'Engage', 'Value', 'Share'])
+    expect(vm.viralityBars?.[0]).toMatchObject({ score: 24, ratio: 24 / 25 })
+  })
+
+  it('omits the breakdown for an old clip with no virality field', () => {
+    const old: Clip = { ...clipsFixture[0], virality: undefined, hookType: undefined }
+    const vm = clipViewModel(old)
+    expect(vm.viralityTotal).toBeUndefined()
+    expect(vm.viralityBars).toBeUndefined()
+    expect(vm.score).toBe(9) // 1-10 headline still renders
+  })
 })
 
 describe('sortClipsForSidebar', () => {

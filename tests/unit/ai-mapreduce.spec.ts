@@ -14,6 +14,7 @@ import {
   dedupeAndRank,
   transcriptHash,
   mapReduceGenerate,
+  reconcileVirality,
   type RawTransport
 } from '@main/services/ai-client'
 import type { TranscriptSegment, DetectedClip } from '@shared/schema'
@@ -88,6 +89,16 @@ describe('dedupeAndRank (reduce step)', () => {
     title: `t${start}`,
     hook: 'h',
     virality_score: score,
+    // dedupeAndRank ranks by the top-level virality_score; the breakdown is
+    // unused here (only mapReduceGenerate reconciles), so a placeholder is fine.
+    virality: {
+      hook_score: 0,
+      engagement_score: 0,
+      value_score: 0,
+      shareability_score: 0,
+      total_score: 0,
+      hook_type: 'none'
+    },
     clip_type: 'hook',
     keywords: [],
     suggested_caption: 'c',
@@ -109,6 +120,69 @@ describe('dedupeAndRank (reduce step)', () => {
     const out = dedupeAndRank([mk(0, 20, 3), mk(30, 50, 9), mk(60, 80, 6)], 2)
     expect(out).toHaveLength(2)
     expect(out.map((c) => c.virality_score)).toEqual([9, 6])
+  })
+})
+
+describe('reconcileVirality (Part I — 4-D scoring)', () => {
+  const base: DetectedClip = {
+    start_time: 0,
+    end_time: 30,
+    title: 't',
+    hook: 'h',
+    virality_score: 1,
+    virality: {
+      hook_score: 24,
+      engagement_score: 22,
+      value_score: 22,
+      shareability_score: 22,
+      total_score: 0, // intentionally wrong — should be recomputed to 90
+      hook_type: 'statement'
+    },
+    clip_type: 'hook',
+    keywords: [],
+    suggested_caption: 'c',
+    hashtags: []
+  }
+
+  it('recomputes total from the four sub-scores and derives the 1-10 headline', () => {
+    const out = reconcileVirality(base)
+    expect(out.virality.total_score).toBe(90) // 24+22+22+22, not the wrong 0
+    expect(out.virality_score).toBe(9) // round(90/10)
+    expect(out.virality.hook_type).toBe('statement') // preserved
+  })
+
+  it('clamps each sub-score into 0-25', () => {
+    const out = reconcileVirality({
+      ...base,
+      virality: {
+        hook_score: 99, // over → 25
+        engagement_score: -5, // under → 0
+        value_score: 0,
+        shareability_score: 0,
+        total_score: 999,
+        hook_type: 'none'
+      }
+    })
+    expect(out.virality.hook_score).toBe(25)
+    expect(out.virality.engagement_score).toBe(0)
+    expect(out.virality.total_score).toBe(25) // 25+0+0+0
+    expect(out.virality_score).toBe(3) // round(25/10) = round(2.5) = 3
+  })
+
+  it('floors the headline at 1 even for an all-zero breakdown', () => {
+    const out = reconcileVirality({
+      ...base,
+      virality: {
+        hook_score: 0,
+        engagement_score: 0,
+        value_score: 0,
+        shareability_score: 0,
+        total_score: 0,
+        hook_type: 'none'
+      }
+    })
+    expect(out.virality.total_score).toBe(0)
+    expect(out.virality_score).toBe(1) // max(1, round(0/10))
   })
 })
 
@@ -140,7 +214,27 @@ describe('mapReduceGenerate (chunk → map → reduce, with caching)', () => {
               end_time: start + 20,
               title: `clip ${call}`,
               hook: 'h',
+              // reconcileVirality recomputes virality_score from these sub-scores:
+              // call 1 sums to 70 (→7), call 2 sums to 90 (→9) so the score-9 clip ranks first.
               virality_score: call === 1 ? 7 : 9,
+              virality:
+                call === 1
+                  ? {
+                      hook_score: 18,
+                      engagement_score: 18,
+                      value_score: 17,
+                      shareability_score: 17,
+                      total_score: 70,
+                      hook_type: 'contrast'
+                    }
+                  : {
+                      hook_score: 24,
+                      engagement_score: 22,
+                      value_score: 22,
+                      shareability_score: 22,
+                      total_score: 90,
+                      hook_type: 'statement'
+                    },
               clip_type: 'hook',
               keywords: [],
               suggested_caption: 'c',

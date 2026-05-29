@@ -47,6 +47,14 @@ describe('clipsSlice (projectStore)', () => {
           title: 'Generated',
           hook: 'h',
           virality_score: 8,
+          virality: {
+            hook_score: 20,
+            engagement_score: 20,
+            value_score: 20,
+            shareability_score: 20,
+            total_score: 80,
+            hook_type: 'statement' as const
+          },
           clip_type: 'hook' as const,
           keywords: [],
           suggested_caption: 'c',

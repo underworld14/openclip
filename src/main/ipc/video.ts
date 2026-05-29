@@ -26,12 +26,17 @@ import type { ImportVideoResult } from '@shared/channels'
 import type { IpcContext } from './index'
 import { registerRunner, hasRunner } from '@main/services/sidecar-manager'
 import { exportRunner } from '@main/services/jobs/export-runner'
+import { urlDownloadRunner } from '@main/services/jobs/url-download-runner'
 import { probeVideo } from '@main/utils/ffprobe'
 
 export function registerVideoHandlers(ctx: IpcContext): void {
   // Plug the streaming export runner into the sidecar's JOB_RUNNERS registry
   // (startup seam, E.4). Guarded so a test re-import doesn't throw.
   if (!hasRunner('export')) registerRunner('export', exportRunner)
+  // F.4: the URL/YouTube import streams via jobs.start('url-download', …). The
+  // renderer half (import-pipeline URL branch) is built by a later agent; expose
+  // the runner now. Guarded so a test re-import doesn't throw.
+  if (!hasRunner('url-download')) registerRunner('url-download', urlDownloadRunner)
 
   // ── System: save dialog (PRD §10.1) ──────────────────────────────────────
   // Ask the user where to write the exported clip. Returns { canceled, filePath }.
@@ -52,6 +57,33 @@ export function registerVideoHandlers(ctx: IpcContext): void {
         ? await dialog.showSaveDialog(win, options)
         : await dialog.showSaveDialog(options)
       return { canceled: result.canceled, filePath: result.filePath || undefined }
+    }
+  )
+
+  // ── System: open dialog (F.3 unified import) ─────────────────────────────
+  // Native file picker for "Choose file…" on the welcome/import screen. Mirrors
+  // SHOW_SAVE_DIALOG. Returns { canceled, filePaths }.
+  ctx.ipcMain.handle(
+    IPCChannels.SHOW_OPEN_DIALOG,
+    async (
+      _e,
+      req: {
+        filters?: Array<{ name: string; extensions: string[] }>
+        properties?: Array<'openFile' | 'openDirectory' | 'multiSelections'>
+      }
+    ): Promise<{ canceled: boolean; filePaths: string[] }> => {
+      const win = ctx.getMainWindow()
+      const options: Electron.OpenDialogOptions = {
+        title: 'Import Video',
+        properties: req?.properties ?? ['openFile'],
+        filters: req?.filters ?? [
+          { name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'webm', 'm4v', 'avi'] }
+        ]
+      }
+      const result = win
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options)
+      return { canceled: result.canceled, filePaths: result.filePaths ?? [] }
     }
   )
 

@@ -111,6 +111,28 @@ export function whisperCliPath(): string {
 }
 
 /**
+ * Absolute path to the `yt-dlp` binary used for URL/YouTube imports (F.4).
+ * dev → `youtube-dl-exec`'s auto-installed binary (`constants.YOUTUBE_DL_PATH`);
+ * prod → bundled extraResource `resources/yt-dlp/<platArch>/yt-dlp`.
+ * `OPENCLIP_YTDLP` overrides everything (tests / smoke harness).
+ *
+ * Mirrors `whisperCliPath`: the binary is large + platform-specific, so it is
+ * NOT committed; `scripts/bundle-binaries.mjs` stages it from the dev path into
+ * `resources/` at package time (plan F.6).
+ */
+export function ytDlpPath(): string {
+  if (process.env.OPENCLIP_YTDLP) return process.env.OPENCLIP_YTDLP
+  if (isDev()) {
+    // youtube-dl-exec ships `constants.YOUTUBE_DL_PATH` → its auto-installed yt-dlp.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const m = require('youtube-dl-exec') as { constants?: { YOUTUBE_DL_PATH?: string } }
+    const p = m.constants?.YOUTUBE_DL_PATH
+    if (p) return p
+  }
+  return join(process.resourcesPath, 'yt-dlp', platArch(), 'yt-dlp')
+}
+
+/**
  * Directory holding `default.metallib` (Metal kernels) next to whisper-cli.
  * Whisper-cli loads it relative to its own dir; in prod it ships beside the
  * binary, in dev brew places it in the cellar — resolved as the binary's dir.

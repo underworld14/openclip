@@ -27,6 +27,7 @@ const SENSITIVE = [
   'OPENCLIP_FFPROBE',
   'OPENCLIP_WHISPER_CLI',
   'OPENCLIP_FONTS_DIR',
+  'OPENCLIP_YTDLP',
   'ELECTRON_RENDERER_URL',
   'NODE_ENV'
 ] as const
@@ -90,6 +91,11 @@ describe('paths.ts prod branch ↔ electron-builder extraResources (PRD §13)', 
     expect(fontsDir()).toBe(join(RESOURCES, 'fonts'))
   })
 
+  it('yt-dlp resolves under <Resources>/yt-dlp/<plat-arch>/yt-dlp (F.4)', async () => {
+    const { ytDlpPath, platArch } = await loadPaths()
+    expect(ytDlpPath()).toBe(join(RESOURCES, 'yt-dlp', platArch(), 'yt-dlp'))
+  })
+
   it('the three prod roots match the extraResources "to" targets', async () => {
     const { ffmpegPath, ffprobePath, whisperCliPath, fontsDir } = await loadPaths()
     // extraResources: resources/ffmpeg→ffmpeg, resources/whisper→whisper, build/fonts→fonts
@@ -103,10 +109,25 @@ describe('paths.ts prod branch ↔ electron-builder extraResources (PRD §13)', 
     env.OPENCLIP_FFMPEG = '/override/ffmpeg'
     env.OPENCLIP_WHISPER_CLI = '/override/whisper-cli'
     env.OPENCLIP_FONTS_DIR = '/override/fonts'
+    env.OPENCLIP_YTDLP = '/override/yt-dlp'
     vi.resetModules()
-    const { ffmpegPath, whisperCliPath, fontsDir } = await loadPaths()
+    const { ffmpegPath, whisperCliPath, fontsDir, ytDlpPath } = await loadPaths()
     expect(ffmpegPath()).toBe('/override/ffmpeg')
     expect(whisperCliPath()).toBe('/override/whisper-cli')
     expect(fontsDir()).toBe('/override/fonts')
+    expect(ytDlpPath()).toBe('/override/yt-dlp')
+  })
+
+  it('dev branch resolves yt-dlp to youtube-dl-exec constants.YOUTUBE_DL_PATH (F.4)', async () => {
+    // Force the dev branch and clear the override so the require('youtube-dl-exec')
+    // path is taken (matches whisperCliPath's PATH-lookup dev behaviour).
+    env.NODE_ENV = 'development'
+    vi.resetModules()
+    // `constants` is a runtime export not present in youtube-dl-exec's .d.ts.
+    const ydl = (await import('youtube-dl-exec')) as unknown as {
+      constants: { YOUTUBE_DL_PATH: string }
+    }
+    const { ytDlpPath } = await loadPaths()
+    expect(ytDlpPath()).toBe(ydl.constants.YOUTUBE_DL_PATH)
   })
 })

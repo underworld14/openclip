@@ -2,12 +2,15 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>Electron</title>
-    <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
-    />
+    <title>OpenClip</title>
+    <!--
+      No <meta http-equiv="Content-Security-Policy"> here ON PURPOSE (F.5).
+      The CSP is the single source of truth in the response header installed by
+      installCsp()/cspHeader() in src/main/index.ts. A page-level <meta> CSP
+      INTERSECTS with the header CSP, and an out-of-date meta tag (missing
+      media-src blob:/file: + connect-src https:) blocked the module script /
+      media in the PACKAGED build → blank white window. Keep CSP header-only.
+    -->
   </head>
 
   <body>

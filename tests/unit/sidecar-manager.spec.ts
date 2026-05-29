@@ -87,6 +87,10 @@ describe('SidecarManager concurrency math (PRD §17)', () => {
     expect(exportConcurrency(8)).toBe(2)
     expect(concurrencyFor('export', 4)).toBe(1)
   })
+  it('model-download overlaps (4) and url-download overlaps (2)', () => {
+    expect(concurrencyFor('model-download', 10)).toBe(4)
+    expect(concurrencyFor('url-download', 10)).toBe(2)
+  })
 })
 
 describe('SidecarManager.startJob drives a scripted runner to done over a real port', () => {

@@ -4,6 +4,7 @@
 # `extraResources` and resolved at runtime by src/main/utils/paths.ts:
 #   resources/ffmpeg  → <Resources>/ffmpeg/<plat-arch>/{ffmpeg,ffprobe}
 #   resources/whisper → <Resources>/whisper/<plat-arch>/whisper-cli
+#   resources/yt-dlp  → <Resources>/yt-dlp/<plat-arch>/yt-dlp   (URL/YouTube import, F.4)
 #   build/fonts       → <Resources>/fonts/DejaVuSans.ttf   (libass fontsdir)
 # These directories are populated by scripts/bundle-binaries.mjs (run in the
 # `beforePack` hook below) so the bundle is reproducible and not committed.
@@ -43,6 +44,10 @@ extraResources:
       - '**/*'
   - from: resources/whisper
     to: whisper
+    filter:
+      - '**/*'
+  - from: resources/yt-dlp
+    to: yt-dlp
     filter:
       - '**/*'
   - from: build/fonts

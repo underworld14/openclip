@@ -7,7 +7,7 @@
  * `composeProject()` + `buildExportParams()` (integration-gap fix, task 5).
  */
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { buildExportParams } from '@renderer/stores/projectStore/exportSlice'
 import {
@@ -15,6 +15,8 @@ import {
   openExportFolder,
   defaultClipFileName
 } from '@renderer/components/export-run'
+import { runBatchExport } from '@renderer/components/batch-export'
+import { PLATFORM_PRESETS, platformPreset } from '@renderer/components/platformPresets'
 import { CAPTION_PRESETS, resolveEffectiveCaptionStyle } from '@renderer/components/captionPresets'
 import { resolveBounds } from '@shared/clip-bounds'
 import { Button } from '@renderer/components/ui/button'
@@ -54,6 +56,7 @@ export function ExportPanel(): React.JSX.Element {
   const selectClip = useProjectStore((s) => s.selectClip)
   const composeProject = useProjectStore((s) => s.composeProject)
   const addExportRecord = useProjectStore((s) => s.addExportRecord)
+  const markExported = useProjectStore((s) => s.markExported)
   const setProjectSettings = useProjectStore((s) => s.setProjectSettings)
   // Part K: reframe lives in the shared previewSlice so the preview badge + the
   // export use one source of truth.
@@ -149,6 +152,67 @@ export function ExportPanel(): React.JSX.Element {
   const reveal = useCallback(async (): Promise<void> => {
     if (outputPath) await openExportFolder(window.openclip, outputPath)
   }, [outputPath])
+
+  // ── Batch export (Part K, Step 4): all APPROVED clips → one folder ──────────
+  const [platformId, setPlatformId] = useState('tiktok')
+  const [batch, setBatch] = useState<{
+    running: boolean
+    total: number
+    done: number
+    failed: number
+  } | null>(null)
+  const batchAbort = useRef<AbortController | null>(null)
+  const approvedClips = useMemo(() => clips.filter((c) => c.status === 'approved'), [clips])
+
+  const runBatch = useCallback(async (): Promise<void> => {
+    const project = composeProject()
+    const preset = platformPreset(platformId)
+    if (!project || !preset || approvedClips.length === 0) return
+    const dir = await window.openclip.system.directoryDialog({})
+    if (dir.canceled || !dir.dirPath) return
+
+    const controller = new AbortController()
+    batchAbort.current = controller
+    setBatch({ running: true, total: approvedClips.length, done: 0, failed: 0 })
+
+    const results = await runBatchExport({
+      bridge: window.openclip,
+      project,
+      clips: approvedClips,
+      dir: dir.dirPath,
+      preset,
+      signal: controller.signal,
+      onClipStatus: (_id, status) =>
+        setBatch((b) =>
+          b
+            ? {
+                ...b,
+                done: b.done + (status === 'done' ? 1 : 0),
+                failed: b.failed + (status === 'error' || status === 'canceled' ? 1 : 0)
+              }
+            : b
+        )
+    })
+
+    const exported: string[] = []
+    for (const r of results) {
+      if (r.status === 'done' && r.result) {
+        exported.push(r.clipId)
+        addExportRecord({
+          id: `exp-${Date.now().toString(36)}-${r.clipId}`,
+          clipId: r.clipId,
+          outputPath: r.outputPath,
+          exportedAt: Date.now(),
+          width: r.result.width,
+          height: r.result.height,
+          format: 'mp4'
+        })
+      }
+    }
+    if (exported.length) markExported(exported)
+    setBatch((b) => (b ? { ...b, running: false } : b))
+    batchAbort.current = null
+  }, [composeProject, platformId, approvedClips, addExportRecord, markExported])
 
   return (
     <div data-testid="export-panel" className="flex flex-col gap-3 p-3 text-sm">
@@ -295,6 +359,55 @@ export function ExportPanel(): React.JSX.Element {
                 Open folder
               </Button>
             )}
+          </div>
+
+          {/* Batch export (Part K, Step 4): every APPROVED clip → one chosen
+              folder with a per-platform preset (reuses the per-clip job path). */}
+          <div className="flex flex-col gap-1.5 border-t pt-3" data-testid="batch-export">
+            <span className="text-xs font-medium">Batch export</span>
+            <label className="flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground">Platform:</span>
+              <select
+                data-testid="batch-platform-select"
+                className="flex-1 rounded-md border bg-background px-2 py-1"
+                value={platformId}
+                onChange={(e) => setPlatformId(e.target.value)}
+              >
+                {PLATFORM_PRESETS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.aspectRatio})
+                  </option>
+                ))}
+              </select>
+            </label>
+            {batch && (
+              <span className="text-xs text-muted-foreground" data-testid="batch-progress">
+                {batch.done}/{batch.total} exported
+                {batch.failed ? ` · ${batch.failed} failed` : ''}
+                {batch.running ? ' …' : ''}
+              </span>
+            )}
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                data-testid="batch-export-start"
+                disabled={approvedClips.length === 0 || !!batch?.running}
+                onClick={() => void runBatch()}
+              >
+                {batch?.running ? 'Exporting…' : `Export all approved (${approvedClips.length})`}
+              </Button>
+              {batch?.running && (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  data-testid="batch-cancel"
+                  onClick={() => batchAbort.current?.abort()}
+                >
+                  Cancel all
+                </Button>
+              )}
+            </div>
           </div>
         </>
       )}

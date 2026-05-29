@@ -23,6 +23,8 @@ export interface ClipsSlice {
   /** Approve / reject a suggested clip (PRD §6.3 clip cards). */
   approveClip: (id: string) => void
   rejectClip: (id: string) => void
+  /** Mark clip(s) exported after a (batch) export completes (Part K, Step 4). */
+  markExported: (ids: string | string[]) => void
   /** Run BYOK AI clip detection via the bridge and seed the clip list. */
   generateClips: (req: GenerateClipsRequest) => Promise<void>
 }
@@ -63,6 +65,12 @@ export const createClipsSlice: StateCreator<ProjectStore, [], [], ClipsSlice> = 
   approveClip: (id) =>
     set((s) => ({ clips: s.clips.map((c) => (c.id === id ? { ...c, status: 'approved' } : c)) })),
   rejectClip: (id) => set((s) => ({ clips: s.clips.filter((c) => c.id !== id) })),
+  markExported: (ids) => {
+    const set_ = new Set(Array.isArray(ids) ? ids : [ids])
+    set((s) => ({
+      clips: s.clips.map((c) => (set_.has(c.id) ? { ...c, status: 'exported' } : c))
+    }))
+  },
   generateClips: async (req) => {
     set({ generating: true, generateError: null })
     try {

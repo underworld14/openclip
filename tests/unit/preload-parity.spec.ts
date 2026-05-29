@@ -95,6 +95,8 @@ describe('preload parity: real bridge method-set === mock method-set', () => {
     expect(methodKeys(realBridge.model)).toEqual(['download', 'status'])
     expect(methodKeys(realBridge.system)).toEqual([
       'checkUpdate',
+      'directoryDialog',
+      'imageDialog',
       'openDialog',
       'openFolder',
       'saveDialog'

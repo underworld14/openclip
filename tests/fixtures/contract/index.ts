@@ -20,7 +20,8 @@ import type {
   Settings,
   ClipSchema,
   SourceVideo,
-  ExportRecord
+  ExportRecord,
+  BrandTemplate
 } from '@shared/schema'
 import type {
   JobEvent,
@@ -241,4 +242,42 @@ export const modelDownloadPartialFixture: JobPartial['model-download'] = {
 export const transcribeDoneFixture: JobEventFor<'transcribe'> = {
   t: 'done',
   result: transcribeResultFixture
+}
+
+// ── Part K: caption template gallery + brand kit (additive-optional fields) ───
+// These exercise the NEW optional CaptionStyle/ProjectSettings/BrandTemplate/
+// Project fields. The brand-less `projectFixture` above stays the BACK-COMPAT
+// case (no Part-K fields) — contract.spec asserts BOTH still validate.
+
+/** A CaptionStyle using the Part-K optional fields (keyword/emoji/per-word anim). */
+export const captionStyleRichFixture: CaptionStyle = {
+  ...captionStyleFixture,
+  keywordColor: '#00FF00',
+  keywordScale: 120,
+  keywordBold: true,
+  perWordAnimation: 'bounce',
+  autoEmoji: 'local',
+  emojiPosition: 'after',
+  wordsPerLine: 4
+}
+
+/** A brand-kit template (Part K) with logo placement + a brand caption style. */
+export const brandTemplateFixture: BrandTemplate = {
+  id: 'brand-1',
+  name: 'Acme',
+  logoPath: '/Users/me/Library/Application Support/OpenClip/brands/brand-1/logo.png',
+  brandColors: ['#FF6600', '#1A1A1A'],
+  fontFamily: 'Anton',
+  logoPosition: 'bottom-right',
+  logoScale: 0.18,
+  logoMargin: 48,
+  captionStyle: captionStyleRichFixture
+}
+
+/** A Project exercising the Part-K optional fields (caption template + brand). */
+export const projectWithBrandFixture: Project = {
+  ...projectFixture,
+  settings: { ...projectFixture.settings, captionTemplateId: 'hormozi' },
+  brandTemplate: brandTemplateFixture,
+  activeBrandId: 'brand-1'
 }

@@ -71,6 +71,11 @@ export enum IPCChannels {
   OPEN_FOLDER = 'system:open-folder',
   SHOW_SAVE_DIALOG = 'system:save-dialog',
   SHOW_OPEN_DIALOG = 'system:open-dialog',
+  // Part K — pick an output FOLDER for batch export (Step 4) and a PNG logo for
+  // the brand kit (Step 5). Both hard-scoped server-side (least-privilege, G.7):
+  // directory picker / single-PNG picker; the renderer cannot widen them.
+  SHOW_DIRECTORY_DIALOG = 'system:directory-dialog',
+  SHOW_IMAGE_DIALOG = 'system:image-dialog',
   CHECK_UPDATE = 'system:check-update'
 }
 
@@ -259,6 +264,16 @@ export interface ChannelMap {
   // is hard-scoped server-side to a single video file (G.7 least-privilege), so
   // the renderer cannot widen it (e.g. to a directory / all files).
   [IPCChannels.SHOW_OPEN_DIALOG]: ChannelPayload<
+    Record<string, never>,
+    { canceled: boolean; filePaths: string[] }
+  >
+  // Batch export (Step 4): choose ONE output folder; hard-scoped to a directory.
+  [IPCChannels.SHOW_DIRECTORY_DIALOG]: ChannelPayload<
+    Record<string, never>,
+    { canceled: boolean; dirPath?: string }
+  >
+  // Brand kit (Step 5): pick a single PNG logo; hard-scoped to a PNG file.
+  [IPCChannels.SHOW_IMAGE_DIALOG]: ChannelPayload<
     Record<string, never>,
     { canceled: boolean; filePaths: string[] }
   >

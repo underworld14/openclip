@@ -94,7 +94,18 @@ export const CaptionStyle = z.object({
   highlightColor: z.string().optional(), // karaoke current-word fill (PrimaryColour)
   strokeColor: z.string().optional(), // text outline (OutlineColour)
   strokeWidth: z.number().optional(), // outline thickness (ASS Outline)
-  shadow: z.boolean().optional() // drop shadow on/off (ASS Shadow)
+  shadow: z.boolean().optional(), // drop shadow on/off (ASS Shadow)
+  // Part K — caption template gallery + auto-emoji + keyword highlight. ALL
+  // OPTIONAL so pre-Part-K `.ocproj` still validate AND ass-captions reproduces
+  // today's `.ass` output BYTE-FOR-BYTE when absent (no keyword recolor/scale, no
+  // per-word animation, no emoji, default 7 words/line — see ass-captions.ts).
+  keywordColor: z.string().optional(), // distinct fill for emphasized (keyword) words
+  keywordScale: z.number().optional(), // % scale applied to keyword words (absent ⇒ none)
+  keywordBold: z.boolean().optional(), // embolden keyword words
+  perWordAnimation: z.enum(['none', 'bounce', 'pop']).optional(), // inline per-word reveal anim
+  autoEmoji: z.enum(['off', 'local', 'ai']).optional(), // emoji source (local dict / BYOK AI)
+  emojiPosition: z.enum(['after', 'before']).optional(), // emoji placement vs the word
+  wordsPerLine: z.number().optional() // caption line length (absent ⇒ buildAss default 7)
 })
 export type CaptionStyle = z.infer<typeof CaptionStyle>
 
@@ -192,7 +203,10 @@ export const ProjectSettings = z.object({
   clipStyle: ClipStyle,
   maxClips: z.number(),
   minDuration: z.number(), // default 15
-  maxDuration: z.number() // default 90
+  maxDuration: z.number(), // default 90
+  // Part K — the selected caption template id (captionPresets.ts). Optional so
+  // pre-Part-K `.ocproj` validate; absent ⇒ the app-default caption style.
+  captionTemplateId: z.string().optional()
 })
 export type ProjectSettings = z.infer<typeof ProjectSettings>
 
@@ -207,7 +221,13 @@ export const BrandTemplate = z.object({
   brandColors: z.array(z.string()).optional(),
   fontFamily: z.string().optional(),
   introPath: z.string().optional(),
-  outroPath: z.string().optional()
+  outroPath: z.string().optional(),
+  // Part K (brand kit) — logo overlay placement + a brand-defined base caption
+  // style. All OPTIONAL; brand kit was dormant so nothing depends on these.
+  logoPosition: z.enum(['top-left', 'top-right', 'bottom-left', 'bottom-right']).optional(),
+  logoScale: z.number().optional(), // logo width as a fraction of output width (default 0.18)
+  logoMargin: z.number().optional(), // inset px at the 1080-wide canvas (default 48)
+  captionStyle: CaptionStyle.optional() // brand base caption style (merged over the preset)
 })
 export type BrandTemplate = z.infer<typeof BrandTemplate>
 
@@ -278,6 +298,9 @@ export const Project = z.object({
   clips: z.array(Clip),
   settings: ProjectSettings,
   brandTemplate: BrandTemplate.optional(), // v0.5 (typed now, unused in MVP)
+  // Part K (brand kit) — id of the active APP-LEVEL brand (brands live in the
+  // brand library, not inlined here). Optional ⇒ pre-Part-K `.ocproj` validate.
+  activeBrandId: z.string().optional(),
   exportHistory: z.array(ExportRecord)
 })
 export type Project = z.infer<typeof Project>

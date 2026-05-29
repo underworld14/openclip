@@ -19,4 +19,4 @@ export * from './ffmpeg-core'
 // ── SEAM: fan-out tracks append their re-exports below (one writer per line) ──
 export * from './ffmpeg-extract'
 export * from './ffmpeg-export'
-// spine:    export * from './ffmpeg-caption'
+export * from './ffmpeg-caption'

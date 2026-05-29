@@ -31,7 +31,7 @@
  * A renderer crash (port close) is treated as an implicit cancel.
  */
 
-import type { Transcript, TranscriptSegment, WordTimestamp } from './schema'
+import type { CaptionStyle, Transcript, TranscriptSegment, WordTimestamp } from './schema'
 
 // ============================================================================
 // Job taxonomy
@@ -91,8 +91,25 @@ export interface JobParams {
     aspectRatio: '9:16' | '1:1' | '4:5' | '16:9'
     /** Absolute path the user chose to write the final clip to. */
     outputPath: string
-    /** Path to a generated .ass file to burn (libass), if captions are on. */
+    /**
+     * Path to an ALREADY-generated .ass file to burn (libass). Usually left
+     * undefined: the renderer cannot write files, so it passes `captions`
+     * instead and the export runner GENERATES the .ass into the per-job temp dir
+     * (PRD §17) before threading the resulting path here. A caller that already
+     * has an .ass on disk may set this directly (it takes precedence).
+     */
     assPath?: string
+    /**
+     * Karaoke caption inputs (PRD §6.4). When present (and `assPath` is not), the
+     * export runner builds a word-level karaoke `.ass` from these and burns it in
+     * the SAME re-encode (`crop,scale,subtitles=…:fontsdir=…`, fix M3). `words`
+     * are the project transcript words (ABSOLUTE seconds); the runner scopes +
+     * rebases them to the clip's resolved bounds.
+     */
+    captions?: {
+      words: WordTimestamp[]
+      style?: CaptionStyle
+    }
     quality: '720p' | '1080p'
   }
   /** Stream a GGML model from HuggingFace to userData/models (PRD §13). */

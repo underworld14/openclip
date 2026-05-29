@@ -29,7 +29,8 @@ import {
   exportClip as defaultExportClip,
   type ExportClipResult
 } from '@main/services/ffmpeg-export'
-import { fontsDir as defaultFontsDir } from '@main/utils/paths'
+import { writeClipCaptions as defaultWriteClipCaptions } from '@main/services/ffmpeg-caption'
+import { fontsDir as defaultFontsDir, jobTempDir, TEMP_NAMES } from '@main/utils/paths'
 
 export interface ExportRunnerDeps {
   /** The cut+reframe+re-encode service (injected for tests). */
@@ -47,6 +48,16 @@ export interface ExportRunnerDeps {
   }) => Promise<ExportClipResult>
   /** Resolve the libass fontsdir (injected for tests). */
   fontsDir?: () => string
+  /** Generate + write the karaoke .ass and return its path (injected for tests). */
+  writeClipCaptions?: (opts: {
+    words: NonNullable<JobParams['export']['captions']>['words']
+    clipStart: number
+    clipEnd: number
+    style?: NonNullable<JobParams['export']['captions']>['style']
+    assPath: string
+  }) => string
+  /** Resolve the per-job temp .ass path (injected for tests). */
+  resolveAssPath?: (projectId: string, jobId: string, clipId: string) => string
 }
 
 /**
@@ -58,6 +69,11 @@ export interface ExportRunnerDeps {
 export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'export'> {
   const exportClip = deps.exportClip ?? defaultExportClip
   const resolveFontsDir = deps.fontsDir ?? defaultFontsDir
+  const writeClipCaptions = deps.writeClipCaptions ?? defaultWriteClipCaptions
+  const resolveAssPath =
+    deps.resolveAssPath ??
+    ((projectId, jobId, clipId) =>
+      `${jobTempDir(projectId, jobId)}/${TEMP_NAMES.captionsAss(clipId)}`)
 
   return async (
     params: JobParams['export'],
@@ -66,6 +82,21 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
   ): Promise<JobResult['export']> => {
     emit.progress(0, 'encoding')
 
+    // Resolve the .ass to burn: an explicitly-supplied `assPath` wins; otherwise,
+    // if karaoke caption inputs are present, GENERATE the .ass into the per-job
+    // temp dir (PRD §17) from the clip's word timestamps + style, scoped+rebased
+    // to the clip's resolved bounds. No captions → no subtitles filter (fix M3).
+    let assPath = params.assPath
+    if (!assPath && params.captions) {
+      assPath = writeClipCaptions({
+        words: params.captions.words,
+        clipStart: params.startTime,
+        clipEnd: params.endTime,
+        style: params.captions.style,
+        assPath: resolveAssPath(params.projectId, ctx.jobId, params.clipId)
+      })
+    }
+
     const result = await exportClip({
       sourcePath: params.sourcePath,
       outputPath: params.outputPath,
@@ -73,9 +104,9 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
       endTime: params.endTime,
       aspectRatio: params.aspectRatio,
       quality: params.quality,
-      assPath: params.assPath,
+      assPath,
       // Only needed when captions are burned; harmless otherwise.
-      fontsDir: params.assPath ? resolveFontsDir() : undefined,
+      fontsDir: assPath ? resolveFontsDir() : undefined,
       onProgress: (pct) => emit.progress(pct, 'encoding'),
       signal: ctx.signal
     })

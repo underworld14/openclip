@@ -101,6 +101,35 @@ describe('buildExportParams (pure, applies resolveBounds)', () => {
       })
     ).toThrow(/non-positive/)
   })
+
+  it('threads caption inputs (words + style) when captionsEnabled (PRD §6.4)', () => {
+    const params = buildExportParams({
+      projectId: 'p1',
+      clip: { ...clipFixture, editedStart: undefined, editedEnd: undefined },
+      source: projectFixture.sourceVideo,
+      settings: projectFixture.settings,
+      outputPath: '/o.mp4',
+      captionsEnabled: true,
+      words: transcriptFixture.words
+    })
+    expect(params.captions).toBeDefined()
+    expect(params.captions!.words).toBe(transcriptFixture.words)
+  })
+
+  it('omits captions when disabled or when no words are supplied', () => {
+    const base = {
+      projectId: 'p1',
+      clip: { ...clipFixture, editedStart: undefined, editedEnd: undefined },
+      source: projectFixture.sourceVideo,
+      settings: projectFixture.settings,
+      outputPath: '/o.mp4'
+    }
+    expect(buildExportParams({ ...base, captionsEnabled: false }).captions).toBeUndefined()
+    expect(
+      buildExportParams({ ...base, captionsEnabled: true, words: [] }).captions
+    ).toBeUndefined()
+    expect(buildExportParams(base).captions).toBeUndefined()
+  })
 })
 
 // ── Store-level composition (the integration-gap assertion) ──────────────────

@@ -17,7 +17,15 @@
  */
 
 import type { StateCreator } from 'zustand'
-import type { ExportRecord, Project, Clip, SourceVideo, ProjectSettings } from '@shared/schema'
+import type {
+  ExportRecord,
+  Project,
+  Clip,
+  SourceVideo,
+  ProjectSettings,
+  CaptionStyle,
+  WordTimestamp
+} from '@shared/schema'
 import type { JobParams } from '@shared/jobs'
 import { resolveBounds } from '@shared/clip-bounds'
 import type { ProjectStore } from './index'
@@ -65,6 +73,17 @@ export function buildExportParams(args: {
   outputPath: string
   quality?: '720p' | '1080p'
   assPath?: string
+  /**
+   * Burn word-level karaoke captions (PRD §6.4). When true, the project's
+   * transcript words (ABSOLUTE seconds) + the chosen style are threaded into
+   * `JobParams['export'].captions`; the export runner scopes+rebases them to the
+   * clip's resolved bounds and burns the generated .ass in the same re-encode.
+   */
+  captionsEnabled?: boolean
+  /** The full transcript word stream (kept local; PRD §16). Required when captionsEnabled. */
+  words?: WordTimestamp[]
+  /** Caption style to map to ASS (font/size/color/bg/position/animation). */
+  captionStyle?: CaptionStyle
 }): JobParams['export'] {
   const { start, end } = resolveBounds(args.clip)
   if (!(end > start)) {
@@ -79,6 +98,10 @@ export function buildExportParams(args: {
     aspectRatio: args.settings.aspectRatio,
     outputPath: args.outputPath,
     assPath: args.assPath,
+    captions:
+      args.captionsEnabled && args.words && args.words.length > 0
+        ? { words: args.words, style: args.captionStyle }
+        : undefined,
     quality: args.quality ?? '1080p'
   }
 }

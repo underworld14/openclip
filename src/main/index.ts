@@ -30,10 +30,20 @@ import {
   type EventPort
 } from './services/sidecar-manager'
 import { createKeyVault } from './utils/security'
+import {
+  MEDIA_SCHEME,
+  registerMediaScheme,
+  installMediaProtocolHandler
+} from './utils/media-protocol'
 
 let mainWindow: BrowserWindow | null = null
 const sidecar = new SidecarManager()
 const keyVault = createKeyVault()
+
+// The source-video preview protocol (PRD §6.6) is PRIVILEGED and must be
+// registered before `app.whenReady()` — this runs at module-eval time. The
+// handler itself is installed after ready (see whenReady below).
+registerMediaScheme()
 
 // ============================================================================
 // Content-Security-Policy (PRD §12.2 — no eval, no inline scripts)
@@ -51,7 +61,9 @@ function cspHeader(): string {
       "script-src 'self'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob:",
-      "media-src 'self' blob: file:",
+      // The privileged `openclip-media:` scheme serves the source video to the
+      // preview <video> (PRD §6.6); it bypasses CSP itself but is listed here too.
+      `media-src 'self' blob: file: ${MEDIA_SCHEME}:`,
       "connect-src 'self' ws: http: https:",
       "font-src 'self' data:"
     ].join('; ')
@@ -61,7 +73,7 @@ function cspHeader(): string {
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
-    "media-src 'self' blob: file:",
+    `media-src 'self' blob: file: ${MEDIA_SCHEME}:`,
     "connect-src 'self' https:",
     "font-src 'self' data:"
   ].join('; ')
@@ -187,6 +199,10 @@ app.whenReady().then(async () => {
   sidecar.installLifecycleHooks(app)
 
   installCsp()
+
+  // Serve the source video to the preview <video> over the privileged scheme
+  // (PRD §6.6). The scheme was registered as privileged at module-eval time.
+  installMediaProtocolHandler()
 
   // Smoke round-trip used by Gate A.
   ipcMain.handle('ping', () => 'pong')

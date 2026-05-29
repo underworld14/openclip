@@ -178,6 +178,7 @@ export function createMockOpenclip(opts: MockOptions = {}): OpenClipBridge {
     project: buildMockNamespace('project') as OpenClipBridge['project'],
     settings: buildMockNamespace('settings') as OpenClipBridge['settings'],
     model: buildMockNamespace('model') as OpenClipBridge['model'],
+    system: buildMockNamespace('system') as OpenClipBridge['system'],
     jobs: buildMockJobs(opts)
   }
 }

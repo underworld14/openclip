@@ -23,6 +23,7 @@ import { buildAiApi } from './api/ai'
 import { buildProjectApi } from './api/project'
 import { buildSettingsApi } from './api/settings'
 import { buildModelApi } from './api/model'
+import { buildSystemApi } from './api/system'
 import { buildJobsApi, installJobPortForwarder } from './api/jobs'
 
 // ============================================================================
@@ -42,6 +43,8 @@ export interface OpenClipBridge {
   settings: NamespaceMethods<'settings'>
   /** model:status|download */
   model: NamespaceMethods<'model'>
+  /** system:open-folder|save-dialog|check-update → openFolder|saveDialog|checkUpdate */
+  system: NamespaceMethods<'system'>
   /** streaming jobs — modeled by JobsAPI (start→{jobId}; port out-of-band) */
   jobs: JobsAPI
 }
@@ -57,6 +60,7 @@ const openclip: OpenClipBridge = {
   project: buildProjectApi(),
   settings: buildSettingsApi(),
   model: buildModelApi(),
+  system: buildSystemApi(),
   jobs: buildJobsApi()
 }
 

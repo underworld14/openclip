@@ -1,0 +1,287 @@
+/**
+ * src/main/services/ffmpeg-export.ts — frame-accurate cut + 9:16 reframe +
+ * re-encode (EXPORT spine, plan E.5 / PRD §6.5/§6.9 / Appendix A).
+ *
+ * Composes on the trunk's frozen `ffmpeg-core` (`runFfmpeg` + the stderr→progress
+ * parser) — never re-implements spawning. Re-exported through the `ffmpeg.ts`
+ * barrel so consumers `import { exportClip } from '@main/services/ffmpeg'`.
+ *
+ * VERIFIED command (PRD Appendix A, confirmed empirically on ffmpeg-static which
+ * HAS h264_videotoolbox + libass):
+ *
+ *   ffmpeg -ss <start> -i src -to <relEnd> \
+ *     -vf "crop=ih*9/16:ih,scale=1080:1920" \
+ *     -c:v h264_videotoolbox -b:v 8M -c:a aac out.mp4
+ *
+ * Frame accuracy (PRD §6.6, §18): the cut is a RE-ENCODE, NOT `-c copy`. With
+ * `-ss` BEFORE `-i` ffmpeg seeks then decodes from the nearest keyframe and
+ * re-encodes from the exact requested time, so the output's first-frame PTS is 0
+ * and its duration is the requested span within ±1 frame (verified: a 2.5s cut
+ * of a 30fps source → exactly 75 frames, 1080×1920, h264, PTS 0). `-to` AFTER
+ * `-i` (with `-ss` before `-i`) is a DURATION relative to the seek point — so we
+ * pass `end - start`, never the absolute end (a common ffmpeg footgun).
+ *
+ * CAPTION-BURN SEAM (plan E.5, fix M3 — note for the caption-burn stage): the
+ * caption stage inserts a `subtitles=<ass>:fontsdir=<dir>` filter at the END of
+ * this filtergraph, i.e. `crop=…,scale=…,subtitles=…:fontsdir=…`. `buildVf()`
+ * already accepts an optional `assPath`/`fontsDir` and appends exactly that node
+ * (proven filtergraph order from the Stage-4 libass smoke). When wired, the
+ * caption stage passes `assPath` through `ExportClipOptions` — no other change.
+ */
+
+import { runFfmpeg, type RunFfmpegOptions } from './ffmpeg-core'
+import type { AspectRatio } from '@shared/schema'
+
+// ============================================================================
+// Pure arg building (unit-tested without a real binary — PRD §18)
+// ============================================================================
+
+/** Target output dimensions for a given aspect ratio (width × height, 1080-wide family). */
+export interface OutputDimensions {
+  width: number
+  height: number
+}
+
+/**
+ * Map an aspect ratio to its export output dimensions (PRD §6.5: 9:16 default;
+ * 1:1 and 4:5 also supported in MVP; 16:9 kept for completeness).
+ *   9:16 → 1080×1920 · 1:1 → 1080×1080 · 4:5 → 1080×1350 · 16:9 → 1920×1080
+ */
+export function outputDimensions(aspect: AspectRatio): OutputDimensions {
+  switch (aspect) {
+    case '9:16':
+      return { width: 1080, height: 1920 }
+    case '1:1':
+      return { width: 1080, height: 1080 }
+    case '4:5':
+      return { width: 1080, height: 1350 }
+    case '16:9':
+      return { width: 1920, height: 1080 }
+  }
+}
+
+/**
+ * The center-crop expression for a target aspect ratio, cropping the SOURCE to
+ * the target ratio about its center before scaling. For 9:16: `crop=ih*9/16:ih`
+ * (PRD Appendix A) — crop a 9:16-wide column the full source height. Generalized
+ * per ratio so 1:1 / 4:5 / 16:9 also center-crop correctly.
+ */
+export function cropExpr(aspect: AspectRatio): string {
+  switch (aspect) {
+    case '9:16':
+      return 'crop=ih*9/16:ih'
+    case '1:1':
+      return 'crop=ih:ih'
+    case '4:5':
+      return 'crop=ih*4/5:ih'
+    case '16:9':
+      return 'crop=iw:iw*9/16'
+  }
+}
+
+export interface BuildVfOptions {
+  aspectRatio: AspectRatio
+  /**
+   * If set, a libass `.ass` file to burn — appended as the FINAL filter node so
+   * captions are rendered AFTER the crop/scale (the proven order, fix M3). The
+   * caption-burn stage passes this through; export alone leaves it undefined.
+   */
+  assPath?: string
+  /** fontsdir for libass so a bundled font resolves deterministically (fix M3). */
+  fontsDir?: string
+}
+
+/**
+ * Build the `-vf` filtergraph string: `<crop>,scale=W:H[,subtitles=…:fontsdir=…]`.
+ * The optional subtitles node is appended LAST (the caption-burn seam). Paths
+ * inside the `subtitles=` filter are escaped for the filtergraph mini-language.
+ */
+export function buildVf(opts: BuildVfOptions): string {
+  const { width, height } = outputDimensions(opts.aspectRatio)
+  const nodes = [cropExpr(opts.aspectRatio), `scale=${width}:${height}`]
+  if (opts.assPath) {
+    let sub = `subtitles=${escapeFilterPath(opts.assPath)}`
+    if (opts.fontsDir) sub += `:fontsdir=${escapeFilterPath(opts.fontsDir)}`
+    nodes.push(sub)
+  }
+  return nodes.join(',')
+}
+
+/**
+ * Escape a filesystem path for use as a value inside an FFmpeg `-vf` filtergraph
+ * (the `subtitles=` source). FFmpeg's filtergraph parser treats `:` `'` `\` `[`
+ * `]` `,` `;` specially; libass burns are the only place we embed a path, so we
+ * backslash-escape the characters that would otherwise break the graph.
+ */
+export function escapeFilterPath(p: string): string {
+  return p.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "\\'")
+}
+
+/** Video-bitrate target per quality preset (PRD §6.9 quality presets). */
+export function videoBitrate(quality: '720p' | '1080p'): string {
+  return quality === '720p' ? '5M' : '8M'
+}
+
+export interface ExportArgsOptions {
+  sourcePath: string
+  outputPath: string
+  /** Absolute seconds into the source where the clip starts. */
+  startTime: number
+  /** Absolute seconds into the source where the clip ends. */
+  endTime: number
+  aspectRatio: AspectRatio
+  quality: '720p' | '1080p'
+  /** Optional libass `.ass` to burn (caption-burn seam, fix M3). */
+  assPath?: string
+  /** fontsdir for libass (caption-burn seam). */
+  fontsDir?: string
+  /**
+   * Use the CPU encoder (libx264) instead of h264_videotoolbox (PRD §14 GPU
+   * fallback / Settings "force CPU"). Default false → videotoolbox on macOS.
+   */
+  forceCpu?: boolean
+}
+
+/**
+ * Build the verified frame-accurate cut + reframe + re-encode argv.
+ *
+ *   -ss <start> -i src -to <end-start> -vf "<crop>,scale=W:H[,subtitles=…]"
+ *   -c:v h264_videotoolbox -b:v <q> -c:a aac -movflags +faststart out
+ *
+ * `-ss` is placed BEFORE `-i` (fast keyframe seek + re-encode for accuracy) and
+ * `-to` AFTER `-i` is the clip DURATION relative to the seek point (NOT the
+ * absolute end). `-progress pipe:2 -nostats` lets ffmpeg-core parse progress.
+ * Throws if the resolved span is non-positive (caller surfaces INPUT_INVALID).
+ */
+export function exportClipArgs(opts: ExportArgsOptions): string[] {
+  const duration = opts.endTime - opts.startTime
+  if (!(duration > 0)) {
+    throw new Error(
+      `ffmpeg-export: non-positive clip span (start=${opts.startTime}, end=${opts.endTime})`
+    )
+  }
+  const codecArgs = opts.forceCpu
+    ? ['-c:v', 'libx264', '-preset', 'medium', '-crf', '18']
+    : ['-c:v', 'h264_videotoolbox', '-b:v', videoBitrate(opts.quality)]
+
+  return [
+    '-hide_banner',
+    '-y',
+    // fast keyframe seek BEFORE -i, then re-encode from the exact time:
+    '-ss',
+    String(opts.startTime),
+    '-i',
+    opts.sourcePath,
+    // duration relative to the seek point (frame-accurate cut):
+    '-to',
+    String(duration),
+    '-vf',
+    buildVf({ aspectRatio: opts.aspectRatio, assPath: opts.assPath, fontsDir: opts.fontsDir }),
+    ...codecArgs,
+    '-c:a',
+    'aac',
+    '-b:a',
+    '192k',
+    // streaming-friendly mp4 (moov atom up front) so the export is web-playable:
+    '-movflags',
+    '+faststart',
+    '-progress',
+    'pipe:2',
+    '-nostats',
+    opts.outputPath
+  ]
+}
+
+export interface ThumbnailArgsOptions {
+  sourcePath: string
+  outputPath: string
+  /** Absolute seconds to grab the single frame at. */
+  atTime: number
+  aspectRatio: AspectRatio
+}
+
+/**
+ * Build the single-frame thumbnail argv (PRD Appendix A `-vframes 1`), reframed
+ * to the same aspect ratio as the export so the thumbnail matches the clip.
+ *   ffmpeg -ss <t> -i src -vframes 1 -vf "<crop>,scale=W:H" thumb.jpg
+ */
+export function thumbnailArgs(opts: ThumbnailArgsOptions): string[] {
+  return [
+    '-hide_banner',
+    '-y',
+    '-ss',
+    String(opts.atTime),
+    '-i',
+    opts.sourcePath,
+    '-vframes',
+    '1',
+    '-vf',
+    buildVf({ aspectRatio: opts.aspectRatio }),
+    opts.outputPath
+  ]
+}
+
+// ============================================================================
+// Spawn-driven export (composes ffmpeg-core)
+// ============================================================================
+
+export interface ExportClipOptions extends ExportArgsOptions {
+  /** Total clip duration (s) used to compute 0..100 progress (= end - start). */
+  onProgress?: (pct: number) => void
+  /** Cooperative cancel (SIGKILLs the ffmpeg child). */
+  signal?: AbortSignal
+  /** Override the ffmpeg binary (tests / smoke). */
+  binPath?: string
+}
+
+export interface ExportClipResult {
+  outputPath: string
+  width: number
+  height: number
+  /** The requested span duration in milliseconds (the cut length). */
+  durationMs: number
+}
+
+/**
+ * Run the frame-accurate cut + 9:16 reframe + re-encode, streaming progress, and
+ * resolve with the output path + dimensions + duration (the JobResult['export']
+ * body). Rejects on a non-zero ffmpeg exit (the runner maps it to a typed error).
+ */
+export async function exportClip(opts: ExportClipOptions): Promise<ExportClipResult> {
+  const args = exportClipArgs(opts)
+  const { width, height } = outputDimensions(opts.aspectRatio)
+  const durationSec = opts.endTime - opts.startTime
+
+  const runOpts: RunFfmpegOptions = {
+    args,
+    totalDurationSec: durationSec,
+    binPath: opts.binPath,
+    signal: opts.signal,
+    onProgress: (pct) => {
+      if (pct !== undefined) opts.onProgress?.(pct)
+    }
+  }
+  await runFfmpeg(runOpts)
+
+  return {
+    outputPath: opts.outputPath,
+    width,
+    height,
+    durationMs: Math.round(durationSec * 1000)
+  }
+}
+
+/**
+ * Grab a single reframed thumbnail frame (PRD Appendix A). Resolves with the
+ * thumbnail path on success; rejects on a non-zero ffmpeg exit.
+ */
+export async function generateThumbnail(
+  opts: ThumbnailArgsOptions & { signal?: AbortSignal; binPath?: string }
+): Promise<{ thumbnailPath: string }> {
+  await runFfmpeg({
+    args: thumbnailArgs(opts),
+    binPath: opts.binPath,
+    signal: opts.signal
+  })
+  return { thumbnailPath: opts.outputPath }
+}

@@ -396,4 +396,23 @@ describe('Part K — keyword emphasis + per-word animation + auto-emoji (golden)
     expect(ass).not.toContain('\\1c')
     expect(ass).not.toContain('{\\r}')
   })
+
+  it('keyword scale is SKIPPED when a per-word animation is active (no conflicting \\fscx)', () => {
+    // beast-pop combines keywordScale + perWordAnimation on the same style; the
+    // static \fscx would override the animation target, so it must be dropped.
+    const style: CaptionStyle = {
+      ...STYLE,
+      keywordColor: '#00FF00',
+      keywordScale: 120,
+      keywordBold: true,
+      perWordAnimation: 'bounce'
+    }
+    const ass = buildAss({ words, clipStart: 0, clipEnd: 2, style, keywords: ['money'] })
+    // The keyword word keeps the bounce \t, the color, and bold…
+    expect(ass).toContain(
+      '{\\k40}{\\t(0,150,\\fscx115\\fscy115)\\1c&H0000FF00\\2c&H0000FF00\\b1} money{\\r}'
+    )
+    // …but NOT a static \fscx120 that would clobber the animation.
+    expect(ass).not.toContain('\\fscx120')
+  })
 })

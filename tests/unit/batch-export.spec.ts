@@ -85,6 +85,29 @@ describe('runBatchExport', () => {
     expect(statuses.filter((s) => s.status === 'done')).toHaveLength(3)
   })
 
+  it('cancel-all: a pre-aborted signal skips every clip without starting a job', async () => {
+    const bridge = createMockOpenclip()
+    const started: string[] = []
+    const origStart = bridge.jobs.start.bind(bridge.jobs)
+    bridge.jobs.start = ((kind: 'export', params: never) => {
+      started.push(kind)
+      return origStart(kind, params)
+    }) as typeof bridge.jobs.start
+    const controller = new AbortController()
+    controller.abort()
+    const results = await runBatchExport({
+      bridge,
+      project,
+      clips: makeClips(3),
+      dir: '/out',
+      preset,
+      signal: controller.signal
+    })
+    expect(results).toHaveLength(3)
+    expect(results.every((r) => r.status === 'canceled')).toBe(true)
+    expect(started).toHaveLength(0) // no job started after abort
+  })
+
   it('isolates per-clip failures — one error does not abort the batch (resolves, never rejects)', async () => {
     const bridge = createMockOpenclip({
       scripts: {

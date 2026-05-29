@@ -215,7 +215,10 @@ export function buildKaraokeLine(
     if (w.isKeyword) {
       // Solid keyword color (pre- AND post-karaoke-fill) + optional scale / bold.
       if (kwColor) ov.push(`\\1c${kwColor}\\2c${kwColor}`)
-      if (typeof kwScale === 'number' && kwScale !== 100) {
+      // Skip the static keyword scale when a per-word animation is active: both
+      // drive \fscx, and a trailing static \fscx would override the animation's
+      // target (the animation already provides the size emphasis).
+      if (typeof kwScale === 'number' && kwScale !== 100 && !perWord) {
         ov.push(`\\fscx${kwScale}\\fscy${kwScale}`)
       }
       if (kwBold) ov.push('\\b1')

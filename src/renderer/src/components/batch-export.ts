@@ -100,17 +100,24 @@ export async function runBatchExport(opts: RunBatchExportOptions): Promise<Batch
   const words = opts.project.transcript.words
   const captionStyle = resolveEffectiveCaptionStyle(opts.preset.captionTemplateId)
 
+  // `aborted` is checked BEFORE each job starts (skip un-started clips) and inside
+  // `onStart` (cancel a job whose start raced the abort) — so cancel-all can't miss
+  // a job that begins after the abort fires.
+  let aborted = opts.signal?.aborted ?? false
   const onAbort = (): void => {
+    aborted = true
     for (const jobId of jobIds.values()) void opts.bridge.jobs.cancel(jobId)
   }
-  if (opts.signal) {
-    if (opts.signal.aborted) onAbort()
-    else opts.signal.addEventListener('abort', onAbort, { once: true })
-  }
+  if (opts.signal && !opts.signal.aborted) opts.signal.addEventListener('abort', onAbort)
 
   const settled = await Promise.all(
     opts.clips.map(async (clip): Promise<BatchClipResult> => {
       const outputPath = pathFor.get(clip.id)!
+      // Cancelled before this clip could start ⇒ skip it (never start a job).
+      if (aborted) {
+        opts.onClipStatus?.(clip.id, 'canceled')
+        return { clipId: clip.id, outputPath, status: 'canceled' }
+      }
       opts.onClipStatus?.(clip.id, 'running')
       try {
         const params = buildExportParams({
@@ -128,13 +135,17 @@ export async function runBatchExport(opts: RunBatchExportOptions): Promise<Batch
           bridge: opts.bridge,
           params,
           onProgress: (pct) => opts.onClipProgress?.(clip.id, pct),
-          onStart: (jobId) => jobIds.set(clip.id, jobId)
+          onStart: (jobId) => {
+            jobIds.set(clip.id, jobId)
+            // Abort landed while this job was starting ⇒ cancel it immediately.
+            if (aborted) void opts.bridge.jobs.cancel(jobId)
+          }
         })
         opts.onClipStatus?.(clip.id, 'done', { outputPath })
         return { clipId: clip.id, outputPath, status: 'done', result }
       } catch (e) {
         const error = e instanceof Error ? e.message : String(e)
-        const status: BatchClipStatus = opts.signal?.aborted ? 'canceled' : 'error'
+        const status: BatchClipStatus = aborted ? 'canceled' : 'error'
         opts.onClipStatus?.(clip.id, status, { error })
         return { clipId: clip.id, outputPath, status, error }
       }

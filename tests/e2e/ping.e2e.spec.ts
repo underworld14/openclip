@@ -44,6 +44,7 @@ test('ping IPC round-trips and the openclip bridge is exposed', async () => {
     'model',
     'project',
     'settings',
+    'system',
     'video'
   ])
   expect(bridge.videoMethods).toEqual(['export', 'import', 'importUrl'])

@@ -32,7 +32,8 @@ const NAMESPACES: Array<keyof OpenClipBridge> = [
   'ai',
   'project',
   'settings',
-  'model'
+  'model',
+  'system'
 ]
 
 // The real bridge, assembled from the per-domain builders (no contextBridge side
@@ -46,6 +47,7 @@ beforeAll(async () => {
   const { buildProjectApi } = await import('@preload/api/project')
   const { buildSettingsApi } = await import('@preload/api/settings')
   const { buildModelApi } = await import('@preload/api/model')
+  const { buildSystemApi } = await import('@preload/api/system')
   const { buildJobsApi } = await import('@preload/api/jobs')
   realBridge = {
     video: buildVideoApi(),
@@ -54,6 +56,7 @@ beforeAll(async () => {
     project: buildProjectApi(),
     settings: buildSettingsApi(),
     model: buildModelApi(),
+    system: buildSystemApi(),
     jobs: buildJobsApi()
   }
 })
@@ -85,6 +88,7 @@ describe('preload parity: real bridge method-set === mock method-set', () => {
     ])
     expect(methodKeys(realBridge.settings)).toEqual(['apiKeyStatus', 'get', 'set', 'setApiKey'])
     expect(methodKeys(realBridge.model)).toEqual(['download', 'status'])
+    expect(methodKeys(realBridge.system)).toEqual(['checkUpdate', 'openFolder', 'saveDialog'])
   })
 
   it('both bridges expose a jobs API with start + cancel', () => {

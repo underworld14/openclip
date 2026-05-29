@@ -88,6 +88,12 @@ export function buildExportParams(args: {
   removeSilence?: JobParams['export']['removeSilence']
   /** Auto-reframe mode (Part J, opt-in): follow the speaker / split-screen. */
   reframe?: JobParams['export']['reframe']
+  /** Brand-kit logo overlay (Part K, Step 5). Threaded into the export job; the
+   * runner/ffmpeg render it (overlay rendering lands in the logo follow-up). */
+  logoPath?: string
+  logoPosition?: JobParams['export']['logoPosition']
+  logoScale?: number
+  logoMargin?: number
 }): JobParams['export'] {
   const { start, end } = resolveBounds(args.clip)
   if (!(end > start)) {
@@ -117,6 +123,11 @@ export function buildExportParams(args: {
       height: args.source.resolution.height
     },
     fps: args.source.fps,
+    // Brand-kit logo (Part K, Step 5) — absent ⇒ no overlay (current behavior).
+    logoPath: args.logoPath,
+    logoPosition: args.logoPosition,
+    logoScale: args.logoScale,
+    logoMargin: args.logoMargin,
     quality: args.quality ?? '1080p'
   }
 }

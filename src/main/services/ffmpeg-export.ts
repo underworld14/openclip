@@ -124,22 +124,6 @@ export function reframeCropNode(aspect: AspectRatio, plan?: ReframePlan | null):
 }
 
 /**
- * Coerce a `pan` plan to its STATIC fallback for the jump-cut (multi-range) path.
- * That path re-stamps kept frames onto a silence-COMPRESSED timeline (`setpts`),
- * so the pan `xExpr` (authored in the clip's UNcompressed time) no longer lines up
- * — we crop at the pan's representative `cropX` instead (a constant is correct on
- * any timeline). `static`/`split`/no-plan pass through unchanged.
- */
-export function staticizeForCompressedTimeline(
-  plan?: ReframePlan | null
-): ReframePlan | null | undefined {
-  if (plan && plan.mode === 'pan') {
-    return { mode: 'static', cropW: plan.cropW, cropH: plan.cropH, cropX: plan.cropX }
-  }
-  return plan
-}
-
-/**
  * Build the `-vf` filtergraph string: `<crop>,scale=W:H[,subtitles=…:fontsdir=…]`.
  * The optional subtitles node is appended LAST (the caption-burn seam). Paths
  * inside the `subtitles=` filter are escaped for the filtergraph mini-language.
@@ -295,16 +279,20 @@ export function exportClipArgsMultiRange(opts: ExportArgsOptions): string[] {
     throw new Error('ffmpeg-export: exportClipArgsMultiRange requires non-empty keepRanges')
   }
   const { width, height } = outputDimensions(opts.aspectRatio)
-  // `+`-joined OR of the kept spans; single-quoted so the commas are literal to
-  // the filtergraph parser (not filter separators).
-  const between = keep.map(([a, b]) => `between(t,${a},${b})`).join('+')
-  // The reframe crop goes AFTER `select,setpts`, where `crop`'s `t` is the
-  // silence-COMPRESSED 0-based output time. A `pan` plan's `xExpr` is authored in
-  // the clip's UNcompressed time, so it can't apply here — coerce pan → its static
-  // `cropX` (a constant crop, correct on the compressed timeline). `static`/no plan
-  // pass through; a `split` plan is rendered by exportClipArgsSplit, not here.
-  const crop = reframeCropNode(opts.aspectRatio, staticizeForCompressedTimeline(opts.reframePlan))
-  let vchain = `[0:v]select='${between}',setpts=N/FRAME_RATE/TB,${crop},scale=${width}:${height}`
+  const duration = opts.endTime - opts.startTime
+  // `-ss` BEFORE `-i` rebases the decoded timeline to 0-based CLIP-RELATIVE time
+  // (like the single-cut path), so the keep ranges become clip-relative AND the
+  // reframe crop runs in the same time base the planner authored. `+`-joined OR of
+  // the kept spans; single-quoted so the commas stay literal to the filtergraph.
+  const rel = (n: number): number => Math.round((n - opts.startTime) * 1000) / 1000
+  const between = keep.map(([a, b]) => `between(t,${rel(a)},${rel(b)})`).join('+')
+  // The reframe crop runs BEFORE `select`, so it sees each frame's UNcompressed
+  // clip-relative `t` — a `pan` `xExpr` (authored clip-relative) is correct here.
+  // `select` then drops the silence frames and `setpts` re-stamps the survivors to
+  // a compressed 0-based output (audio `aselect`'d in lock-step). static/center
+  // crops are constant, so the ordering is harmless for them.
+  const crop = reframeCropNode(opts.aspectRatio, opts.reframePlan)
+  let vchain = `[0:v]${crop},select='${between}',setpts=N/FRAME_RATE/TB,scale=${width}:${height}`
   if (opts.assPath) {
     vchain += `,subtitles=${escapeFilterPath(opts.assPath)}`
     if (opts.fontsDir) vchain += `:fontsdir=${escapeFilterPath(opts.fontsDir)}`
@@ -317,8 +305,12 @@ export function exportClipArgsMultiRange(opts: ExportArgsOptions): string[] {
   return [
     '-hide_banner',
     '-y',
+    '-ss',
+    String(opts.startTime),
     '-i',
     opts.sourcePath,
+    '-t',
+    String(duration),
     '-filter_complex',
     `${vchain};${achain}`,
     '-map',

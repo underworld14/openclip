@@ -3,3 +3,16 @@ dist
 out
 *.log
 .DS_Store
+
+# build & tooling caches
+.eslintcache
+.vite
+coverage
+test-results
+playwright-report
+*.tsbuildinfo
+
+# secrets / local env
+.env
+.env.*
+!.env.example

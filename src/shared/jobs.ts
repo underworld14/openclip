@@ -114,6 +114,12 @@ export interface JobParams {
     captions?: {
       words: WordTimestamp[]
       style?: CaptionStyle
+      /**
+       * Part K — words to EMPHASIZE (keyword highlight). Usually the clip's
+       * `Clip.keywords`. The runner threads these to `buildAss(opts.keywords)`
+       * which recolors/scales matching words; absent ⇒ no emphasis (byte-compat).
+       */
+      keywords?: string[]
     }
     /**
      * Silence/filler jump-cuts (Part I.4, opt-in). When set, the export runner
@@ -138,6 +144,18 @@ export interface JobParams {
      */
     sourceResolution?: { width: number; height: number }
     fps?: number
+    /**
+     * Part K (brand kit) — burn a logo overlay. `logoPath` is an absolute path to
+     * a PNG-with-alpha; the runner inserts an `overlay` filter AFTER crop+scale and
+     * BEFORE the caption `subtitles` burn. ALL OPTIONAL: absent `logoPath` ⇒ NO
+     * overlay node and the export argv is byte-identical to today. `logoScale` is
+     * the logo width as a fraction of the output width (default 0.18); `logoMargin`
+     * the inset in output px (default 48); `logoPosition` default 'bottom-right'.
+     */
+    logoPath?: string
+    logoPosition?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+    logoScale?: number
+    logoMargin?: number
     quality: '720p' | '1080p'
   }
   /** Stream a GGML model from HuggingFace to userData/models (PRD §13). */

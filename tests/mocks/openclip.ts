@@ -101,6 +101,8 @@ const CANNED: Partial<Record<string, unknown>> = {
   [IPCChannels.OPEN_FOLDER]: undefined,
   [IPCChannels.SHOW_SAVE_DIALOG]: { canceled: false, filePath: '/Users/me/Movies/clip-1.mp4' },
   [IPCChannels.SHOW_OPEN_DIALOG]: { canceled: false, filePaths: ['/Users/me/Movies/source.mp4'] },
+  [IPCChannels.SHOW_DIRECTORY_DIALOG]: { canceled: false, dirPath: '/Users/me/Movies/batch' },
+  [IPCChannels.SHOW_IMAGE_DIALOG]: { canceled: false, filePaths: ['/Users/me/Pictures/logo.png'] },
   [IPCChannels.CHECK_UPDATE]: { updateAvailable: false }
 }
 

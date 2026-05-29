@@ -8,10 +8,12 @@ import { describe, expect, it } from 'vitest'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { CaptionStyle } from '@shared/schema'
+import { DEFAULT_CAPTION_STYLE } from '@shared/caption-layout'
 import {
   CAPTION_PRESETS,
   PRESET_FONT_FAMILIES,
-  captionPresetStyle
+  captionPresetStyle,
+  resolveEffectiveCaptionStyle
 } from '@renderer/components/captionPresets'
 
 /** libass family name → the file shipped in build/fonts (see SOURCES.md). */
@@ -65,5 +67,46 @@ describe('captionPresetStyle', () => {
     expect(captionPresetStyle(null)).toBeUndefined()
     expect(captionPresetStyle('nope')).toBeUndefined()
     expect(captionPresetStyle('hormozi')?.highlightColor).toBe('#00FF00')
+  })
+})
+
+describe('Part K — keyword/per-word templates', () => {
+  it('ships the new templates', () => {
+    const ids = CAPTION_PRESETS.map((p) => p.id)
+    expect(ids).toEqual(
+      expect.arrayContaining(['beast-pop', 'hormozi-bold', 'tiktok-bounce', 'captionate'])
+    )
+  })
+
+  it('the new templates use the Part-K fields (keyword/per-word) but NO auto-emoji', () => {
+    for (const id of ['beast-pop', 'hormozi-bold', 'tiktok-bounce', 'captionate']) {
+      const s = captionPresetStyle(id)!
+      expect(s.keywordColor).toBeTruthy()
+      // emoji-in-burn needs a bundled emoji font (follow-up) ⇒ presets keep it off.
+      expect(s.autoEmoji ?? 'off').toBe('off')
+    }
+  })
+})
+
+describe('resolveEffectiveCaptionStyle', () => {
+  it('returns the app default style for no template (byte-compat with passing none)', () => {
+    expect(resolveEffectiveCaptionStyle('')).toEqual(DEFAULT_CAPTION_STYLE)
+    expect(resolveEffectiveCaptionStyle(null)).toEqual(DEFAULT_CAPTION_STYLE)
+  })
+
+  it('returns the selected preset style', () => {
+    expect(resolveEffectiveCaptionStyle('hormozi-bold').keywordColor).toBe('#00FF00')
+  })
+
+  it('applies autoEmoji + brand overrides (brand font/color win; preset keyword kept)', () => {
+    const s = resolveEffectiveCaptionStyle('hormozi-bold', {
+      autoEmoji: 'local',
+      brand: { fontFamily: 'Bebas Neue', fontColor: '#FF0000', highlightColor: '#123456' }
+    })
+    expect(s.autoEmoji).toBe('local')
+    expect(s.fontFamily).toBe('Bebas Neue')
+    expect(s.fontColor).toBe('#FF0000')
+    expect(s.highlightColor).toBe('#123456')
+    expect(s.keywordColor).toBe('#00FF00') // preset emphasis preserved
   })
 })

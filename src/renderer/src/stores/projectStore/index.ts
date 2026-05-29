@@ -20,6 +20,7 @@ import { createTranscriptSlice, type TranscriptSlice } from './transcriptSlice'
 import { createClipsSlice, type ClipsSlice } from './clipsSlice'
 import { createExportSlice, type ExportSlice } from './exportSlice'
 import { createTimelineSlice, type TimelineSlice } from './timelineSlice'
+import { createPreviewSlice, type PreviewSlice } from './previewSlice'
 
 // ============================================================================
 // Core slice — the project document + recents + load/save (TRUNK seam; the
@@ -79,12 +80,18 @@ const createCoreSlice: StateCreator<ProjectStore, [], [], CoreSlice> = (set, get
 // Combined store type + instance (plan E.4: combined once here)
 // ============================================================================
 
-export type ProjectStore = CoreSlice & TranscriptSlice & ClipsSlice & ExportSlice & TimelineSlice
+export type ProjectStore = CoreSlice &
+  TranscriptSlice &
+  ClipsSlice &
+  ExportSlice &
+  TimelineSlice &
+  PreviewSlice
 
 export const useProjectStore = create<ProjectStore>()((...a) => ({
   ...createCoreSlice(...a),
   ...createTranscriptSlice(...a),
   ...createClipsSlice(...a),
   ...createExportSlice(...a),
-  ...createTimelineSlice(...a)
+  ...createTimelineSlice(...a),
+  ...createPreviewSlice(...a)
 }))

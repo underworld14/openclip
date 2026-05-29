@@ -23,6 +23,9 @@ export interface RunExportOptions {
   params: JobParams['export']
   /** 0..100 encode progress callback (parsed from FFmpeg stderr in the runner). */
   onProgress?: (pct: number) => void
+  /** Called with the assigned jobId right after start (batch export tracks these
+   * so it can cancel-all). */
+  onStart?: (jobId: string) => void
 }
 
 /**
@@ -32,6 +35,7 @@ export interface RunExportOptions {
  */
 export async function runExport(opts: RunExportOptions): Promise<JobResult['export']> {
   const { jobId } = await opts.bridge.jobs.start('export', opts.params)
+  opts.onStart?.(jobId)
   const port = await acquireJobPort(jobId)
   let result: JobResult['export'] | null = null
 

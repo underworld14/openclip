@@ -16,7 +16,8 @@ import {
   Settings,
   ClipSchema,
   SourceVideo,
-  ExportRecord
+  ExportRecord,
+  BrandTemplate
 } from '@shared/schema'
 import {
   wordTimestampFixture,
@@ -29,7 +30,10 @@ import {
   settingsFixture,
   clipSchemaFixture,
   sourceVideoFixture,
-  exportRecordFixture
+  exportRecordFixture,
+  captionStyleRichFixture,
+  brandTemplateFixture,
+  projectWithBrandFixture
 } from '../fixtures/contract'
 
 describe('contract fixtures validate against the frozen Zod schemas', () => {
@@ -81,5 +85,28 @@ describe('contract fixtures validate against the frozen Zod schemas', () => {
       clips: [{ ...clipSchemaFixture.clips[0], unexpected_field: true }]
     }
     expect(ClipSchema.safeParse(bad).success).toBe(false)
+  })
+
+  // ── Part K (caption template gallery + brand kit) — additive-optional fields ──
+  it('CaptionStyle accepts the Part-K optional fields (keyword/emoji/per-word)', () => {
+    expect(CaptionStyle.parse(captionStyleRichFixture)).toEqual(captionStyleRichFixture)
+  })
+
+  it('BrandTemplate (with logo placement + brand caption style)', () => {
+    expect(BrandTemplate.parse(brandTemplateFixture)).toEqual(brandTemplateFixture)
+  })
+
+  it('Project validates WITH the Part-K fields (brand + captionTemplateId)', () => {
+    expect(Project.parse(projectWithBrandFixture)).toEqual(projectWithBrandFixture)
+  })
+
+  it('back-compat: a pre-Part-K Project (no brand / no captionTemplateId) still validates', () => {
+    const parsed = Project.parse(projectFixture)
+    expect(parsed).toEqual(projectFixture)
+    expect(parsed.activeBrandId).toBeUndefined()
+    expect(parsed.brandTemplate).toBeUndefined()
+    expect(parsed.settings.captionTemplateId).toBeUndefined()
+    // and a pre-Part-K CaptionStyle (no keyword/emoji fields) is unchanged
+    expect(CaptionStyle.parse(captionStyleFixture)).toEqual(captionStyleFixture)
   })
 })

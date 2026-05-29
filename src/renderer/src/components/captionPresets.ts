@@ -15,6 +15,7 @@
  */
 
 import type { CaptionStyle } from '@shared/schema'
+import { DEFAULT_CAPTION_STYLE } from '@shared/caption-layout'
 
 export interface CaptionPreset {
   id: string
@@ -161,6 +162,98 @@ export const CAPTION_PRESETS: CaptionPreset[] = [
       strokeWidth: 0,
       shadow: false
     }
+  },
+  // ── Part K — keyword-emphasis + per-word-animation templates ────────────────
+  // These use the new CaptionStyle fields (keywordColor/keywordScale/keywordBold,
+  // perWordAnimation, wordsPerLine). They reference already-bundled fonts and do
+  // NOT enable auto-emoji (emoji-in-burn needs a bundled emoji font — follow-up),
+  // so they render fully in both the preview and the export today.
+  {
+    id: 'beast-pop',
+    name: 'Beast Pop',
+    description: 'Huge yellow caps that bounce in, red keyword pop',
+    style: {
+      fontFamily: 'Archivo Black',
+      fontSize: 84,
+      fontColor: '#FFFF00',
+      backgroundColor: NO_BOX,
+      position: 'bottom',
+      animation: 'none',
+      highlightCurrentWord: true,
+      emojiEnabled: false,
+      highlightColor: '#FF0000',
+      strokeColor: '#000000',
+      strokeWidth: 5,
+      shadow: true,
+      keywordColor: '#FF0000',
+      keywordScale: 118,
+      perWordAnimation: 'bounce'
+    }
+  },
+  {
+    id: 'hormozi-bold',
+    name: 'Hormozi Bold',
+    description: 'Condensed white caps, bright-green BOLD keywords, tight lines',
+    style: {
+      fontFamily: 'Anton',
+      fontSize: 78,
+      fontColor: '#FFFFFF',
+      backgroundColor: NO_BOX,
+      position: 'bottom',
+      animation: 'none',
+      highlightCurrentWord: true,
+      emojiEnabled: false,
+      highlightColor: '#FFFFFF',
+      strokeColor: '#000000',
+      strokeWidth: 4,
+      shadow: true,
+      keywordColor: '#00FF00',
+      keywordBold: true,
+      wordsPerLine: 3
+    }
+  },
+  {
+    id: 'tiktok-bounce',
+    name: 'TikTok Bounce',
+    description: 'Tall caps that pop in per word, pink keyword accent',
+    style: {
+      fontFamily: 'Bebas Neue',
+      fontSize: 74,
+      fontColor: '#FFFFFF',
+      backgroundColor: NO_BOX,
+      position: 'bottom',
+      animation: 'none',
+      highlightCurrentWord: true,
+      emojiEnabled: false,
+      highlightColor: '#FE2C55',
+      strokeColor: '#000000',
+      strokeWidth: 3,
+      shadow: true,
+      keywordColor: '#FE2C55',
+      perWordAnimation: 'pop'
+    }
+  },
+  {
+    id: 'captionate',
+    name: 'Captionate',
+    description: 'Clean Poppins with gold keyword highlights, 4-word lines',
+    style: {
+      fontFamily: 'Poppins ExtraBold',
+      fontSize: 60,
+      fontColor: '#FFFFFF',
+      backgroundColor: NO_BOX,
+      position: 'bottom',
+      animation: 'fade',
+      highlightCurrentWord: true,
+      emojiEnabled: false,
+      highlightColor: '#FFFFFF',
+      strokeColor: '#000000',
+      strokeWidth: 3,
+      shadow: false,
+      keywordColor: '#FFD700',
+      keywordScale: 110,
+      wordsPerLine: 4
+    }
   }
 ]
 
@@ -173,4 +266,37 @@ export const PRESET_FONT_FAMILIES: string[] = Array.from(
 export function captionPresetStyle(id: string | null | undefined): CaptionStyle | undefined {
   if (!id) return undefined
   return CAPTION_PRESETS.find((p) => p.id === id)?.style
+}
+
+/** Brand overrides that win over a caption preset (Step 5 plumbs the brand in). */
+export interface CaptionStyleBrand {
+  fontFamily?: string
+  fontColor?: string
+  highlightColor?: string
+}
+
+export interface ResolveStyleOptions {
+  /** Brand kit overrides — brand font/color win over the selected preset. */
+  brand?: CaptionStyleBrand
+  /** Force an emoji source onto the resolved style (off/local/ai). */
+  autoEmoji?: CaptionStyle['autoEmoji']
+}
+
+/**
+ * The EFFECTIVE caption style used by BOTH the export burn AND the WYSIWYG
+ * preview, so they always agree (Part K). Precedence: brand override → selected
+ * preset → app default. Returns a CONCRETE `CaptionStyle` (never undefined) so the
+ * preview can render it; passing the resolved default to `buildAss` is
+ * byte-identical to passing nothing.
+ */
+export function resolveEffectiveCaptionStyle(
+  templateId: string | null | undefined,
+  opts: ResolveStyleOptions = {}
+): CaptionStyle {
+  const merged: CaptionStyle = { ...(captionPresetStyle(templateId) ?? DEFAULT_CAPTION_STYLE) }
+  if (opts.autoEmoji) merged.autoEmoji = opts.autoEmoji
+  if (opts.brand?.fontFamily) merged.fontFamily = opts.brand.fontFamily
+  if (opts.brand?.fontColor) merged.fontColor = opts.brand.fontColor
+  if (opts.brand?.highlightColor) merged.highlightColor = opts.brand.highlightColor
+  return merged
 }

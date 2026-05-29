@@ -41,7 +41,22 @@
  */
 
 import type { CaptionStyle, WordTimestamp } from '@shared/schema'
-import { compressTimeClamped, type Range } from '@shared/keep-ranges'
+import { type Range } from '@shared/keep-ranges'
+import {
+  scopeWordsToClip,
+  scopeWordsToKeepRanges,
+  groupIntoLines,
+  isDroppableToken,
+  DEFAULT_CAPTION_STYLE
+} from '@shared/caption-layout'
+import { annotateWords, type AnnotatedWord } from '@shared/caption-emphasis'
+
+// Part K (Step 1): the line-layout primitives + the default style moved to the
+// PURE `@shared` module so the renderer preview can import them too. Re-export
+// here so existing `@main/services/ass-captions` importers (tests, reframe, …)
+// are unaffected and the golden `.ass` strings stay byte-for-byte identical.
+export { scopeWordsToClip, scopeWordsToKeepRanges, isDroppableToken, DEFAULT_CAPTION_STYLE }
+export type { RebasedWord } from '@shared/caption-layout'
 
 // ============================================================================
 // Constants
@@ -50,18 +65,6 @@ import { compressTimeClamped, type Range } from '@shared/keep-ranges'
 /** ASS script resolution the styles are authored against — matches the 1080×1920
  * export canvas so Fontsize/Margins are in output pixels (PlayResX/Y). */
 export const ASS_PLAY_RES = { x: 1080, y: 1920 } as const
-
-/** Default style if a caller passes none (mirrors the bundled font, PRD §6.4). */
-export const DEFAULT_CAPTION_STYLE: CaptionStyle = {
-  fontFamily: 'DejaVu Sans',
-  fontSize: 64,
-  fontColor: '#FFFFFF',
-  backgroundColor: '#000000',
-  position: 'bottom',
-  animation: 'none',
-  highlightCurrentWord: true,
-  emojiEnabled: false
-}
 
 /** The highlight (karaoke-fill) color words turn once spoken. */
 const HIGHLIGHT_COLOR_ASS = '&H0000FFFF' // opaque yellow (BGR: 00 FF FF)
@@ -130,25 +133,6 @@ export function escapeAssText(text: string): string {
 }
 
 // ============================================================================
-// Token filtering — drop whisper special / blank tokens
-// ============================================================================
-
-/**
- * Whether a word entry should be dropped before captioning. whisper emits
- * special-token entries (`[_BEG_]`, `[_TT_123]`, `[_EOT_]`, `<|…|>`) and
- * blank/whitespace-only words; none should appear as a karaoke syllable.
- */
-export function isDroppableToken(word: string): boolean {
-  const w = word.trim()
-  if (w.length === 0) return true
-  // whisper bracket special tokens: [_BEG_], [_TT_700], [_EOT_], [_SOT_], …
-  if (/^\[_[A-Z]+_?\d*_?\]$/.test(w)) return true
-  // angle-bracket special tokens: <|endoftext|>, <|0.00|>, <|nospeech|>, …
-  if (/^<\|.*\|>$/.test(w)) return true
-  return false
-}
-
-// ============================================================================
 // Time helpers
 // ============================================================================
 
@@ -174,65 +158,6 @@ export function formatAssTime(seconds: number): string {
 }
 
 // ============================================================================
-// Scope + rebase words to a clip
-// ============================================================================
-
-/** A word with clip-RELATIVE timestamps (clip start subtracted), special/blank dropped. */
-export interface RebasedWord {
-  word: string
-  /** seconds, relative to the clip start (>= 0). */
-  start: number
-  /** seconds, relative to the clip start. */
-  end: number
-}
-
-/**
- * Scope `words` to the clip's absolute `[clipStart, clipEnd]` range and rebase
- * to clip-relative time. A word is KEPT if it intersects the range (its end is
- * after clipStart AND its start is before clipEnd); partial overlaps are clamped
- * to the clip bounds. Special/blank tokens are dropped. Output is rebased
- * (clipStart subtracted), sorted by start, with non-negative monotonic times.
- */
-export function scopeWordsToClip(
-  words: WordTimestamp[],
-  clipStart: number,
-  clipEnd: number
-): RebasedWord[] {
-  const out: RebasedWord[] = []
-  for (const w of words) {
-    if (isDroppableToken(w.word)) continue
-    // Intersection test against the clip range (half-open; touch at edge dropped).
-    if (w.end <= clipStart || w.start >= clipEnd) continue
-    const start = Math.max(w.start, clipStart) - clipStart
-    const end = Math.min(w.end, clipEnd) - clipStart
-    if (!(end > start)) continue // zero/negative span after clamping
-    out.push({ word: w.word.trim(), start, end })
-  }
-  out.sort((a, b) => a.start - b.start)
-  return out
-}
-
-/**
- * Like `scopeWordsToClip` but for a JUMP-CUT export (Part I.4): map each word's
- * absolute time onto the COMPRESSED (silence-removed) timeline via the keep
- * ranges. Words fully inside a removed gap collapse to zero length and are
- * dropped; the clip window is exactly the keep-ranges span (the first kept
- * sample → t0), so no separate clipStart/End is needed.
- */
-export function scopeWordsToKeepRanges(words: WordTimestamp[], keepRanges: Range[]): RebasedWord[] {
-  const out: RebasedWord[] = []
-  for (const w of words) {
-    if (isDroppableToken(w.word)) continue
-    const start = compressTimeClamped(w.start, keepRanges)
-    const end = compressTimeClamped(w.end, keepRanges)
-    if (!(end > start)) continue // entirely inside a removed gap (or zero-length)
-    out.push({ word: w.word.trim(), start, end })
-  }
-  out.sort((a, b) => a.start - b.start)
-  return out
-}
-
-// ============================================================================
 // Karaoke cue building — the `{\k<cs>}word` string for a line of words
 // ============================================================================
 
@@ -250,7 +175,10 @@ export function scopeWordsToKeepRanges(words: WordTimestamp[], keepRanges: Range
  * 25cs prefixed with its leading space.) Line Start = first word start, End =
  * last word end.
  */
-export function buildKaraokeLine(words: RebasedWord[]): {
+export function buildKaraokeLine(
+  words: AnnotatedWord[],
+  style?: CaptionStyle
+): {
   text: string
   startSec: number
   endSec: number
@@ -258,6 +186,17 @@ export function buildKaraokeLine(words: RebasedWord[]): {
   if (words.length === 0) return { text: '', startSec: 0, endSec: 0 }
   const startSec = words[0].start
   const endSec = words[words.length - 1].end
+
+  // Part K emphasis params. ALL optional ⇒ no per-word override is emitted ⇒ a
+  // plain (un-annotated) word produces the byte-for-byte pre-Part-K cue.
+  const kwColor = style?.keywordColor ? toAssColor(style.keywordColor) : undefined
+  const kwScale = style?.keywordScale
+  const kwBold = style?.keywordBold
+  const perWord =
+    style?.perWordAnimation && style.perWordAnimation !== 'none'
+      ? style.perWordAnimation
+      : undefined
+  const emojiBefore = style?.emojiPosition === 'before'
 
   let prevEnd = startSec
   const parts: string[] = []
@@ -267,7 +206,38 @@ export function buildKaraokeLine(words: RebasedWord[]): {
     if (gapCs > 0) parts.push(`{\\k${gapCs}}`)
     const durCs = toCentiseconds(w.end - w.start)
     const space = i === 0 ? '' : ' '
-    parts.push(`{\\k${durCs}}${space}${escapeAssText(w.word)}`)
+
+    // Per-word override block — stays EMPTY unless a per-word animation or a
+    // keyword emphasis applies (so a plain word is unchanged from pre-Part-K).
+    const ov: string[] = []
+    if (perWord === 'bounce') ov.push('\\t(0,150,\\fscx115\\fscy115)')
+    else if (perWord === 'pop') ov.push('\\fscx70\\fscy70\\t(0,120,\\fscx100\\fscy100)')
+    if (w.isKeyword) {
+      // Solid keyword color (pre- AND post-karaoke-fill) + optional scale / bold.
+      if (kwColor) ov.push(`\\1c${kwColor}\\2c${kwColor}`)
+      // Skip the static keyword scale when a per-word animation is active: both
+      // drive \fscx, and a trailing static \fscx would override the animation's
+      // target (the animation already provides the size emphasis).
+      if (typeof kwScale === 'number' && kwScale !== 100 && !perWord) {
+        ov.push(`\\fscx${kwScale}\\fscy${kwScale}`)
+      }
+      if (kwBold) ov.push('\\b1')
+    }
+
+    // Auto-emoji rides WITH the word so it reveals/highlights together.
+    const escaped = escapeAssText(w.word)
+    const glyphs = w.emoji
+      ? emojiBefore
+        ? `${w.emoji} ${escaped}`
+        : `${escaped} ${w.emoji}`
+      : escaped
+
+    if (ov.length > 0) {
+      // {\k}{overrides}<space><glyphs>{\r} — \r resets to the Style for the next word.
+      parts.push(`{\\k${durCs}}{${ov.join('')}}${space}${glyphs}{\\r}`)
+    } else {
+      parts.push(`{\\k${durCs}}${space}${glyphs}`)
+    }
     prevEnd = w.end
   })
   return { text: parts.join(''), startSec, endSec }
@@ -389,28 +359,16 @@ export interface BuildAssOptions {
    * scoped to [clipStart, clipEnd], so karaoke stays in sync with the cut video.
    */
   keepRanges?: Range[]
-}
-
-/** A grouped run of words that becomes one Dialogue line. */
-function groupIntoLines(
-  words: RebasedWord[],
-  maxWordsPerLine: number,
-  gapBreakSec: number
-): RebasedWord[][] {
-  const lines: RebasedWord[][] = []
-  let current: RebasedWord[] = []
-  let prevEnd: number | null = null
-  for (const w of words) {
-    const longGap = prevEnd !== null && w.start - prevEnd > gapBreakSec
-    if (current.length >= maxWordsPerLine || longGap) {
-      if (current.length > 0) lines.push(current)
-      current = []
-    }
-    current.push(w)
-    prevEnd = w.end
-  }
-  if (current.length > 0) lines.push(current)
-  return lines
+  /**
+   * Part K — words to EMPHASIZE (keyword highlight). Usually `Clip.keywords`.
+   * Absent ⇒ no emphasis (byte-for-byte the pre-Part-K output).
+   */
+  keywords?: string[]
+  /**
+   * Part K — BYOK-AI emoji map (normalized word → emoji), used only when the
+   * style's `autoEmoji === 'ai'`. Absent ⇒ the local dictionary is used.
+   */
+  aiEmojiMap?: Record<string, string>
 }
 
 const ASS_HEADER_FORMAT =
@@ -431,7 +389,8 @@ const ASS_EVENTS_FORMAT =
  */
 export function buildAss(opts: BuildAssOptions): string {
   const style = opts.style ?? DEFAULT_CAPTION_STYLE
-  const maxWords = opts.maxWordsPerLine ?? 7
+  // Part K: a template may request a tighter line length; absent ⇒ 7 (byte-compat).
+  const maxWords = opts.maxWordsPerLine ?? style.wordsPerLine ?? 7
   const gapBreak = opts.gapBreakSec ?? 0.8
 
   // Jump-cut export → remap words onto the compressed timeline; else the normal
@@ -440,11 +399,18 @@ export function buildAss(opts: BuildAssOptions): string {
     opts.keepRanges && opts.keepRanges.length > 0
       ? scopeWordsToKeepRanges(opts.words, opts.keepRanges)
       : scopeWordsToClip(opts.words, opts.clipStart, opts.clipEnd)
-  const lines = groupIntoLines(scoped, maxWords, gapBreak)
+  // Part K: mark keyword words + attach auto-emoji. A no-op (no keywords AND
+  // autoEmoji off/undefined) ⇒ plain words ⇒ buildKaraokeLine emits identical cues.
+  const annotated = annotateWords(scoped, {
+    keywords: opts.keywords,
+    autoEmoji: style.autoEmoji,
+    aiEmojiMap: opts.aiEmojiMap
+  })
+  const lines = groupIntoLines(annotated, maxWords, gapBreak)
   const anim = animationOverride(style.animation)
 
   const dialogue = lines.map((run) => {
-    const { text, startSec, endSec } = buildKaraokeLine(run)
+    const { text, startSec, endSec } = buildKaraokeLine(run, style)
     const lead = anim ? `{${anim}}` : ''
     return `Dialogue: 0,${formatAssTime(startSec)},${formatAssTime(endSec)},Karaoke,,0,0,0,,${lead}${text}`
   })

@@ -82,6 +82,44 @@ export function registerVideoHandlers(ctx: IpcContext): void {
     }
   )
 
+  // ── System: directory picker (Part K, batch export Step 4) ───────────────
+  // Choose ONE output folder for "Export all". Hard-scoped server-side to a
+  // directory (G.7 least-privilege): renderer-supplied options are IGNORED so a
+  // misbehaving renderer can't coax the user into picking a file/other path.
+  ctx.ipcMain.handle(
+    IPCChannels.SHOW_DIRECTORY_DIALOG,
+    async (): Promise<{ canceled: boolean; dirPath?: string }> => {
+      const win = ctx.getMainWindow()
+      const options: Electron.OpenDialogOptions = {
+        title: 'Choose export folder',
+        properties: ['openDirectory', 'createDirectory']
+      }
+      const result = win
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options)
+      return { canceled: result.canceled, dirPath: result.filePaths?.[0] }
+    }
+  )
+
+  // ── System: image picker (Part K, brand kit Step 5) ──────────────────────
+  // Pick a single PNG logo (alpha needed for a clean overlay). Hard-scoped to a
+  // single PNG file server-side (G.7 least-privilege); renderer options ignored.
+  ctx.ipcMain.handle(
+    IPCChannels.SHOW_IMAGE_DIALOG,
+    async (): Promise<{ canceled: boolean; filePaths: string[] }> => {
+      const win = ctx.getMainWindow()
+      const options: Electron.OpenDialogOptions = {
+        title: 'Choose logo (PNG)',
+        properties: ['openFile'],
+        filters: [{ name: 'PNG Image', extensions: ['png'] }]
+      }
+      const result = win
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options)
+      return { canceled: result.canceled, filePaths: result.filePaths ?? [] }
+    }
+  )
+
   // ── System: open / reveal folder (PRD §10.1) ─────────────────────────────
   // If `path` is a directory, open it; otherwise reveal the file in its folder
   // (the export UX hands the output FILE path — "open folder" reveals the clip).

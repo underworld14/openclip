@@ -41,6 +41,7 @@
  */
 
 import type { CaptionStyle, WordTimestamp } from '@shared/schema'
+import { compressTimeClamped, type Range } from '@shared/keep-ranges'
 
 // ============================================================================
 // Constants
@@ -211,6 +212,26 @@ export function scopeWordsToClip(
   return out
 }
 
+/**
+ * Like `scopeWordsToClip` but for a JUMP-CUT export (Part I.4): map each word's
+ * absolute time onto the COMPRESSED (silence-removed) timeline via the keep
+ * ranges. Words fully inside a removed gap collapse to zero length and are
+ * dropped; the clip window is exactly the keep-ranges span (the first kept
+ * sample → t0), so no separate clipStart/End is needed.
+ */
+export function scopeWordsToKeepRanges(words: WordTimestamp[], keepRanges: Range[]): RebasedWord[] {
+  const out: RebasedWord[] = []
+  for (const w of words) {
+    if (isDroppableToken(w.word)) continue
+    const start = compressTimeClamped(w.start, keepRanges)
+    const end = compressTimeClamped(w.end, keepRanges)
+    if (!(end > start)) continue // entirely inside a removed gap (or zero-length)
+    out.push({ word: w.word.trim(), start, end })
+  }
+  out.sort((a, b) => a.start - b.start)
+  return out
+}
+
 // ============================================================================
 // Karaoke cue building — the `{\k<cs>}word` string for a line of words
 // ============================================================================
@@ -362,6 +383,12 @@ export interface BuildAssOptions {
   maxWordsPerLine?: number
   /** Start a new line when the silence before a word exceeds this (s). Default 0.8. */
   gapBreakSec?: number
+  /**
+   * Jump-cut keep ranges (Part I.4 — ABSOLUTE source seconds). When present, words
+   * are remapped onto the compressed (silence-removed) timeline instead of being
+   * scoped to [clipStart, clipEnd], so karaoke stays in sync with the cut video.
+   */
+  keepRanges?: Range[]
 }
 
 /** A grouped run of words that becomes one Dialogue line. */
@@ -407,7 +434,12 @@ export function buildAss(opts: BuildAssOptions): string {
   const maxWords = opts.maxWordsPerLine ?? 7
   const gapBreak = opts.gapBreakSec ?? 0.8
 
-  const scoped = scopeWordsToClip(opts.words, opts.clipStart, opts.clipEnd)
+  // Jump-cut export → remap words onto the compressed timeline; else the normal
+  // scope-to-clip path (Part I.4).
+  const scoped =
+    opts.keepRanges && opts.keepRanges.length > 0
+      ? scopeWordsToKeepRanges(opts.words, opts.keepRanges)
+      : scopeWordsToClip(opts.words, opts.clipStart, opts.clipEnd)
   const lines = groupIntoLines(scoped, maxWords, gapBreak)
   const anim = animationOverride(style.animation)
 

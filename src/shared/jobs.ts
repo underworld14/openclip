@@ -115,6 +115,13 @@ export interface JobParams {
       words: WordTimestamp[]
       style?: CaptionStyle
     }
+    /**
+     * Silence/filler jump-cuts (Part I.4, opt-in). When set, the export runner
+     * detects silences in the clip span, computes the spans to keep, cuts them
+     * into one continuous timeline (select+setpts), and remaps the burned
+     * captions onto the compressed timeline. Absent/false ⇒ the normal single cut.
+     */
+    removeSilence?: boolean | { noiseDb?: number; minSilenceSec?: number; padSec?: number }
     quality: '720p' | '1080p'
   }
   /** Stream a GGML model from HuggingFace to userData/models (PRD §13). */

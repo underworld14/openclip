@@ -42,6 +42,8 @@ export function ExportPanel(): React.JSX.Element {
   // Caption style preset (Part I). '' ⇒ the app default (DejaVu karaoke); a
   // named preset (Hormozi/MrBeast/…) threads its CaptionStyle into the export job.
   const [captionPresetId, setCaptionPresetId] = useState('')
+  // Remove long silences via jump-cuts (Part I.4, opt-in, default off).
+  const [removeSilence, setRemoveSilence] = useState(false)
 
   const words = transcript?.words ?? currentProject?.transcript.words ?? []
   const hasWords = words.length > 0
@@ -77,7 +79,8 @@ export function ExportPanel(): React.JSX.Element {
             outputPath: chosenPath,
             captionsEnabled: captionsEnabled && hasWords,
             words: project.transcript.words,
-            captionStyle: captionPresetStyle(captionPresetId)
+            captionStyle: captionPresetStyle(captionPresetId),
+            removeSilence
           }),
         onProgress: (p) => setPct(Math.round(p))
       })
@@ -107,7 +110,8 @@ export function ExportPanel(): React.JSX.Element {
     addExportRecord,
     captionsEnabled,
     hasWords,
-    captionPresetId
+    captionPresetId,
+    removeSilence
   ])
 
   const reveal = useCallback(async (): Promise<void> => {
@@ -172,6 +176,16 @@ export function ExportPanel(): React.JSX.Element {
               </select>
             </label>
           )}
+
+          {/* Silence/filler jump-cuts (Part I.4, opt-in). */}
+          <label className="flex items-center gap-2 text-xs" data-testid="remove-silence-toggle">
+            <input
+              type="checkbox"
+              checked={removeSilence}
+              onChange={(e) => setRemoveSilence(e.target.checked)}
+            />
+            <span>Remove silences (tighten the clip)</span>
+          </label>
 
           {/* Quick clip picker when multiple clips exist. */}
           {clips.length > 1 && (

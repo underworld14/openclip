@@ -268,6 +268,35 @@ describe('buildAss — FULL .ass golden file', () => {
     expect(ass).toBe(expected)
   })
 
+  it('remaps words onto the compressed timeline for a jump-cut (Part I.4)', () => {
+    // A 4s silence (1.0..5.0) is removed via keepRanges; words after it shift
+    // earlier, a word fully inside the gap is dropped, and the karaoke stays
+    // continuous on the compressed (2s) timeline.
+    const jumpWords: WordTimestamp[] = [
+      { word: 'one', start: 0, end: 0.5, confidence: 1 },
+      { word: 'two', start: 0.5, end: 1.0, confidence: 1 },
+      { word: 'gap', start: 2.0, end: 3.0, confidence: 1 }, // inside removed silence
+      { word: 'three', start: 5.0, end: 5.5, confidence: 1 },
+      { word: 'four', start: 5.5, end: 6.0, confidence: 1 }
+    ]
+    const ass = buildAss({
+      words: jumpWords,
+      clipStart: 0,
+      clipEnd: 6,
+      style: STYLE,
+      keepRanges: [
+        [0, 1.0],
+        [5.0, 6.0]
+      ]
+    })
+    // The dropped-silence word is gone; the surviving words are continuous and the
+    // single line ends at 0:00:02.00 (2s kept), not 0:00:06.00.
+    expect(ass).not.toContain('gap')
+    expect(ass).toContain(
+      'Dialogue: 0,0:00:00.00,0:00:02.00,Karaoke,,0,0,0,,{\\k50}one{\\k50} two{\\k50} three{\\k50} four'
+    )
+  })
+
   it('emits a header-only file (no Dialogue) when no word intersects the clip', () => {
     const ass = buildAss({ words, clipStart: 100, clipEnd: 110, style: STYLE })
     expect(ass).toContain('[Events]')

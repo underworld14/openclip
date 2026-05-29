@@ -30,6 +30,8 @@ import {
   type ExportClipResult
 } from '@main/services/ffmpeg-export'
 import { writeClipCaptions as defaultWriteClipCaptions } from '@main/services/ffmpeg-caption'
+import { detectSilences as defaultDetectSilences } from '@main/services/silence-detect'
+import { computeKeepRanges, removesAnything, type Range } from '@shared/keep-ranges'
 import { fontsDir as defaultFontsDir, jobTempDir, TEMP_NAMES } from '@main/utils/paths'
 
 export interface ExportRunnerDeps {
@@ -43,6 +45,7 @@ export interface ExportRunnerDeps {
     quality: JobParams['export']['quality']
     assPath?: string
     fontsDir?: string
+    keepRanges?: Range[]
     onProgress?: (pct: number) => void
     signal?: AbortSignal
   }) => Promise<ExportClipResult>
@@ -55,7 +58,17 @@ export interface ExportRunnerDeps {
     clipEnd: number
     style?: NonNullable<JobParams['export']['captions']>['style']
     assPath: string
+    keepRanges?: Range[]
   }) => string
+  /** Detect silences for jump-cuts (Part I.4 — injected for tests). */
+  detectSilences?: (opts: {
+    sourcePath: string
+    startTime: number
+    endTime: number
+    noiseDb?: number
+    minSilenceSec?: number
+    signal?: AbortSignal
+  }) => Promise<Range[]>
   /** Resolve the per-job temp .ass path (injected for tests). */
   resolveAssPath?: (projectId: string, jobId: string, clipId: string) => string
 }
@@ -70,6 +83,7 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
   const exportClip = deps.exportClip ?? defaultExportClip
   const resolveFontsDir = deps.fontsDir ?? defaultFontsDir
   const writeClipCaptions = deps.writeClipCaptions ?? defaultWriteClipCaptions
+  const detectSilences = deps.detectSilences ?? defaultDetectSilences
   const resolveAssPath =
     deps.resolveAssPath ??
     ((projectId, jobId, clipId) =>
@@ -82,10 +96,38 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
   ): Promise<JobResult['export']> => {
     emit.progress(0, 'encoding')
 
+    // Jump-cut (Part I.4, opt-in): detect silences in the clip span → compute the
+    // spans to keep. Best-effort — a detection failure (or no removable silence)
+    // falls back to the normal single cut. Done BEFORE captions so the karaoke is
+    // built on the compressed timeline.
+    let keepRanges: Range[] | undefined
+    if (params.removeSilence) {
+      const tuning = typeof params.removeSilence === 'object' ? params.removeSilence : {}
+      const minSilenceSec = tuning.minSilenceSec ?? 0.6
+      try {
+        const silences = await detectSilences({
+          sourcePath: params.sourcePath,
+          startTime: params.startTime,
+          endTime: params.endTime,
+          noiseDb: tuning.noiseDb,
+          minSilenceSec,
+          signal: ctx.signal
+        })
+        const kr = computeKeepRanges(params.startTime, params.endTime, silences, {
+          minSilenceSec,
+          padSec: tuning.padSec
+        })
+        if (removesAnything(kr, params.startTime, params.endTime)) keepRanges = kr
+      } catch {
+        /* silence detection failed → normal single cut (never block the export) */
+      }
+    }
+
     // Resolve the .ass to burn: an explicitly-supplied `assPath` wins; otherwise,
     // if karaoke caption inputs are present, GENERATE the .ass into the per-job
     // temp dir (PRD §17) from the clip's word timestamps + style, scoped+rebased
-    // to the clip's resolved bounds. No captions → no subtitles filter (fix M3).
+    // to the clip's resolved bounds (or remapped onto the compressed timeline when
+    // jump-cutting). No captions → no subtitles filter (fix M3).
     let assPath = params.assPath
     if (!assPath && params.captions) {
       assPath = writeClipCaptions({
@@ -93,7 +135,8 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
         clipStart: params.startTime,
         clipEnd: params.endTime,
         style: params.captions.style,
-        assPath: resolveAssPath(params.projectId, ctx.jobId, params.clipId)
+        assPath: resolveAssPath(params.projectId, ctx.jobId, params.clipId),
+        keepRanges
       })
     }
 
@@ -107,6 +150,7 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
       assPath,
       // Only needed when captions are burned; harmless otherwise.
       fontsDir: assPath ? resolveFontsDir() : undefined,
+      keepRanges,
       onProgress: (pct) => emit.progress(pct, 'encoding'),
       signal: ctx.signal
     })

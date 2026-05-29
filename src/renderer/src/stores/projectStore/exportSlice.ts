@@ -84,6 +84,8 @@ export function buildExportParams(args: {
   words?: WordTimestamp[]
   /** Caption style to map to ASS (font/size/color/bg/position/animation). */
   captionStyle?: CaptionStyle
+  /** Remove long silences via jump-cuts (Part I.4, opt-in). */
+  removeSilence?: JobParams['export']['removeSilence']
 }): JobParams['export'] {
   const { start, end } = resolveBounds(args.clip)
   if (!(end > start)) {
@@ -102,6 +104,7 @@ export function buildExportParams(args: {
       args.captionsEnabled && args.words && args.words.length > 0
         ? { words: args.words, style: args.captionStyle }
         : undefined,
+    removeSilence: args.removeSilence,
     quality: args.quality ?? '1080p'
   }
 }

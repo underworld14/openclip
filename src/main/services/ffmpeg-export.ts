@@ -31,6 +31,7 @@
 
 import { runFfmpeg, type RunFfmpegOptions } from './ffmpeg-core'
 import type { AspectRatio } from '@shared/schema'
+import { keptDuration, removesAnything, type Range } from '@shared/keep-ranges'
 
 // ============================================================================
 // Pure arg building (unit-tested without a real binary — PRD §18)
@@ -140,6 +141,13 @@ export interface ExportArgsOptions {
    * fallback / Settings "force CPU"). Default false → videotoolbox on macOS.
    */
   forceCpu?: boolean
+  /**
+   * Silence/filler jump-cut keep ranges (Part I.4 — ABSOLUTE source seconds). When
+   * present AND they actually drop something, the export uses a multi-range
+   * select+concat filtergraph instead of the single `-ss/-to` cut; the burned
+   * captions must already be on the COMPRESSED timeline (export-runner remaps).
+   */
+  keepRanges?: Range[]
 }
 
 /**
@@ -183,6 +191,62 @@ export function exportClipArgs(opts: ExportArgsOptions): string[] {
     '-b:a',
     '192k',
     // streaming-friendly mp4 (moov atom up front) so the export is web-playable:
+    '-movflags',
+    '+faststart',
+    '-progress',
+    'pipe:2',
+    '-nostats',
+    opts.outputPath
+  ]
+}
+
+/**
+ * Build the multi-range (silence-removed) cut argv (Part I.4). Instead of a
+ * single `-ss/-to`, a `select`/`aselect` filtergraph keeps only the kept spans
+ * and `setpts`/`asetpts` re-stamp them into one continuous timeline; the same
+ * crop+scale[+subtitles] chain then runs on the compressed video. Keep ranges are
+ * ABSOLUTE source seconds, so the `between(t,…)` predicates match the source `t`.
+ *
+ *   ffmpeg -i src -filter_complex
+ *     "[0:v]select='between(t,a,b)+…',setpts=N/FRAME_RATE/TB,<crop>,scale=W:H[,subtitles=…][v];
+ *      [0:a]aselect='between(t,a,b)+…',asetpts=N/SR/TB[a]"
+ *     -map [v] -map [a] -c:v … -c:a aac -movflags +faststart out
+ */
+export function exportClipArgsMultiRange(opts: ExportArgsOptions): string[] {
+  const keep = opts.keepRanges ?? []
+  if (keep.length === 0) {
+    throw new Error('ffmpeg-export: exportClipArgsMultiRange requires non-empty keepRanges')
+  }
+  const { width, height } = outputDimensions(opts.aspectRatio)
+  // `+`-joined OR of the kept spans; single-quoted so the commas are literal to
+  // the filtergraph parser (not filter separators).
+  const between = keep.map(([a, b]) => `between(t,${a},${b})`).join('+')
+  let vchain = `[0:v]select='${between}',setpts=N/FRAME_RATE/TB,${cropExpr(opts.aspectRatio)},scale=${width}:${height}`
+  if (opts.assPath) {
+    vchain += `,subtitles=${escapeFilterPath(opts.assPath)}`
+    if (opts.fontsDir) vchain += `:fontsdir=${escapeFilterPath(opts.fontsDir)}`
+  }
+  vchain += '[v]'
+  const achain = `[0:a]aselect='${between}',asetpts=N/SR/TB[a]`
+  const codecArgs = opts.forceCpu
+    ? ['-c:v', 'libx264', '-preset', 'medium', '-crf', '18']
+    : ['-c:v', 'h264_videotoolbox', '-b:v', videoBitrate(opts.quality)]
+  return [
+    '-hide_banner',
+    '-y',
+    '-i',
+    opts.sourcePath,
+    '-filter_complex',
+    `${vchain};${achain}`,
+    '-map',
+    '[v]',
+    '-map',
+    '[a]',
+    ...codecArgs,
+    '-c:a',
+    'aac',
+    '-b:a',
+    '192k',
     '-movflags',
     '+faststart',
     '-progress',
@@ -248,9 +312,14 @@ export interface ExportClipResult {
  * body). Rejects on a non-zero ffmpeg exit (the runner maps it to a typed error).
  */
 export async function exportClip(opts: ExportClipOptions): Promise<ExportClipResult> {
-  const args = exportClipArgs(opts)
+  // Jump-cut path (Part I.4): only when keep ranges actually drop something —
+  // otherwise the cheaper single `-ss/-to` cut. The output (and progress total)
+  // is the COMPRESSED kept duration, not the original span.
+  const jumpCut =
+    !!opts.keepRanges && removesAnything(opts.keepRanges, opts.startTime, opts.endTime)
+  const args = jumpCut ? exportClipArgsMultiRange(opts) : exportClipArgs(opts)
   const { width, height } = outputDimensions(opts.aspectRatio)
-  const durationSec = opts.endTime - opts.startTime
+  const durationSec = jumpCut ? keptDuration(opts.keepRanges!) : opts.endTime - opts.startTime
 
   const runOpts: RunFfmpegOptions = {
     args,

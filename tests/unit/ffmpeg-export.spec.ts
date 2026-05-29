@@ -11,6 +11,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   exportClipArgs,
+  exportClipArgsMultiRange,
   thumbnailArgs,
   buildVf,
   cropExpr,
@@ -131,6 +132,42 @@ describe('exportClipArgs (the verified command)', () => {
   it('throws on a non-positive span (caller surfaces INPUT_INVALID)', () => {
     expect(() => exportClipArgs({ ...base, startTime: 40, endTime: 40 })).toThrow(/non-positive/)
     expect(() => exportClipArgs({ ...base, startTime: 40, endTime: 10 })).toThrow(/non-positive/)
+  })
+})
+
+describe('exportClipArgsMultiRange (Part I.4 jump-cuts)', () => {
+  const keepRanges: [number, number][] = [
+    [30, 40],
+    [44, 58.5]
+  ]
+
+  it('builds a select+setpts filtergraph over the kept spans (no -ss/-to)', () => {
+    const args = exportClipArgsMultiRange({ ...base, keepRanges })
+    const fc = args[args.indexOf('-filter_complex') + 1]
+    // video: OR of between() over kept spans, re-stamped, then crop+scale.
+    expect(fc).toContain(
+      "[0:v]select='between(t,30,40)+between(t,44,58.5)',setpts=N/FRAME_RATE/TB,crop=ih*9/16:ih,scale=1080:1920[v]"
+    )
+    // audio: same selection, re-stamped.
+    expect(fc).toContain("[0:a]aselect='between(t,30,40)+between(t,44,58.5)',asetpts=N/SR/TB[a]")
+    expect(args).toEqual(expect.arrayContaining(['-map', '[v]', '-map', '[a]']))
+    expect(args).not.toContain('-ss') // the select handles the ranges, not a seek
+    expect(args.at(-1)).toBe('/out/clip.mp4')
+  })
+
+  it('appends the subtitles burn (compressed-timeline .ass) as the last video node', () => {
+    const args = exportClipArgsMultiRange({
+      ...base,
+      keepRanges,
+      assPath: '/t/c.ass',
+      fontsDir: '/t/fonts'
+    })
+    const fc = args[args.indexOf('-filter_complex') + 1]
+    expect(fc).toContain('scale=1080:1920,subtitles=/t/c.ass:fontsdir=/t/fonts[v]')
+  })
+
+  it('throws without keep ranges (use the single-range path instead)', () => {
+    expect(() => exportClipArgsMultiRange({ ...base })).toThrow(/keepRanges/)
   })
 })
 

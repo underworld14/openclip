@@ -7,8 +7,10 @@
  * `composeProject()` + `buildExportParams()` (integration-gap fix, task 5).
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useProjectStore } from '@renderer/stores/projectStore'
+import { useSettingsStore } from '@renderer/stores/settingsStore'
+import { useBrandStore, activeBrand } from '@renderer/stores/brandStore'
 import { buildExportParams } from '@renderer/stores/projectStore/exportSlice'
 import {
   exportToFile,
@@ -18,7 +20,10 @@ import {
 import { runBatchExport } from '@renderer/components/batch-export'
 import { PLATFORM_PRESETS, platformPreset } from '@renderer/components/platformPresets'
 import { CAPTION_PRESETS, resolveEffectiveCaptionStyle } from '@renderer/components/captionPresets'
+import { brandCaptionOverride, brandLogoParams } from '@renderer/components/brandKit'
+import { fetchAiEmojiMap } from '@renderer/components/caption-emoji'
 import { resolveBounds } from '@shared/clip-bounds'
+import type { CaptionStyle } from '@shared/schema'
 import { Button } from '@renderer/components/ui/button'
 import { Progress } from '@renderer/components/ui/progress'
 
@@ -65,6 +70,16 @@ export function ExportPanel(): React.JSX.Element {
 
   const transcript = useProjectStore((s) => s.transcript)
 
+  // Part K — the AI emoji provider/model lives in app Settings; the active brand
+  // (per-project) drives caption colors/font + the logo overlay.
+  const settings = useSettingsStore((s) => s.settings)
+  const brands = useBrandStore((s) => s.brands)
+  const brandLoaded = useBrandStore((s) => s.loaded)
+  const loadBrands = useBrandStore((s) => s.load)
+  useEffect(() => {
+    if (!brandLoaded) void loadBrands()
+  }, [brandLoaded, loadBrands])
+
   const [pct, setPct] = useState(0)
   const [phase, setPhase] = useState<Phase>('idle')
   const [err, setErr] = useState<string | null>(null)
@@ -88,6 +103,10 @@ export function ExportPanel(): React.JSX.Element {
   // Caption template (Part K) — PERSISTED on the project so the export and the
   // (Step 3) WYSIWYG preview always agree. '' ⇒ the app-default karaoke style.
   const captionTemplateId = currentProject?.settings.captionTemplateId ?? ''
+  // Auto-emoji source (Part K) — persisted on the project so the preview agrees.
+  const autoEmoji: CaptionStyle['autoEmoji'] = currentProject?.settings.autoEmoji ?? 'off'
+  // The active brand (per-project selection resolved against the app library).
+  const brand = activeBrand(brands, currentProject?.activeBrandId)
 
   const runExport = useCallback(async (): Promise<void> => {
     if (!clip || !currentProject) return
@@ -100,6 +119,15 @@ export function ExportPanel(): React.JSX.Element {
     setPct(0)
     setOutputPath(null)
     try {
+      // Auto-emoji 'ai' (Part K): fetch the BYOK emoji map BEFORE the job (the
+      // buildParams callback is sync). Best-effort — undefined ⇒ no AI emoji.
+      const aiEmojiMap = await fetchAiEmojiMap({
+        bridge: window.openclip,
+        settings,
+        words: project.transcript.words,
+        clip,
+        autoEmoji
+      })
       const outcome = await exportToFile({
         bridge: window.openclip,
         defaultFileName: defaultClipFileName(clip.title),
@@ -112,7 +140,14 @@ export function ExportPanel(): React.JSX.Element {
             outputPath: chosenPath,
             captionsEnabled: captionsEnabled && hasWords,
             words: project.transcript.words,
-            captionStyle: resolveEffectiveCaptionStyle(captionTemplateId),
+            // Brand overrides caption font/colors; autoEmoji selects the emoji source.
+            captionStyle: resolveEffectiveCaptionStyle(captionTemplateId, {
+              autoEmoji,
+              brand: brandCaptionOverride(brand)
+            }),
+            aiEmojiMap,
+            // Brand logo overlay (Part K) — {} when the brand has no logo.
+            ...brandLogoParams(brand),
             removeSilence,
             reframe
           }),
@@ -145,6 +180,9 @@ export function ExportPanel(): React.JSX.Element {
     captionsEnabled,
     hasWords,
     captionTemplateId,
+    autoEmoji,
+    brand,
+    settings,
     removeSilence,
     reframe
   ])
@@ -181,6 +219,18 @@ export function ExportPanel(): React.JSX.Element {
       clips: approvedClips,
       dir: dir.dirPath,
       preset,
+      // Part K — apply the active brand (caption colors/font + logo) and the
+      // auto-emoji source to every clip; the AI map is fetched per clip.
+      brand,
+      autoEmoji,
+      resolveAiEmojiMap: (c) =>
+        fetchAiEmojiMap({
+          bridge: window.openclip,
+          settings,
+          words: project.transcript.words,
+          clip: c,
+          autoEmoji
+        }),
       signal: controller.signal,
       onClipStatus: (_id, status) =>
         setBatch((b) =>
@@ -212,7 +262,16 @@ export function ExportPanel(): React.JSX.Element {
     if (exported.length) markExported(exported)
     setBatch((b) => (b ? { ...b, running: false } : b))
     batchAbort.current = null
-  }, [composeProject, platformId, approvedClips, addExportRecord, markExported])
+  }, [
+    composeProject,
+    platformId,
+    approvedClips,
+    addExportRecord,
+    markExported,
+    brand,
+    autoEmoji,
+    settings
+  ])
 
   return (
     <div data-testid="export-panel" className="flex flex-col gap-3 p-3 text-sm">
@@ -274,6 +333,38 @@ export function ExportPanel(): React.JSX.Element {
                   />
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Auto-emoji (Part K): off / local dictionary / BYOK-AI suggestions.
+              Persisted on the project so the WYSIWYG preview agrees. Monochrome
+              glyphs (the bundled FFmpeg libass can't render color emoji). */}
+          {captionsEnabled && hasWords && (
+            <div className="flex items-center gap-2 text-xs" data-testid="auto-emoji-control">
+              <span className="text-muted-foreground">Emoji:</span>
+              <div className="flex overflow-hidden rounded-md border">
+                {(['off', 'local', 'ai'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    data-testid={`auto-emoji-${mode}`}
+                    data-active={autoEmoji === mode}
+                    onClick={() => setProjectSettings({ autoEmoji: mode })}
+                    className={`px-2.5 py-1 capitalize transition-colors ${
+                      autoEmoji === mode
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-background hover:bg-accent'
+                    }`}
+                  >
+                    {mode === 'ai' ? 'AI' : mode}
+                  </button>
+                ))}
+              </div>
+              {autoEmoji === 'ai' && (
+                <span className="text-muted-foreground">
+                  uses {settings.emojiProvider ?? settings.aiProvider} (Settings)
+                </span>
+              )}
             </div>
           )}
 

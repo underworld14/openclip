@@ -36,7 +36,10 @@ import { Timeline } from '@renderer/components/Timeline'
 import { ExportPanel } from '@renderer/components/ExportPanel'
 import { SettingsPanel } from '@renderer/components/SettingsPanel'
 import { ModelDownloadDialog } from '@renderer/components/ModelDownloadDialog'
+import { Toaster } from '@renderer/components/ui/sonner'
+import { createGenerateClipsHandler } from '@renderer/components/generateClips'
 import { useProjectStore } from '@renderer/stores/projectStore'
+import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { installAutosave } from '@renderer/stores/projectStore/autosave'
 
 type Modal = 'none' | 'import' | 'export' | 'settings'
@@ -51,6 +54,20 @@ function App(): React.JSX.Element {
   const hasTranscript = useProjectStore((s) => (s.transcript?.segments.length ?? 0) > 0)
   const hasClips = useProjectStore((s) => (s.clips?.length ?? 0) > 0)
   const showEditor = hasSource || hasTranscript || hasClips
+
+  const generating = useProjectStore((s) => s.generating)
+
+  // The "Auto Generate Clips" header action: build the request from the open
+  // project + app settings (segments only — words stay local) and dispatch the
+  // clipsSlice action. The ClipSidebar already surfaces generating/generateError.
+  const handleGenerateClips = createGenerateClipsHandler({
+    // composeProject() so the request's segments come from the LIVE transcript
+    // slice (the same source `hasTranscript` gates on), not a possibly-stale
+    // currentProject.transcript.
+    getProject: () => useProjectStore.getState().composeProject(),
+    getSettings: () => useSettingsStore.getState().settings,
+    generateClips: (req) => useProjectStore.getState().generateClips(req)
+  })
 
   // Wire the debounced autosave subscriber (Wave-1 integration) once for the app
   // lifetime; tears down on unmount.
@@ -128,7 +145,13 @@ function App(): React.JSX.Element {
                 Editor
               </span>
               <div className="flex gap-2">
-                <Button variant="secondary" size="sm" className="gap-1.5">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={!hasTranscript || generating}
+                  onClick={handleGenerateClips}
+                >
                   <Sparkles className="size-4" /> Auto Generate Clips
                 </Button>
                 <Button
@@ -190,6 +213,9 @@ function App(): React.JSX.Element {
         initialModel={neededModel}
         onDownloaded={() => setModelDialogOpen(false)}
       />
+
+      {/* App-wide toasts (autosave failures, etc.). Mounted once. */}
+      <Toaster />
     </div>
   )
 }

@@ -248,7 +248,7 @@ describe('buildAss — FULL .ass golden file', () => {
     const expected = [
       '[Script Info]',
       'ScriptType: v4.00+',
-      'WrapStyle: 2',
+      'WrapStyle: 0',
       'ScaledBorderAndShadow: yes',
       'PlayResX: 1080',
       'PlayResY: 1920',

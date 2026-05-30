@@ -11,7 +11,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, rm, readFile, writeFile, mkdir } from 'node:fs/promises'
+import { mkdtemp, rm, readFile, writeFile, mkdir, readdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -76,6 +76,55 @@ describe('save → load round-trip', () => {
     const snapshot = structuredClone(projectFixture)
     await saveProject(dir, projectFixture, { touchUpdatedAt: true })
     expect(projectFixture).toEqual(snapshot)
+  })
+})
+
+// ── atomic write (a failed save must not corrupt the prior .ocproj) ──────────
+//
+// We simulate a write that fails AFTER the temp file is created (e.g. a rename
+// that fails with EXDEV/ENOSPC) by making the destination path un-renamable-to:
+// pre-creating a non-empty DIRECTORY at the `.ocproj` path forces `rename(tmp,
+// dest)` to fail with ENOTEMPTY/EISDIR on every platform — no fs mocking, which
+// ESM module namespaces forbid. The prior good file is a separate save.
+describe('saveProject is atomic (temp file + rename)', () => {
+  it('leaves the prior .ocproj INTACT when the rename fails mid-save', async () => {
+    // Seed a known-good previous save under one id.
+    const goodId = '22222222-2222-4222-8222-222222222222'
+    const v1 = { ...projectFixture, id: goodId, name: 'GOOD v1' }
+    const { path: goodPath } = await saveProject(dir, v1)
+    const before = await readFile(goodPath, 'utf8')
+    expect(JSON.parse(before).name).toBe('GOOD v1')
+
+    // For the FAILING save, make its destination a non-empty directory so the
+    // final `rename(tmp, dest)` fails — the temp write succeeds, the publish does
+    // not. The prior good file (different id) must be untouched.
+    const badId = '33333333-3333-4333-8333-333333333333'
+    const badDest = join(dir, `${badId}${OCPROJ_EXT}`)
+    await mkdir(badDest, { recursive: true })
+    await writeFile(join(badDest, 'keep'), 'x', 'utf8') // make it non-empty → ENOTEMPTY
+
+    const v2 = { ...projectFixture, id: badId, name: 'BAD v2' }
+    await expect(saveProject(dir, v2)).rejects.toMatchObject({ code: 'IO' })
+
+    // The pre-existing good file survives, byte-for-byte.
+    const after = await readFile(goodPath, 'utf8')
+    expect(after).toBe(before)
+    const loaded = await loadProject(dir, goodId)
+    expect(loaded.name).toBe('GOOD v1')
+  })
+
+  it('does not leave a leftover temp file behind on a failed write', async () => {
+    const badId = '44444444-4444-4444-8444-444444444444'
+    const badDest = join(dir, `${badId}${OCPROJ_EXT}`)
+    await mkdir(badDest, { recursive: true })
+    await writeFile(join(badDest, 'keep'), 'x', 'utf8')
+
+    await expect(saveProject(dir, { ...projectFixture, id: badId })).rejects.toMatchObject({
+      code: 'IO'
+    })
+    // No `.tmp` scratch file should be left behind (best-effort cleanup).
+    const leftovers = (await readdir(dir)).filter((n) => n.endsWith('.tmp'))
+    expect(leftovers).toEqual([])
   })
 })
 

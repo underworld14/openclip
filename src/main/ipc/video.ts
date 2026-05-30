@@ -160,22 +160,32 @@ export function registerVideoHandlers(ctx: IpcContext): void {
   if (process.env.OPENCLIP_FAKE_TRANSCRIBE) {
     ctx.ipcMain.handle(
       IPCChannels.IMPORT_VIDEO,
-      (_e, req: { filePath: string }): ImportVideoResult => ({
-        sourceVideo: {
-          path: req.filePath,
-          duration: 240,
-          resolution: { width: 1920, height: 1080 },
-          fps: 30,
-          format: 'mp4'
+      (_e, req: { filePath: string }): ImportVideoResult => {
+        const result: ImportVideoResult = {
+          sourceVideo: {
+            path: req.filePath,
+            duration: 240,
+            resolution: { width: 1920, height: 1080 },
+            fps: 30,
+            format: 'mp4'
+          }
         }
-      })
+        // Grant the imported source so the openclip-media:// scheme may serve it
+        // to the preview <video> (audit fix openclip-8tx).
+        ctx.mediaAccess.grant(result.sourceVideo.path)
+        return result
+      }
     )
   } else {
     ctx.ipcMain.handle(
       IPCChannels.IMPORT_VIDEO,
-      async (_e, req: { filePath: string }): Promise<ImportVideoResult> => ({
-        sourceVideo: await probeVideo(req.filePath)
-      })
+      async (_e, req: { filePath: string }): Promise<ImportVideoResult> => {
+        const result: ImportVideoResult = { sourceVideo: await probeVideo(req.filePath) }
+        // Grant the imported source so the openclip-media:// scheme may serve it
+        // to the preview <video> (audit fix openclip-8tx).
+        ctx.mediaAccess.grant(result.sourceVideo.path)
+        return result
+      }
     )
   }
 }

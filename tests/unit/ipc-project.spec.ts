@@ -47,7 +47,10 @@ function makeFakeContext(): {
     ipcMain,
     getMainWindow: () => null,
     sidecar: {} as IpcContext['sidecar'],
-    keyVault: {} as IpcContext['keyVault']
+    keyVault: {} as IpcContext['keyVault'],
+    // LOAD_PROJECT now grants the source path to the media allow-list (audit fix
+    // openclip-8tx); a no-op stub keeps these store-focused tests unaffected.
+    mediaAccess: { grant: vi.fn(), isAllowed: vi.fn() } as IpcContext['mediaAccess']
   } as unknown as IpcContext
 
   const invoke = async (ch: string, req?: unknown): Promise<unknown> => {

@@ -45,7 +45,13 @@ export type Bridge = Window['openclip']
 export interface CoreStoreApi {
   getState: () => Pick<
     ProjectStore,
-    'currentProject' | 'setCurrentProject' | 'setRecentProjects' | 'setTranscript' | 'setClips'
+    | 'currentProject'
+    | 'setCurrentProject'
+    | 'setRecentProjects'
+    | 'setTranscript'
+    | 'setClips'
+    | 'setExportHistory'
+    | 'composeProject'
   >
 }
 
@@ -90,14 +96,18 @@ export function createBlankProject(name: string, sourceVideo: SourceVideo): Proj
  * (T-Media's `transcriptSlice`), and the clips slice (T-AI's `clipsSlice`) so a
  * reopened project comes back whole (PRD §5 "Project Save/Load"; plan P5
  * done-when: "quit/reopen restores the full project — source, transcript, clips,
- * edits, settings"). The `Project` schema guarantees `transcript` and `clips`
- * are present (clips defaults to []), so no null-guards are needed.
+ * edits, settings"). The `Project` schema guarantees `transcript`, `clips`, and
+ * `exportHistory` are present (each defaults to []), so no null-guards are needed.
+ * `exportHistory` MUST be hydrated here: `composeProject()` reads it from the
+ * slice, so without this an opened project's history would be overwritten with []
+ * on the next save (and leak across project switches — the slice is a singleton).
  */
 export function hydrateFromProject(store: CoreStoreApi, project: Project): void {
   const state = store.getState()
   state.setCurrentProject(project)
   state.setTranscript(project.transcript)
   state.setClips(project.clips)
+  state.setExportHistory(project.exportHistory)
 }
 
 /**
@@ -145,9 +155,12 @@ export function projectActions(bridge: Bridge, store: CoreStoreApi): ProjectActi
     },
 
     save: async (): Promise<{ path: string } | null> => {
-      const current = store.getState().currentProject
-      if (!current) return null
-      const res = await bridge.project.save({ project: current })
+      // Persist the COMPOSED project (live clips/transcript/exportHistory layered
+      // over the document), NOT the stale `currentProject` — otherwise a manual
+      // save would drop sibling-slice edits (clip approvals, streamed transcript).
+      const project = store.getState().composeProject()
+      if (!project) return null
+      const res = await bridge.project.save({ project })
       // Reflect the new save in the recents list (updatedAt changed).
       await refreshRecents()
       return res

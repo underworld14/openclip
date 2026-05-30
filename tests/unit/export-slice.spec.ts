@@ -13,7 +13,12 @@
 
 import { describe, expect, it, beforeEach } from 'vitest'
 import { createMockOpenclip } from '../mocks/openclip'
-import { projectFixture, clipFixture, transcriptFixture } from '../fixtures/contract'
+import {
+  projectFixture,
+  clipFixture,
+  transcriptFixture,
+  exportRecordFixture
+} from '../fixtures/contract'
 import { composeLiveProject, buildExportParams } from '@renderer/stores/projectStore/exportSlice'
 import type { Clip } from '@shared/schema'
 
@@ -24,21 +29,24 @@ function installBridge(): void {
 // ── Pure helpers (no store) ──────────────────────────────────────────────────
 
 describe('composeLiveProject (pure)', () => {
-  it('layers live clips + transcript over the base project', () => {
+  it('layers live clips + transcript + export history over the base project', () => {
     const liveClips: Clip[] = [{ ...clipFixture, id: 'live-1', status: 'approved' }]
-    const composed = composeLiveProject(projectFixture, liveClips, transcriptFixture)
+    const liveHistory = [exportRecordFixture]
+    const composed = composeLiveProject(projectFixture, liveClips, transcriptFixture, liveHistory)
     expect(composed.clips).toBe(liveClips) // live clips win
     expect(composed.clips[0].status).toBe('approved')
     expect(composed.transcript).toBe(transcriptFixture)
+    expect(composed.exportHistory).toBe(liveHistory) // live history wins
     // base metadata preserved
     expect(composed.id).toBe(projectFixture.id)
     expect(composed.sourceVideo).toBe(projectFixture.sourceVideo)
   })
 
   it('keeps the base transcript when no live transcript is present', () => {
-    const composed = composeLiveProject(projectFixture, [], null)
+    const composed = composeLiveProject(projectFixture, [], null, [])
     expect(composed.transcript).toBe(projectFixture.transcript)
     expect(composed.clips).toEqual([])
+    expect(composed.exportHistory).toEqual([])
   })
 })
 

@@ -38,6 +38,11 @@ Names) travels with the fonts in **`OFL.txt`** in this directory; it ships under
 `<Resources>/fonts/` via the same `extraResources` rule, satisfying the OFL's
 "license must accompany the fonts" requirement.
 
+`DejaVuSans.ttf` is **not** OFL — it ships under the Bitstream Vera / DejaVu
+license, whose full text travels in **`LICENSE-DejaVu.txt`** in this directory
+(shipped via the electron-builder `**/LICENSE*` font filter). The Bitstream Vera
+license likewise requires its notice to accompany the font.
+
 > When adding a font, reference it in a caption preset by its **family name**
 > (verify with `fc-scan --format '%{family}\n' <file>`), add a row here, and
 > append its `OFL.txt` license text to `OFL.txt`.

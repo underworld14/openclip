@@ -10,7 +10,7 @@
  * `model-download-runner.ts`; PRD §18).
  */
 
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { JobResult, JobParams } from '@shared/jobs'
 import type { JobRunner, JobEmitter, JobRunnerContext } from '@main/services/sidecar-manager'
@@ -25,6 +25,23 @@ export interface UrlDownloadRunnerDeps {
   downloadUrl?: (opts: UrlDownloadOptions) => Promise<UrlDownloadResult>
   /** Resolve the default per-job download dir (injectable for tests). */
   resolveOutDir?: (jobId: string) => string
+  /**
+   * Remove the per-job download scratch dir on error/cancel (audit fix
+   * openclip-2j3 — injectable for tests). Default: best-effort `rmSync(outDir,
+   * {recursive, force})`. NOT called on success: the downloaded file still lives
+   * in `outDir` until the import pipeline ADOPTS it out (move into media/<id>/),
+   * so removing it on success would delete the file before adoption.
+   */
+  removeOutDir?: (outDir: string) => void
+}
+
+/** Best-effort removal of a download scratch dir — never throws (audit fix openclip-2j3). */
+function defaultRemoveOutDir(outDir: string): void {
+  try {
+    rmSync(outDir, { recursive: true, force: true })
+  } catch {
+    /* never let temp cleanup fail the job — the launch sweep is the backstop */
+  }
 }
 
 /** Default per-job download dir under the OpenClip temp root, created on demand. */
@@ -46,6 +63,7 @@ export function createUrlDownloadRunner(
 ): JobRunner<'url-download'> {
   const download = deps.downloadUrl ?? defaultDownloadUrl
   const resolveOutDir = deps.resolveOutDir ?? defaultResolveOutDir
+  const removeOutDir = deps.removeOutDir ?? defaultRemoveOutDir
 
   return async (
     params: JobParams['url-download'],
@@ -59,16 +77,27 @@ export function createUrlDownloadRunner(
     // arbitrary-file-write primitive). The URL itself is validated in downloadUrl.
     const outDir = resolveOutDir(ctx.jobId)
 
-    const result = await download({
-      url: params.url,
-      outDir,
-      signal: ctx.signal,
-      onPid: (pid) => ctx.trackPid(pid),
-      onProgress: ({ downloadedBytes, totalBytes, pct }) => {
-        emit.partial({ downloadedBytes, totalBytes, pct })
-        emit.progress(Math.min(100, Math.max(0, pct)), 'downloading')
-      }
-    })
+    let result: UrlDownloadResult
+    try {
+      result = await download({
+        url: params.url,
+        outDir,
+        signal: ctx.signal,
+        onPid: (pid) => ctx.trackPid(pid),
+        onProgress: ({ downloadedBytes, totalBytes, pct }) => {
+          emit.partial({ downloadedBytes, totalBytes, pct })
+          emit.progress(Math.min(100, Math.max(0, pct)), 'downloading')
+        }
+      })
+    } catch (err) {
+      // Audit fix openclip-2j3: on error/cancel the partial download is dead —
+      // reclaim its scratch dir (<temp>/openclip/downloads/<jobId>) so a failed
+      // import never leaks a `.part`/orphan dir. Best-effort; rethrow the error so
+      // the manager still maps it to a terminal `error` (no swallow). On SUCCESS
+      // we DON'T rm: the file lives here until the import pipeline adopts it out.
+      removeOutDir(outDir)
+      throw err
+    }
 
     emit.progress(100, 'downloading')
     return { filePath: result.filePath, title: result.title, bytes: result.bytes }

@@ -23,6 +23,7 @@
  * runner. The fontsdir comes from trunk-frozen `paths.fontsDir()`.
  */
 
+import { rmSync } from 'node:fs'
 import type { JobResult, JobParams } from '@shared/jobs'
 import type { JobRunner, JobEmitter, JobRunnerContext } from '@main/services/sidecar-manager'
 import {
@@ -90,6 +91,28 @@ export interface ExportRunnerDeps {
   }) => Promise<ReframePlan | null>
   /** Resolve the per-job temp .ass path (injected for tests). */
   resolveAssPath?: (projectId: string, jobId: string, clipId: string) => string
+  /**
+   * Remove the per-job temp scratch dir (audit fix openclip-2j3 — injected for
+   * tests). Default: best-effort `rmSync(jobTempDir(projectId, jobId), {recursive,
+   * force})` so the dir is reclaimed whether the export succeeds, throws, or is
+   * cancelled. Removes ONLY `<temp>/openclip/<projectId>/<jobId>`, never the
+   * sibling content-addressed `cache/`.
+   */
+  removeJobTemp?: (projectId: string, jobId: string) => void
+}
+
+/**
+ * Best-effort removal of a job's temp scratch dir (audit fix openclip-2j3).
+ * Wrapped in try/catch so cleanup NEVER throws (mirrors `faststartRemux`); a
+ * leftover dir is reclaimed by the launch-time temp sweep as a backstop. Only
+ * ever touches `<temp>/openclip/<projectId>/<jobId>`, never the sibling `cache/`.
+ */
+function defaultRemoveJobTemp(projectId: string, jobId: string): void {
+  try {
+    rmSync(jobTempDir(projectId, jobId), { recursive: true, force: true })
+  } catch {
+    /* never let temp cleanup fail the job — the launch sweep is the backstop */
+  }
 }
 
 /**
@@ -108,116 +131,127 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
     deps.resolveAssPath ??
     ((projectId, jobId, clipId) =>
       `${jobTempDir(projectId, jobId)}/${TEMP_NAMES.captionsAss(clipId)}`)
+  const removeJobTemp = deps.removeJobTemp ?? defaultRemoveJobTemp
 
   return async (
     params: JobParams['export'],
     emit: JobEmitter<'export'>,
     ctx: JobRunnerContext
   ): Promise<JobResult['export']> => {
-    // Lead with a stage that matches what runs first: an 'analyzing' pass when we
-    // detect silences/faces, else straight to 'encoding' (keeps progress monotonic).
-    const willAnalyze = !!params.removeSilence || (!!params.reframe && params.reframe !== 'off')
-    emit.progress(0, willAnalyze ? 'analyzing' : 'encoding')
+    // Audit fix openclip-2j3: ALWAYS reclaim the per-job temp scratch dir
+    // (<temp>/openclip/<projectId>/<jobId>) on the way out — whether the export
+    // succeeds, throws, or is cancelled. The `finally` removes ONLY that job dir,
+    // never the sibling content-addressed `cache/`. (Single bracketing hunk.)
+    try {
+      // Lead with a stage that matches what runs first: an 'analyzing' pass when we
+      // detect silences/faces, else straight to 'encoding' (keeps progress monotonic).
+      const willAnalyze = !!params.removeSilence || (!!params.reframe && params.reframe !== 'off')
+      emit.progress(0, willAnalyze ? 'analyzing' : 'encoding')
 
-    // Jump-cut (Part I.4, opt-in): detect silences in the clip span → compute the
-    // spans to keep. Best-effort — a detection failure (or no removable silence)
-    // falls back to the normal single cut. Done BEFORE captions so the karaoke is
-    // built on the compressed timeline.
-    let keepRanges: Range[] | undefined
-    if (params.removeSilence) {
-      const tuning = typeof params.removeSilence === 'object' ? params.removeSilence : {}
-      const minSilenceSec = tuning.minSilenceSec ?? 0.6
-      try {
-        const silences = await detectSilences({
-          sourcePath: params.sourcePath,
-          startTime: params.startTime,
-          endTime: params.endTime,
-          noiseDb: tuning.noiseDb,
-          minSilenceSec,
-          signal: ctx.signal
-        })
-        const kr = computeKeepRanges(params.startTime, params.endTime, silences, {
-          minSilenceSec,
-          padSec: tuning.padSec
-        })
-        if (removesAnything(kr, params.startTime, params.endTime)) keepRanges = kr
-      } catch {
-        /* silence detection failed → normal single cut (never block the export) */
+      // Jump-cut (Part I.4, opt-in): detect silences in the clip span → compute the
+      // spans to keep. Best-effort — a detection failure (or no removable silence)
+      // falls back to the normal single cut. Done BEFORE captions so the karaoke is
+      // built on the compressed timeline.
+      let keepRanges: Range[] | undefined
+      if (params.removeSilence) {
+        const tuning = typeof params.removeSilence === 'object' ? params.removeSilence : {}
+        const minSilenceSec = tuning.minSilenceSec ?? 0.6
+        try {
+          const silences = await detectSilences({
+            sourcePath: params.sourcePath,
+            startTime: params.startTime,
+            endTime: params.endTime,
+            noiseDb: tuning.noiseDb,
+            minSilenceSec,
+            signal: ctx.signal
+          })
+          const kr = computeKeepRanges(params.startTime, params.endTime, silences, {
+            minSilenceSec,
+            padSec: tuning.padSec
+          })
+          if (removesAnything(kr, params.startTime, params.endTime)) keepRanges = kr
+        } catch {
+          /* silence detection failed → normal single cut (never block the export) */
+        }
       }
-    }
 
-    // Auto-reframe (Part J, opt-in): detect faces → a crop plan (static / pan /
-    // split). Best-effort — any failure, no faces, or a missing source size leaves
-    // the plan null ⇒ the static center-crop (export never fails because of this).
-    let reframePlan: ReframePlan | null = null
-    if (params.reframe && params.reframe !== 'off' && params.sourceResolution) {
-      try {
-        reframePlan = await planReframe({
-          sourcePath: params.sourcePath,
-          startTime: params.startTime,
-          endTime: params.endTime,
-          source: params.sourceResolution,
-          aspect: params.aspectRatio,
-          mode: params.reframe,
-          signal: ctx.signal
-        })
-      } catch (e) {
-        // Best-effort → static center-crop (never block the export). LOG it, though:
-        // a missing/broken model is otherwise indistinguishable from "no faces found".
-        console.warn(
-          `[export] reframe detection failed; falling back to center-crop: ${
-            e instanceof Error ? e.message : String(e)
-          }`
-        )
+      // Auto-reframe (Part J, opt-in): detect faces → a crop plan (static / pan /
+      // split). Best-effort — any failure, no faces, or a missing source size leaves
+      // the plan null ⇒ the static center-crop (export never fails because of this).
+      let reframePlan: ReframePlan | null = null
+      if (params.reframe && params.reframe !== 'off' && params.sourceResolution) {
+        try {
+          reframePlan = await planReframe({
+            sourcePath: params.sourcePath,
+            startTime: params.startTime,
+            endTime: params.endTime,
+            source: params.sourceResolution,
+            aspect: params.aspectRatio,
+            mode: params.reframe,
+            signal: ctx.signal
+          })
+        } catch (e) {
+          // Best-effort → static center-crop (never block the export). LOG it, though:
+          // a missing/broken model is otherwise indistinguishable from "no faces found".
+          console.warn(
+            `[export] reframe detection failed; falling back to center-crop: ${
+              e instanceof Error ? e.message : String(e)
+            }`
+          )
+        }
       }
-    }
 
-    // Resolve the .ass to burn: an explicitly-supplied `assPath` wins; otherwise,
-    // if karaoke caption inputs are present, GENERATE the .ass into the per-job
-    // temp dir (PRD §17) from the clip's word timestamps + style, scoped+rebased
-    // to the clip's resolved bounds (or remapped onto the compressed timeline when
-    // jump-cutting). No captions → no subtitles filter (fix M3).
-    let assPath = params.assPath
-    if (!assPath && params.captions) {
-      assPath = writeClipCaptions({
-        words: params.captions.words,
-        clipStart: params.startTime,
-        clipEnd: params.endTime,
-        style: params.captions.style,
-        keywords: params.captions.keywords,
-        aiEmojiMap: params.captions.aiEmojiMap,
-        assPath: resolveAssPath(params.projectId, ctx.jobId, params.clipId),
-        keepRanges
+      // Resolve the .ass to burn: an explicitly-supplied `assPath` wins; otherwise,
+      // if karaoke caption inputs are present, GENERATE the .ass into the per-job
+      // temp dir (PRD §17) from the clip's word timestamps + style, scoped+rebased
+      // to the clip's resolved bounds (or remapped onto the compressed timeline when
+      // jump-cutting). No captions → no subtitles filter (fix M3).
+      let assPath = params.assPath
+      if (!assPath && params.captions) {
+        assPath = writeClipCaptions({
+          words: params.captions.words,
+          clipStart: params.startTime,
+          clipEnd: params.endTime,
+          style: params.captions.style,
+          keywords: params.captions.keywords,
+          aiEmojiMap: params.captions.aiEmojiMap,
+          assPath: resolveAssPath(params.projectId, ctx.jobId, params.clipId),
+          keepRanges
+        })
+      }
+
+      const result = await exportClip({
+        sourcePath: params.sourcePath,
+        outputPath: params.outputPath,
+        startTime: params.startTime,
+        endTime: params.endTime,
+        aspectRatio: params.aspectRatio,
+        quality: params.quality,
+        assPath,
+        // Only needed when captions are burned; harmless otherwise.
+        fontsDir: assPath ? resolveFontsDir() : undefined,
+        keepRanges,
+        reframePlan,
+        // Brand-kit logo overlay (Part K) — absent ⇒ no overlay (argv unchanged).
+        logoPath: params.logoPath,
+        logoPosition: params.logoPosition,
+        logoScale: params.logoScale,
+        logoMargin: params.logoMargin,
+        onProgress: (pct) => emit.progress(pct, 'encoding'),
+        signal: ctx.signal
       })
-    }
 
-    const result = await exportClip({
-      sourcePath: params.sourcePath,
-      outputPath: params.outputPath,
-      startTime: params.startTime,
-      endTime: params.endTime,
-      aspectRatio: params.aspectRatio,
-      quality: params.quality,
-      assPath,
-      // Only needed when captions are burned; harmless otherwise.
-      fontsDir: assPath ? resolveFontsDir() : undefined,
-      keepRanges,
-      reframePlan,
-      // Brand-kit logo overlay (Part K) — absent ⇒ no overlay (argv unchanged).
-      logoPath: params.logoPath,
-      logoPosition: params.logoPosition,
-      logoScale: params.logoScale,
-      logoMargin: params.logoMargin,
-      onProgress: (pct) => emit.progress(pct, 'encoding'),
-      signal: ctx.signal
-    })
-
-    emit.progress(100, 'encoding')
-    return {
-      outputPath: result.outputPath,
-      width: result.width,
-      height: result.height,
-      durationMs: result.durationMs
+      emit.progress(100, 'encoding')
+      return {
+        outputPath: result.outputPath,
+        width: result.width,
+        height: result.height,
+        durationMs: result.durationMs
+      }
+    } finally {
+      // Reclaim the per-job temp scratch (best-effort; never throws). Removes
+      // ONLY <temp>/openclip/<projectId>/<jobId>, never the sibling cache/.
+      removeJobTemp(params.projectId, ctx.jobId)
     }
   }
 }

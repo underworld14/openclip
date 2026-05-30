@@ -418,7 +418,11 @@ export function buildAss(opts: BuildAssOptions): string {
   return [
     '[Script Info]',
     'ScriptType: v4.00+',
-    'WrapStyle: 2',
+    // WrapStyle 0 = libass SMART line-wrap within MarginL/MarginR (lines kept
+    // roughly even, lower line wider). buildKaraokeLine never inserts `\N`, so
+    // wide presets MUST rely on auto-wrap or they run off the 1080px frame
+    // (margins 60/60). WrapStyle 2 (no auto-wrap) would clip wide captions.
+    'WrapStyle: 0',
     'ScaledBorderAndShadow: yes',
     `PlayResX: ${ASS_PLAY_RES.x}`,
     `PlayResY: ${ASS_PLAY_RES.y}`,

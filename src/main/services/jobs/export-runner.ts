@@ -49,6 +49,10 @@ export interface ExportRunnerDeps {
     fontsDir?: string
     keepRanges?: Range[]
     reframePlan?: ReframePlan | null
+    logoPath?: JobParams['export']['logoPath']
+    logoPosition?: JobParams['export']['logoPosition']
+    logoScale?: JobParams['export']['logoScale']
+    logoMargin?: JobParams['export']['logoMargin']
     onProgress?: (pct: number) => void
     signal?: AbortSignal
   }) => Promise<ExportClipResult>
@@ -197,6 +201,11 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
       fontsDir: assPath ? resolveFontsDir() : undefined,
       keepRanges,
       reframePlan,
+      // Brand-kit logo overlay (Part K) — absent ⇒ no overlay (argv unchanged).
+      logoPath: params.logoPath,
+      logoPosition: params.logoPosition,
+      logoScale: params.logoScale,
+      logoMargin: params.logoMargin,
       onProgress: (pct) => emit.progress(pct, 'encoding'),
       signal: ctx.signal
     })

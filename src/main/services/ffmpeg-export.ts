@@ -158,7 +158,129 @@ export function videoBitrate(quality: '720p' | '1080p'): string {
   return quality === '720p' ? '5M' : '8M'
 }
 
-export interface ExportArgsOptions {
+// ============================================================================
+// Logo overlay (Part K — brand kit). The logo is a 2nd input (`[1:v]`) scaled to
+// `logoScale * outputWidth` and composited by an `overlay` node placed AFTER the
+// crop/scale (or vstack) and BEFORE the caption `subtitles` burn (PRD §6.5).
+// EVERYTHING is gated behind `logoPath`: with no logo the export argv is
+// BYTE-IDENTICAL to today (no 2nd `-i`, no `filter_complex` for the single cut).
+// ============================================================================
+
+export type LogoPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+
+/** Brand-kit logo defaults (mirror `brandLogoParams` in the renderer). */
+export const DEFAULT_LOGO_POSITION: LogoPosition = 'bottom-right'
+export const DEFAULT_LOGO_SCALE = 0.18
+export const DEFAULT_LOGO_MARGIN = 48
+
+export interface LogoOverlayOptions {
+  /** Absolute path to a PNG-with-alpha. Absent ⇒ no overlay (argv unchanged). */
+  logoPath?: string
+  /** Corner to pin the logo to (default `bottom-right`). */
+  logoPosition?: LogoPosition
+  /** Logo width as a fraction of the output width (default 0.18). */
+  logoScale?: number
+  /** Inset from the chosen corner in output pixels (default 48). */
+  logoMargin?: number
+}
+
+/**
+ * The `overlay=x:y` expression for a corner, using the overlay filter's built-in
+ * dims (`W`/`H` = main video, `w`/`h` = the scaled logo) so we never need the
+ * logo's intrinsic pixel size:
+ *   top-left → M:M · top-right → W-w-M:M · bottom-left → M:H-h-M · bottom-right → W-w-M:H-h-M
+ */
+function overlayXY(position: LogoPosition, margin: number): string {
+  switch (position) {
+    case 'top-left':
+      return `${margin}:${margin}`
+    case 'top-right':
+      return `W-w-${margin}:${margin}`
+    case 'bottom-left':
+      return `${margin}:H-h-${margin}`
+    case 'bottom-right':
+      return `W-w-${margin}:H-h-${margin}`
+  }
+}
+
+interface ResolvedLogo {
+  /** Extra ffmpeg input args (`['-i', logoPath]`), inserted right after the source. */
+  input: string[]
+  /** The scale node producing `[logo]`, e.g. `[1:v]scale=194:-1[logo]`. */
+  scaleNode: string
+  /** The `overlay=` x:y expression for the chosen corner. */
+  xy: string
+}
+
+/**
+ * Resolve the logo overlay pieces for a `filter_complex`, or `null` when no logo.
+ * `outW` is the final output width (logo width = round(outW * logoScale)).
+ * `inputIndex` is the ffmpeg input index of the logo (always 1 — the single
+ * source video is input 0). The logo path rides as a plain argv token (NOT a
+ * filtergraph value), so it is NOT filter-escaped.
+ */
+export function resolveLogo(
+  opts: LogoOverlayOptions,
+  outW: number,
+  inputIndex = 1
+): ResolvedLogo | null {
+  if (!opts.logoPath) return null
+  const scale = opts.logoScale ?? DEFAULT_LOGO_SCALE
+  const margin = opts.logoMargin ?? DEFAULT_LOGO_MARGIN
+  const position = opts.logoPosition ?? DEFAULT_LOGO_POSITION
+  const logoW = Math.max(1, Math.round(outW * scale))
+  return {
+    input: ['-i', opts.logoPath],
+    scaleNode: `[${inputIndex}:v]scale=${logoW}:-1[logo]`,
+    xy: overlayXY(position, margin)
+  }
+}
+
+/**
+ * Compose the trailing `overlay` + `subtitles` nodes onto a base video chain to
+ * produce the full `filter_complex` video graph (ending in the `[v]` output) plus
+ * any extra input args the overlay needs.
+ *
+ * `baseChain` is a filtergraph fragment ending in the pre-overlay video WITHOUT
+ * its output label (e.g. `[0:v]crop,scale=W:H` or `…vstack=inputs=2`).
+ *
+ * Invariant: when `logo` is null this reproduces the SAME single comma-chain the
+ * builders emitted before (subtitles appended inline, then `[v]`), so a no-logo
+ * graph is byte-identical and `extraInputs` is empty.
+ */
+function composeVideoGraph(
+  baseChain: string,
+  logo: ResolvedLogo | null,
+  assPath: string | undefined,
+  fontsDir: string | undefined
+): { graph: string; extraInputs: string[] } {
+  const subtitlesNode = (inLabel: string): string => {
+    let s = `[${inLabel}]subtitles=${escapeFilterPath(assPath!)}`
+    if (fontsDir) s += `:fontsdir=${escapeFilterPath(fontsDir)}`
+    return s + '[v]'
+  }
+  if (!logo) {
+    // No logo: the proven single comma-chain (subtitles appended inline) → [v].
+    let chain = baseChain
+    if (assPath) {
+      chain += `,subtitles=${escapeFilterPath(assPath)}`
+      if (fontsDir) chain += `:fontsdir=${escapeFilterPath(fontsDir)}`
+    }
+    return { graph: `${chain}[v]`, extraInputs: [] }
+  }
+  // Logo: label the base, scale the logo, overlay AFTER crop/scale (or vstack),
+  // THEN the optional subtitles burn — preserving the proven node order.
+  const nodes = [`${baseChain}[vbase]`, logo.scaleNode]
+  if (assPath) {
+    nodes.push(`[vbase][logo]overlay=${logo.xy}[vov]`)
+    nodes.push(subtitlesNode('vov'))
+  } else {
+    nodes.push(`[vbase][logo]overlay=${logo.xy}[v]`)
+  }
+  return { graph: nodes.join(';'), extraInputs: logo.input }
+}
+
+export interface ExportArgsOptions extends LogoOverlayOptions {
   sourcePath: string
   outputPath: string
   /** Absolute seconds into the source where the clip starts. */
@@ -218,6 +340,46 @@ export function exportClipArgs(opts: ExportArgsOptions): string[] {
   const codecArgs = opts.forceCpu
     ? ['-c:v', 'libx264', '-preset', 'medium', '-crf', '18']
     : ['-c:v', 'h264_videotoolbox', '-b:v', videoBitrate(opts.quality)]
+
+  // Brand-kit logo (Part K): an overlay needs the logo as a 2nd input, which a
+  // simple `-vf` chain can't express — so a logo SWITCHES this path to a
+  // `filter_complex` (+ explicit `-map [v] -map 0:a`). With NO logo we keep the
+  // exact `-vf` argv (byte-identical to today; the golden test guards it).
+  const { width, height } = outputDimensions(opts.aspectRatio)
+  const logo = resolveLogo(opts, width)
+  if (logo) {
+    const baseChain = `[0:v]${reframeCropNode(opts.aspectRatio, opts.reframePlan)},scale=${width}:${height}`
+    const { graph, extraInputs } = composeVideoGraph(baseChain, logo, opts.assPath, opts.fontsDir)
+    return [
+      '-hide_banner',
+      '-y',
+      '-ss',
+      String(opts.startTime),
+      '-i',
+      opts.sourcePath,
+      // 2nd input: the logo PNG (not seeked — the -ss above binds to the source).
+      ...extraInputs,
+      '-to',
+      String(duration),
+      '-filter_complex',
+      graph,
+      '-map',
+      '[v]',
+      '-map',
+      '0:a',
+      ...codecArgs,
+      '-c:a',
+      'aac',
+      '-b:a',
+      '192k',
+      '-movflags',
+      '+faststart',
+      '-progress',
+      'pipe:2',
+      '-nostats',
+      opts.outputPath
+    ]
+  }
 
   return [
     '-hide_banner',
@@ -292,12 +454,16 @@ export function exportClipArgsMultiRange(opts: ExportArgsOptions): string[] {
   // a compressed 0-based output (audio `aselect`'d in lock-step). static/center
   // crops are constant, so the ordering is harmless for them.
   const crop = reframeCropNode(opts.aspectRatio, opts.reframePlan)
-  let vchain = `[0:v]${crop},select='${between}',setpts=N/FRAME_RATE/TB,scale=${width}:${height}`
-  if (opts.assPath) {
-    vchain += `,subtitles=${escapeFilterPath(opts.assPath)}`
-    if (opts.fontsDir) vchain += `:fontsdir=${escapeFilterPath(opts.fontsDir)}`
-  }
-  vchain += '[v]'
+  const baseChain = `[0:v]${crop},select='${between}',setpts=N/FRAME_RATE/TB,scale=${width}:${height}`
+  // Brand-kit logo (Part K): overlay AFTER scale, BEFORE subtitles. No logo ⇒ the
+  // graph is the same single comma-chain as before (and no 2nd `-i`).
+  const logo = resolveLogo(opts, width)
+  const { graph: vchain, extraInputs } = composeVideoGraph(
+    baseChain,
+    logo,
+    opts.assPath,
+    opts.fontsDir
+  )
   const achain = `[0:a]aselect='${between}',asetpts=N/SR/TB[a]`
   const codecArgs = opts.forceCpu
     ? ['-c:v', 'libx264', '-preset', 'medium', '-crf', '18']
@@ -309,6 +475,7 @@ export function exportClipArgsMultiRange(opts: ExportArgsOptions): string[] {
     String(opts.startTime),
     '-i',
     opts.sourcePath,
+    ...extraInputs,
     '-t',
     String(duration),
     '-filter_complex',
@@ -383,17 +550,22 @@ export function exportClipArgsSplit(opts: ExportArgsOptions): string[] {
     `scale=${TILE_W}:${TILE_H}:force_original_aspect_ratio=increase,crop=${TILE_W}:${TILE_H}`
 
   // [0:v] → (optional select) → split into two; each half crop+cover-fit to a tile.
-  let fc =
+  const baseChain =
     `[0:v]${vSelect}split=2[l][r];` +
     `[l]${cropNode(r0)}[lv];` +
     `[r]${cropNode(r1)}[rv];` +
     `[lv][rv]vstack=inputs=2`
-  // Burn captions AFTER the vstack (the proven order, fix M3).
-  if (opts.assPath) {
-    fc += `,subtitles=${escapeFilterPath(opts.assPath)}`
-    if (opts.fontsDir) fc += `:fontsdir=${escapeFilterPath(opts.fontsDir)}`
-  }
-  fc += '[v]'
+  // Brand-kit logo (Part K): overlay AFTER the vstack, BEFORE the subtitles burn.
+  // The stacked frame is always 1080 wide, so scale the logo against TILE_W. No
+  // logo ⇒ captions append inline to the vstack exactly as before (byte-identical).
+  const logo = resolveLogo(opts, TILE_W)
+  const { graph: vgraph, extraInputs } = composeVideoGraph(
+    baseChain,
+    logo,
+    opts.assPath,
+    opts.fontsDir
+  )
+  let fc = vgraph
   // Audio: selected in lock-step when jump-cutting, else mapped straight.
   const aMap = removing ? '[a]' : '0:a'
   if (removing) fc += `;[0:a]aselect='${between}',asetpts=N/SR/TB[a]`
@@ -409,6 +581,7 @@ export function exportClipArgsSplit(opts: ExportArgsOptions): string[] {
     String(opts.startTime),
     '-i',
     opts.sourcePath,
+    ...extraInputs,
     '-t',
     String(duration),
     '-filter_complex',

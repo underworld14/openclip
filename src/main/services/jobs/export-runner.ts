@@ -65,6 +65,7 @@ export interface ExportRunnerDeps {
     clipEnd: number
     style?: NonNullable<JobParams['export']['captions']>['style']
     keywords?: string[]
+    aiEmojiMap?: Record<string, string>
     assPath: string
     keepRanges?: Range[]
   }) => string
@@ -184,6 +185,7 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
         clipEnd: params.endTime,
         style: params.captions.style,
         keywords: params.captions.keywords,
+        aiEmojiMap: params.captions.aiEmojiMap,
         assPath: resolveAssPath(params.projectId, ctx.jobId, params.clipId),
         keepRanges
       })

@@ -25,7 +25,8 @@ import type {
   ClipStyle,
   ClipSchema,
   SourceVideo,
-  Transcript
+  Transcript,
+  BrandTemplate
 } from './schema'
 import type { WhisperModelSize, JobKind, JobParams } from './jobs'
 
@@ -48,6 +49,13 @@ export enum IPCChannels {
   // Media: adopt a downloaded source file into <userData>/media/<projectId>/ so it
   // persists with the project + is deleted with it (Part H) → `media.adoptSource`.
   MEDIA_ADOPT_SOURCE = 'media:adopt-source',
+  // Brand kit (Part K) — the APP-LEVEL brand library persisted main-side under
+  // <userData>/brands/<id>/ (mirrors media-store). list/save/delete + adopt a PNG
+  // logo into the brand dir → `brand.list|save|delete|setLogo`.
+  BRAND_LIST = 'brand:list',
+  BRAND_SAVE = 'brand:save',
+  BRAND_DELETE = 'brand:delete',
+  BRAND_SET_LOGO = 'brand:set-logo',
   // Project
   SAVE_PROJECT = 'project:save',
   LOAD_PROJECT = 'project:load',
@@ -121,6 +129,13 @@ export interface EnhanceCaptionsRequest {
   provider: AIProvider
   model: string
   transcript: string
+  /**
+   * Part K (emoji) — selects the enhancement. Absent/'rewrite' ⇒ the original
+   * caption-rewrite behavior; 'emoji' ⇒ suggest a per-word emoji map from `words`.
+   */
+  mode?: 'rewrite' | 'emoji'
+  /** Part K (emoji) — distinct caption words to suggest emoji for (mode:'emoji'). */
+  words?: string[]
 }
 export interface EnhancedCaption {
   start_time: number
@@ -129,6 +144,11 @@ export interface EnhancedCaption {
 }
 export interface EnhanceCaptionsResult {
   enhanced_captions: EnhancedCaption[]
+  /**
+   * Part K (emoji) — normalized word → emoji (mode:'emoji'). Additive: absent on
+   * the original rewrite path. Threaded into the export job as `captions.aiEmojiMap`.
+   */
+  emoji_map?: Record<string, string>
 }
 
 /** Per-provider key status — value never crosses IPC (plan Part B / PRD §12.2). */
@@ -222,6 +242,16 @@ export interface ChannelMap {
   [IPCChannels.MEDIA_ADOPT_SOURCE]: ChannelPayload<
     { projectId: string; filePath: string },
     { path: string }
+  >
+
+  // --- Brand kit (Part K) — app-level brand library, persisted main-side ---
+  [IPCChannels.BRAND_LIST]: ChannelPayload<void, BrandTemplate[]>
+  [IPCChannels.BRAND_SAVE]: ChannelPayload<{ brand: BrandTemplate }, BrandTemplate>
+  [IPCChannels.BRAND_DELETE]: ChannelPayload<{ id: string }, { deleted: boolean }>
+  // Adopt a PNG logo into the brand's dir; returns the adopted in-library path.
+  [IPCChannels.BRAND_SET_LOGO]: ChannelPayload<
+    { id: string; srcPath: string },
+    { logoPath: string }
   >
 
   // --- Project ---

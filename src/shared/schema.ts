@@ -206,7 +206,12 @@ export const ProjectSettings = z.object({
   maxDuration: z.number(), // default 90
   // Part K — the selected caption template id (captionPresets.ts). Optional so
   // pre-Part-K `.ocproj` validate; absent ⇒ the app-default caption style.
-  captionTemplateId: z.string().optional()
+  captionTemplateId: z.string().optional(),
+  // Part K (emoji) — the auto-emoji source the user picked in ExportPanel
+  // ('off' default / 'local' built-in dict / 'ai' BYOK suggestions). Persisted
+  // here so the WYSIWYG preview and the export agree. Optional ⇒ pre-Part-K
+  // `.ocproj` validate (absent ⇒ no emoji).
+  autoEmoji: z.enum(['off', 'local', 'ai']).optional()
 })
 export type ProjectSettings = z.infer<typeof ProjectSettings>
 
@@ -313,6 +318,12 @@ export const Settings = z.object({
   aiProvider: AIProvider,
   model: z.string(), // resolved current model id (PRD §4.3 — not hardcoded)
   baseUrl: z.string().optional(), // for Ollama / custom endpoints
+  // Part K (emoji) — an INDEPENDENT provider + model for AI emoji suggestion
+  // (ENHANCE_CAPTIONS, mode:'emoji'). Both OPTIONAL: absent ⇒ fall back to
+  // `aiProvider`/`model`. The key for `emojiProvider` lives in the same
+  // per-provider keyVault, so no extra secret plumbing is needed.
+  emojiProvider: AIProvider.optional(),
+  emojiModel: z.string().optional(),
   whisperModel: z.enum(['tiny', 'base', 'small', 'medium', 'turbo', 'large-v3']),
   language: z.string().optional(), // undefined => whisper auto-detect
   aspectRatio: AspectRatio,

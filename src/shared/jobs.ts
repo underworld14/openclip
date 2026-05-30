@@ -120,6 +120,12 @@ export interface JobParams {
        * which recolors/scales matching words; absent ⇒ no emphasis (byte-compat).
        */
       keywords?: string[]
+      /**
+       * Part K (emoji) — BYOK-AI emoji map (normalized word → emoji), produced by
+       * ENHANCE_CAPTIONS (mode:'emoji') and threaded to `buildAss(opts.aiEmojiMap)`.
+       * Used only when `style.autoEmoji === 'ai'`; absent ⇒ the local dictionary.
+       */
+      aiEmojiMap?: Record<string, string>
     }
     /**
      * Silence/filler jump-cuts (Part I.4, opt-in). When set, the export runner

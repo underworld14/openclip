@@ -27,7 +27,8 @@ import {
   apiKeyStatusFixture,
   modelStatusFixture,
   transcribeResultFixture,
-  transcribePartialFixture
+  transcribePartialFixture,
+  brandTemplateFixture
 } from '../fixtures/contract'
 
 // ============================================================================
@@ -80,6 +81,12 @@ const CANNED: Partial<Record<string, unknown>> = {
   },
   [IPCChannels.MEDIA_ADOPT_SOURCE]: {
     path: '/Users/me/Library/Application Support/OpenClip/media/p1/source.mp4'
+  },
+  [IPCChannels.BRAND_LIST]: [brandTemplateFixture],
+  [IPCChannels.BRAND_SAVE]: brandTemplateFixture,
+  [IPCChannels.BRAND_DELETE]: { deleted: true },
+  [IPCChannels.BRAND_SET_LOGO]: {
+    logoPath: '/Users/me/Library/Application Support/OpenClip/brands/brand-1/logo.png'
   },
   [IPCChannels.SAVE_PROJECT]: { path: '/Users/me/.../projects/p1.ocproj' },
   [IPCChannels.LOAD_PROJECT]: projectFixture,
@@ -217,6 +224,7 @@ export function createMockOpenclip(opts: MockOptions = {}): OpenClipBridge {
     audio: buildMockNamespace('audio') as OpenClipBridge['audio'],
     ai: buildMockNamespace('ai') as OpenClipBridge['ai'],
     media: buildMockNamespace('media') as OpenClipBridge['media'],
+    brand: buildMockNamespace('brand') as OpenClipBridge['brand'],
     project: buildMockNamespace('project') as OpenClipBridge['project'],
     settings: buildMockNamespace('settings') as OpenClipBridge['settings'],
     model: buildMockNamespace('model') as OpenClipBridge['model'],

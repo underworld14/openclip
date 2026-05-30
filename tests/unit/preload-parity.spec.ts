@@ -31,6 +31,7 @@ const NAMESPACES: Array<keyof OpenClipBridge> = [
   'audio',
   'ai',
   'media',
+  'brand',
   'project',
   'settings',
   'model',
@@ -46,6 +47,7 @@ beforeAll(async () => {
   const { buildAudioApi } = await import('@preload/api/audio')
   const { buildAiApi } = await import('@preload/api/ai')
   const { buildMediaApi } = await import('@preload/api/media')
+  const { buildBrandApi } = await import('@preload/api/brand')
   const { buildProjectApi } = await import('@preload/api/project')
   const { buildSettingsApi } = await import('@preload/api/settings')
   const { buildModelApi } = await import('@preload/api/model')
@@ -56,6 +58,7 @@ beforeAll(async () => {
     audio: buildAudioApi(),
     ai: buildAiApi(),
     media: buildMediaApi(),
+    brand: buildBrandApi(),
     project: buildProjectApi(),
     settings: buildSettingsApi(),
     model: buildModelApi(),
@@ -91,6 +94,7 @@ describe('preload parity: real bridge method-set === mock method-set', () => {
       'listModels'
     ])
     expect(methodKeys(realBridge.media)).toEqual(['adoptSource'])
+    expect(methodKeys(realBridge.brand)).toEqual(['delete', 'list', 'save', 'setLogo'])
     expect(methodKeys(realBridge.settings)).toEqual(['apiKeyStatus', 'get', 'set', 'setApiKey'])
     expect(methodKeys(realBridge.model)).toEqual(['download', 'status'])
     expect(methodKeys(realBridge.system)).toEqual([

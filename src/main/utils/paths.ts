@@ -245,6 +245,16 @@ export function mediaDir(): string {
   return join(electronApp().getPath('userData'), 'media')
 }
 
+/**
+ * `userData/brands` — PERSISTENT store for the app-level brand library (Part K),
+ * one subdir per brand: `<userData>/brands/<brandId>/{meta.json, logo.png}`. Logos
+ * are COPIED in so a brand survives the user moving/deleting the original PNG.
+ * Mirrors `mediaDir()`; the brand-store service is handed this root (Electron-free).
+ */
+export function brandsDir(): string {
+  return join(electronApp().getPath('userData'), 'brands')
+}
+
 // ============================================================================
 // Temp-file lifecycle roots (PRD §17) — pure given a base temp dir
 // ============================================================================

@@ -57,7 +57,18 @@ function probeWH(path: string): { width: number; height: number; codec: string }
 function makeLogoPng(path: string): void {
   const r = spawnSync(
     resolveFfmpeg(),
-    ['-y', '-f', 'lavfi', '-i', 'color=c=red:s=200x200', '-frames:v', '1', '-pix_fmt', 'rgba', path],
+    [
+      '-y',
+      '-f',
+      'lavfi',
+      '-i',
+      'color=c=red:s=200x200',
+      '-frames:v',
+      '1',
+      '-pix_fmt',
+      'rgba',
+      path
+    ],
     { encoding: 'utf8' }
   )
   if (r.status !== 0) throw new Error(`logo PNG fixture failed: ${r.stderr ?? r.error}`)

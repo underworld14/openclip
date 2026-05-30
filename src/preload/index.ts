@@ -21,6 +21,7 @@ import { buildVideoApi } from './api/video'
 import { buildAudioApi } from './api/audio'
 import { buildAiApi } from './api/ai'
 import { buildMediaApi } from './api/media'
+import { buildBrandApi } from './api/brand'
 import { buildProjectApi } from './api/project'
 import { buildSettingsApi } from './api/settings'
 import { buildModelApi } from './api/model'
@@ -40,6 +41,8 @@ export interface OpenClipBridge {
   ai: NamespaceMethods<'ai'>
   /** media:adopt-source → adoptSource */
   media: NamespaceMethods<'media'>
+  /** brand:list|save|delete|set-logo → list|save|delete|setLogo (Part K) */
+  brand: NamespaceMethods<'brand'>
   /** project:save|load|list|delete */
   project: NamespaceMethods<'project'>
   /** settings:get|set|api-key-status|set-api-key */
@@ -61,6 +64,7 @@ const openclip: OpenClipBridge = {
   audio: buildAudioApi(),
   ai: buildAiApi(),
   media: buildMediaApi(),
+  brand: buildBrandApi(),
   project: buildProjectApi(),
   settings: buildSettingsApi(),
   model: buildModelApi(),

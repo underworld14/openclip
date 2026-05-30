@@ -34,7 +34,11 @@ import {
   LANGUAGES,
   languageLabel
 } from '@renderer/components/settingsView'
+import { BrandKitEditor } from '@renderer/components/BrandKitEditor'
 import type { ModelInfo } from '@shared/channels'
+
+/** Sentinel: the emoji-provider option meaning "same as clip detection". */
+const SAME_AS_CLIP = '__same__'
 
 /** Radix Select forbids an empty-string item value, so Auto-detect uses this
  * sentinel in the picker and maps to `Settings.language = undefined` on save. */
@@ -89,6 +93,8 @@ export function SettingsPanel(): React.JSX.Element {
   // Local-only key entry; cleared after submit (never persisted in renderer).
   const [keyDraft, setKeyDraft] = useState('')
   const [modelQuery, setModelQuery] = useState('')
+  // Part K — separate key entry for the (optional) independent emoji provider.
+  const [emojiKeyDraft, setEmojiKeyDraft] = useState('')
 
   useEffect(() => {
     void load()
@@ -131,6 +137,21 @@ export function SettingsPanel(): React.JSX.Element {
     setKeyDraft('') // never keep the raw key around in the renderer
     // A new key may unlock more models / personalized pricing — refresh the list.
     if (provider === 'openrouter') void loadModels(true)
+  }
+
+  // Part K — the (optional) independent emoji AI provider. Falls back to the clip
+  // provider when unset; its key lives in the same per-provider keyVault.
+  const emojiProvider = settings.emojiProvider ?? provider
+  const emojiStatus = keyStatus[emojiProvider]
+  const onEmojiProviderChange = async (value: string): Promise<void> => {
+    const p = value === SAME_AS_CLIP ? undefined : (value as AIProvider)
+    await save({ emojiProvider: p })
+    if (p) await refreshKeyStatus(p)
+  }
+  const onSaveEmojiKey = async (): Promise<void> => {
+    if (!emojiKeyDraft.trim()) return
+    await setApiKey(emojiProvider, emojiKeyDraft.trim())
+    setEmojiKeyDraft('')
   }
 
   return (
@@ -255,6 +276,68 @@ export function SettingsPanel(): React.JSX.Element {
           outbound AI calls. It is never sent to OpenClip.
         </p>
       </div>
+
+      {/* Emoji AI (Part K) — an OPTIONAL independent provider/model/key for the
+          auto-emoji "AI" mode. Defaults to the clip-detection provider/model. */}
+      <div className="flex flex-col gap-1.5 border-t pt-3" data-testid="emoji-ai-settings">
+        <Label htmlFor="emoji-provider">Emoji AI (optional)</Label>
+        <p className="text-xs text-muted-foreground">
+          The model that suggests emoji when a caption’s emoji mode is “AI”. Defaults to your
+          clip-detection provider &amp; model — set a separate one (e.g. a cheaper model, or a local
+          Ollama) here.
+        </p>
+        <Select
+          value={settings.emojiProvider ?? SAME_AS_CLIP}
+          onValueChange={(v) => void onEmojiProviderChange(v)}
+        >
+          <SelectTrigger id="emoji-provider">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={SAME_AS_CLIP}>
+              Same as clip detection ({providerLabel(provider)})
+            </SelectItem>
+            {PROVIDERS.map((p) => (
+              <SelectItem key={p} value={p}>
+                {providerLabel(p)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {settings.emojiProvider && (
+          <>
+            <Input
+              aria-label="Emoji model"
+              value={settings.emojiModel ?? ''}
+              placeholder={`e.g. ${settings.model || 'a fast cheap model'} — blank = clip model`}
+              onChange={(e) => void save({ emojiModel: e.target.value || undefined })}
+            />
+            <Label htmlFor="emoji-api-key">
+              API key for {providerLabel(emojiProvider)} —{' '}
+              <span className="text-muted-foreground">{keyStatusLabel(emojiStatus)}</span>
+            </Label>
+            <div className="flex gap-2">
+              <Input
+                id="emoji-api-key"
+                type="password"
+                value={emojiKeyDraft}
+                placeholder="Stored in the OS keychain; never leaves this machine"
+                onChange={(e) => setEmojiKeyDraft(e.target.value)}
+              />
+              <Button
+                size="sm"
+                onClick={() => void onSaveEmojiKey()}
+                disabled={!emojiKeyDraft.trim()}
+              >
+                Save
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Brand kit (Part K) — logo + brand colors/font applied to exports. */}
+      <BrandKitEditor />
 
       <div className="flex flex-col gap-1.5" data-testid="language-picker">
         <Label htmlFor="transcribe-language">Transcription language</Label>

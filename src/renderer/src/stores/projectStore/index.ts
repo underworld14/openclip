@@ -40,6 +40,8 @@ export interface CoreSlice {
   setCurrentProject: (project: Project | null) => void
   setSource: (sourceVideo: SourceVideo) => void
   setProjectSettings: (settings: Partial<ProjectSettings>) => void
+  /** Part K (brand kit) — set the project's active brand id (or clear it). */
+  setActiveBrandId: (activeBrandId: string | undefined) => void
   setRecentProjects: (recents: ProjectMeta[]) => void
   /** Load a project by id via the bridge (body owned by T-Persist). */
   load: (id: string) => Promise<void>
@@ -63,6 +65,10 @@ const createCoreSlice: StateCreator<ProjectStore, [], [], CoreSlice> = (set, get
             }
           }
         : {}
+    ),
+  setActiveBrandId: (activeBrandId) =>
+    set((s) =>
+      s.currentProject ? { currentProject: { ...s.currentProject, activeBrandId } } : {}
     ),
   setRecentProjects: (recentProjects) => set({ recentProjects }),
   load: async (id) => {

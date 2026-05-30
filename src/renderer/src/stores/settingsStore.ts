@@ -84,11 +84,19 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => ({
   },
   load: async () => {
     const settings = await window.openclip.settings.get()
-    const status = await window.openclip.settings.apiKeyStatus({ provider: settings.aiProvider })
-    set((s) => ({
-      settings,
-      keyStatus: { ...s.keyStatus, [status.provider]: status }
-    }))
+    // Load the clip provider's key status and, when set + distinct, the emoji
+    // provider's too (Part K — the AI emoji path can use a separate provider/key).
+    const providers = Array.from(
+      new Set([settings.aiProvider, settings.emojiProvider].filter(Boolean) as AIProvider[])
+    )
+    const statuses = await Promise.all(
+      providers.map((provider) => window.openclip.settings.apiKeyStatus({ provider }))
+    )
+    set((s) => {
+      const keyStatus = { ...s.keyStatus }
+      for (const status of statuses) keyStatus[status.provider] = status
+      return { settings, keyStatus }
+    })
   },
   save: async (patch) => {
     const settings = await window.openclip.settings.set({ settings: patch })

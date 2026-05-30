@@ -84,6 +84,11 @@ export function buildExportParams(args: {
   words?: WordTimestamp[]
   /** Caption style to map to ASS (font/size/color/bg/position/animation). */
   captionStyle?: CaptionStyle
+  /**
+   * Part K (emoji) — BYOK-AI emoji map (normalized word → emoji) for the export's
+   * captions, used when the style's `autoEmoji === 'ai'`. Absent ⇒ local dict.
+   */
+  aiEmojiMap?: Record<string, string>
   /** Remove long silences via jump-cuts (Part I.4, opt-in). */
   removeSilence?: JobParams['export']['removeSilence']
   /** Auto-reframe mode (Part J, opt-in): follow the speaker / split-screen. */
@@ -111,8 +116,14 @@ export function buildExportParams(args: {
     captions:
       args.captionsEnabled && args.words && args.words.length > 0
         ? // Part K: thread the clip's AI keywords so a template with keyword
-          // emphasis recolors/scales them; harmless when the style has none.
-          { words: args.words, style: args.captionStyle, keywords: args.clip.keywords }
+          // emphasis recolors/scales them; harmless when the style has none. The
+          // aiEmojiMap is used only when the style's autoEmoji === 'ai'.
+          {
+            words: args.words,
+            style: args.captionStyle,
+            keywords: args.clip.keywords,
+            aiEmojiMap: args.aiEmojiMap
+          }
         : undefined,
     removeSilence: args.removeSilence,
     // Auto-reframe (Part J): pass the source pixel size + fps so the runner's

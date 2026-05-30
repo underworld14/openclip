@@ -33,6 +33,11 @@ export interface WriteClipCaptionsOptions {
   style?: CaptionStyle
   /** Part K — words to EMPHASIZE (keyword highlight); usually `Clip.keywords`. */
   keywords?: string[]
+  /**
+   * Part K (emoji) — BYOK-AI emoji map (normalized word → emoji), used by buildAss
+   * only when `style.autoEmoji === 'ai'`. Absent ⇒ the local dictionary.
+   */
+  aiEmojiMap?: Record<string, string>
   /** Where to write the .ass (e.g. `<jobTempDir>/clip-<id>.captions.ass`). */
   assPath: string
   /**
@@ -57,6 +62,7 @@ export function writeClipCaptions(opts: WriteClipCaptionsOptions): string {
     clipEnd: opts.clipEnd,
     style: opts.style,
     keywords: opts.keywords,
+    aiEmojiMap: opts.aiEmojiMap,
     keepRanges: opts.keepRanges
   })
   mkdirSync(dirname(opts.assPath), { recursive: true })

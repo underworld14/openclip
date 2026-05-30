@@ -20,10 +20,12 @@
 
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useProjectStore } from '@renderer/stores/projectStore'
+import { useBrandStore, activeBrand } from '@renderer/stores/brandStore'
 import { resolveBounds } from '@shared/clip-bounds'
 import { sourceMediaUrl } from '@renderer/components/source-media'
 import { formatTime } from '@renderer/components/timeline-math'
 import { resolveEffectiveCaptionStyle } from '@renderer/components/captionPresets'
+import { brandCaptionOverride } from '@renderer/components/brandKit'
 import { cssAspectRatio } from '@renderer/components/preview-crop'
 import { captionContainerStyle, captionWordStyle } from '@renderer/components/caption-css'
 import { useKaraokeCaption } from '@renderer/components/useKaraokeCaption'
@@ -45,6 +47,13 @@ export function PreviewPlayer(): React.JSX.Element {
   const aspectOverride = useProjectStore((s) => s.aspectOverride)
   const reframeMode = useProjectStore((s) => s.reframeMode)
   const captionsPreviewEnabled = useProjectStore((s) => s.captionsPreviewEnabled)
+  // Part K — preview the active brand's caption colors/font + the auto-emoji source.
+  const brands = useBrandStore((s) => s.brands)
+  const brandLoaded = useBrandStore((s) => s.loaded)
+  const loadBrands = useBrandStore((s) => s.load)
+  useEffect(() => {
+    if (!brandLoaded) void loadBrands()
+  }, [brandLoaded, loadBrands])
 
   const sourceVideo = currentProject?.sourceVideo ?? null
   const src = sourceMediaUrl(sourceVideo?.path ?? null)
@@ -58,9 +67,17 @@ export function PreviewPlayer(): React.JSX.Element {
 
   const aspect = aspectOverride ?? currentProject?.settings.aspectRatio ?? '9:16'
   const captionTemplateId = currentProject?.settings.captionTemplateId ?? ''
+  const autoEmoji = currentProject?.settings.autoEmoji ?? 'off'
+  const brand = activeBrand(brands, currentProject?.activeBrandId)
   const captionStyle = useMemo(
-    () => resolveEffectiveCaptionStyle(captionTemplateId),
-    [captionTemplateId]
+    () =>
+      resolveEffectiveCaptionStyle(captionTemplateId, {
+        // The AI emoji map isn't fetched in the preview, so 'ai' previews as the
+        // LOCAL dictionary (a representative proxy; the export uses the AI map).
+        autoEmoji: autoEmoji === 'ai' ? 'local' : autoEmoji,
+        brand: brandCaptionOverride(brand)
+      }),
+    [captionTemplateId, autoEmoji, brand]
   )
   const words = useMemo(
     () => transcript?.words ?? currentProject?.transcript.words ?? [],

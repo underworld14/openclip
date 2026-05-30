@@ -13,13 +13,20 @@
  */
 
 import { IPCChannels } from '@shared/channels'
-import type { GenerateClipsRequest, ListModelsRequest, ListModelsResult } from '@shared/channels'
+import type {
+  EnhanceCaptionsRequest,
+  EnhanceCaptionsResult,
+  GenerateClipsRequest,
+  ListModelsRequest,
+  ListModelsResult
+} from '@shared/channels'
 import type { AIProvider } from '@shared/schema'
 import {
   createTransport,
   generateClips as runGenerate,
   type RawTransport
 } from '@main/services/ai-client'
+import { suggestEmoji } from '@main/services/ai-emoji'
 import {
   fetchOpenRouterModels,
   ModelListCache,
@@ -117,6 +124,11 @@ const FAKE_CLIPS_JSON = JSON.stringify({
 
 const fakeTransport: RawTransport = async () => ({ rawText: FAKE_CLIPS_JSON })
 
+/** E2E fake-provider emoji map (mode:'emoji') — deterministic, schema-valid. */
+const fakeEmojiTransport: RawTransport = async () => ({
+  rawText: JSON.stringify({ money: '💰', fire: '🔥', idea: '💡' })
+})
+
 /** Per-process result cache (PRD §16): (transcriptHash, promptVersion, model, style). */
 const clipCache = new Map<string, unknown>()
 
@@ -156,16 +168,33 @@ export function registerAiHandlers(ctx: IpcContext): void {
     return result.value
   })
 
-  // GENERATE_TITLES / ENHANCE_CAPTIONS are PRD §7.4/§7.5 (v1.0 polish). The
-  // channels are frozen; wire minimal pass-throughs so the registry is complete
-  // and the bridge surface is callable. Full prompts land with the title/hook
-  // generator milestone.
+  // GENERATE_TITLES is PRD §7.4 (v1.0 polish) — minimal pass-through for now.
   ctx.ipcMain.handle(IPCChannels.GENERATE_TITLES, async () => {
     return { options: [] }
   })
-  ctx.ipcMain.handle(IPCChannels.ENHANCE_CAPTIONS, async () => {
-    return { enhanced_captions: [] }
-  })
+
+  // ENHANCE_CAPTIONS (PRD §7.5). Part K (emoji): mode:'emoji' returns a per-word
+  // `emoji_map` via the BYOK transport (own provider/model/key — the renderer
+  // resolves emojiProvider/emojiModel before calling). The legacy rewrite path
+  // stays a stub until the caption-rewrite milestone. Emoji is cosmetic: any
+  // transport failure degrades to an empty map (never blocks the export).
+  ctx.ipcMain.handle(
+    IPCChannels.ENHANCE_CAPTIONS,
+    async (_e, req: EnhanceCaptionsRequest): Promise<EnhanceCaptionsResult> => {
+      if (req.mode !== 'emoji') return { enhanced_captions: [] }
+      const apiKey = ctx.keyVault.getKey(req.provider)
+      const factory =
+        transportFactoryOverride ??
+        (process.env.OPENCLIP_FAKE_TRANSCRIBE ? () => fakeEmojiTransport : createTransport)
+      const transport = await factory({ provider: req.provider, model: req.model, apiKey })
+      try {
+        const emoji_map = await suggestEmoji(transport, req.words ?? [])
+        return { enhanced_captions: [], emoji_map }
+      } catch {
+        return { enhanced_captions: [], emoji_map: {} }
+      }
+    }
+  )
 
   // List a provider's models for the picker (Part H — OpenRouter only for now).
   // The key (if any) is decrypted MAIN-SIDE and only used to authorize the fetch;

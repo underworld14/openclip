@@ -14,11 +14,12 @@
  * from the clip titles (`deriveBatchFileNames`).
  */
 
-import type { Clip, Project } from '@shared/schema'
+import type { BrandTemplate, CaptionStyle, Clip, Project } from '@shared/schema'
 import type { JobResult } from '@shared/jobs'
 import { runExport, defaultClipFileName, type OpenClipBridge } from './export-run'
 import { buildExportParams } from '@renderer/stores/projectStore/exportSlice'
 import { resolveEffectiveCaptionStyle } from './captionPresets'
+import { brandCaptionOverride, brandLogoParams } from './brandKit'
 import type { PlatformPreset } from './platformPresets'
 
 /** Join a directory + filename with the directory's separator (default '/'). */
@@ -78,6 +79,12 @@ export interface RunBatchExportOptions {
   dir: string
   /** The platform preset (aspectRatio + quality + caption template). */
   preset: PlatformPreset
+  /** Part K — the active brand (caption font/colors + logo overlay). */
+  brand?: BrandTemplate
+  /** Part K — auto-emoji source for every clip's captions. */
+  autoEmoji?: CaptionStyle['autoEmoji']
+  /** Part K — per-clip AI emoji map fetch (used when autoEmoji === 'ai'). */
+  resolveAiEmojiMap?: (clip: Clip) => Promise<Record<string, string> | undefined>
   onClipProgress?: (clipId: string, pct: number) => void
   onClipStatus?: (
     clipId: string,
@@ -98,7 +105,13 @@ export async function runBatchExport(opts: RunBatchExportOptions): Promise<Batch
   const pathFor = new Map(names.map((n) => [n.clipId, n.outputPath]))
   const jobIds = new Map<string, string>()
   const words = opts.project.transcript.words
-  const captionStyle = resolveEffectiveCaptionStyle(opts.preset.captionTemplateId)
+  // Brand overrides caption font/colors; autoEmoji selects the emoji source — one
+  // resolved style for every clip in the batch (the logo params are per-brand too).
+  const captionStyle = resolveEffectiveCaptionStyle(opts.preset.captionTemplateId, {
+    autoEmoji: opts.autoEmoji,
+    brand: brandCaptionOverride(opts.brand)
+  })
+  const logoParams = brandLogoParams(opts.brand)
 
   // `aborted` is checked BEFORE each job starts (skip un-started clips) and inside
   // `onStart` (cancel a job whose start raced the abort) — so cancel-all can't miss
@@ -120,6 +133,8 @@ export async function runBatchExport(opts: RunBatchExportOptions): Promise<Batch
       }
       opts.onClipStatus?.(clip.id, 'running')
       try {
+        // BYOK-AI emoji map (Part K) is per-clip; best-effort (undefined ⇒ none).
+        const aiEmojiMap = opts.resolveAiEmojiMap ? await opts.resolveAiEmojiMap(clip) : undefined
         const params = buildExportParams({
           projectId: opts.project.id,
           clip,
@@ -129,7 +144,9 @@ export async function runBatchExport(opts: RunBatchExportOptions): Promise<Batch
           quality: opts.preset.quality,
           captionsEnabled: words.length > 0,
           words,
-          captionStyle
+          captionStyle,
+          aiEmojiMap,
+          ...logoParams
         })
         const result = await runExport({
           bridge: opts.bridge,

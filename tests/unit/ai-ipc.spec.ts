@@ -162,6 +162,70 @@ describe('ai handler: GENERATE_CLIPS (transport injected — no network)', () =>
   })
 })
 
+describe('ai handler: ENHANCE_CAPTIONS emoji map (Part K — transport injected)', () => {
+  it('mode:"emoji" decrypts the emoji-provider key main-side and returns a normalized map', async () => {
+    const { ctx, handlers, vault } = makeCtx()
+    vault.setKey('ollama', 'emoji-key-7777')
+    let keyGivenToTransport: string | null = null
+    __setTransportFactoryForTests((args) => {
+      keyGivenToTransport = args.apiKey
+      return async () => ({ rawText: '{"Money":"💰","fire":"🔥"}' })
+    })
+    registerAiHandlers(ctx)
+
+    const res = await call(handlers, IPCChannels.ENHANCE_CAPTIONS, {
+      provider: 'ollama',
+      model: 'llama3.2',
+      transcript: '',
+      mode: 'emoji',
+      words: ['money', 'fire', 'the']
+    })
+    expect(res.emoji_map).toEqual({ money: '💰', fire: '🔥' })
+    expect(res.enhanced_captions).toEqual([])
+    expect(keyGivenToTransport).toBe('emoji-key-7777')
+    expect(JSON.stringify(res)).not.toContain('emoji-key')
+
+    __setTransportFactoryForTests(null)
+  })
+
+  it('a non-emoji request stays the stub and never builds a transport', async () => {
+    const { ctx, handlers } = makeCtx()
+    const factory = vi.fn(() => async () => ({ rawText: '{}' }))
+    __setTransportFactoryForTests(factory)
+    registerAiHandlers(ctx)
+
+    const res = await call(handlers, IPCChannels.ENHANCE_CAPTIONS, {
+      provider: 'openai',
+      model: 'gpt-4o-mini',
+      transcript: 'hello world'
+    })
+    expect(res).toEqual({ enhanced_captions: [] })
+    expect(factory).not.toHaveBeenCalled()
+
+    __setTransportFactoryForTests(null)
+  })
+
+  it('degrades to an empty map when the transport throws (never blocks export)', async () => {
+    const { ctx, handlers, vault } = makeCtx()
+    vault.setKey('openai', 'k')
+    __setTransportFactoryForTests(() => async () => {
+      throw new Error('provider down')
+    })
+    registerAiHandlers(ctx)
+
+    const res = await call(handlers, IPCChannels.ENHANCE_CAPTIONS, {
+      provider: 'openai',
+      model: 'gpt-4o-mini',
+      transcript: '',
+      mode: 'emoji',
+      words: ['money']
+    })
+    expect(res).toEqual({ enhanced_captions: [], emoji_map: {} })
+
+    __setTransportFactoryForTests(null)
+  })
+})
+
 describe('ai handler: AI_LIST_MODELS (Part H — fetcher injected, no network)', () => {
   afterEach(() => __setModelsFetcherForTests(null))
 

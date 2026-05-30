@@ -18,6 +18,7 @@ import { registerVideoHandlers } from './video'
 import { registerAudioHandlers } from './audio'
 import { registerAiHandlers } from './ai'
 import { registerMediaHandlers } from './media'
+import { registerBrandHandlers } from './brand'
 import { registerProjectHandlers } from './project'
 import { registerSettingsHandlers } from './settings'
 import { registerModelHandlers } from './model'
@@ -66,6 +67,7 @@ export const HANDLER_REGISTRARS: ReadonlyArray<HandlerRegistrar> = Object.freeze
   registerAudioHandlers,
   registerAiHandlers,
   registerMediaHandlers,
+  registerBrandHandlers,
   registerProjectHandlers,
   registerSettingsHandlers,
   registerModelHandlers,

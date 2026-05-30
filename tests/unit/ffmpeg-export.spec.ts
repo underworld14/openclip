@@ -346,6 +346,144 @@ describe('exportClipArgsSplit (Part J 2-up split-screen)', () => {
   })
 })
 
+describe('logo overlay (Part K — brand kit)', () => {
+  const logoBase: ExportArgsOptions = { ...base, logoPath: '/logo.png' }
+  const countInputs = (args: string[]): number => args.filter((a) => a === '-i').length
+
+  it('no logo ⇒ single-range argv is byte-identical (still -vf, one input)', () => {
+    const args = exportClipArgs(base)
+    expect(args).toContain('-vf')
+    expect(args).not.toContain('-filter_complex')
+    expect(countInputs(args)).toBe(1)
+    expect(args.join(' ')).not.toContain('overlay')
+  })
+
+  it('single cut WITH a logo switches to filter_complex + 2nd -i + -map [v]/0:a', () => {
+    expect(exportClipArgs(logoBase)).toEqual([
+      '-hide_banner',
+      '-y',
+      '-ss',
+      '30',
+      '-i',
+      '/src/in.mp4',
+      '-i',
+      '/logo.png',
+      '-to',
+      '28.5',
+      '-filter_complex',
+      '[0:v]crop=ih*9/16:ih,scale=1080:1920[vbase];' +
+        '[1:v]scale=194:-1[logo];' +
+        '[vbase][logo]overlay=W-w-48:H-h-48[v]',
+      '-map',
+      '[v]',
+      '-map',
+      '0:a',
+      '-c:v',
+      'h264_videotoolbox',
+      '-b:v',
+      '8M',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '192k',
+      '-movflags',
+      '+faststart',
+      '-progress',
+      'pipe:2',
+      '-nostats',
+      '/out/clip.mp4'
+    ])
+  })
+
+  it('overlay sits AFTER scale and BEFORE the subtitles burn', () => {
+    const args = exportClipArgs({ ...logoBase, assPath: '/t/c.ass', fontsDir: '/t/fonts' })
+    expect(args[args.indexOf('-filter_complex') + 1]).toBe(
+      '[0:v]crop=ih*9/16:ih,scale=1080:1920[vbase];' +
+        '[1:v]scale=194:-1[logo];' +
+        '[vbase][logo]overlay=W-w-48:H-h-48[vov];' +
+        '[vov]subtitles=/t/c.ass:fontsdir=/t/fonts[v]'
+    )
+  })
+
+  it('pins the logo to each corner with the margin inset', () => {
+    const xy = (position: ExportArgsOptions['logoPosition']): string => {
+      const a = exportClipArgs({ ...logoBase, logoPosition: position })
+      return a[a.indexOf('-filter_complex') + 1]
+    }
+    expect(xy('top-left')).toContain('overlay=48:48[v]')
+    expect(xy('top-right')).toContain('overlay=W-w-48:48[v]')
+    expect(xy('bottom-left')).toContain('overlay=48:H-h-48[v]')
+    expect(xy('bottom-right')).toContain('overlay=W-w-48:H-h-48[v]')
+  })
+
+  it('scales the logo to round(logoScale * outputWidth) with a custom margin', () => {
+    const args = exportClipArgs({ ...logoBase, logoScale: 0.25, logoMargin: 20 })
+    const fc = args[args.indexOf('-filter_complex') + 1]
+    expect(fc).toContain('[1:v]scale=270:-1[logo]') // round(0.25 * 1080)
+    expect(fc).toContain('overlay=W-w-20:H-h-20[v]')
+  })
+
+  it('multi-range WITH a logo overlays after scale, keeps the aselect audio chain', () => {
+    const args = exportClipArgsMultiRange({
+      ...logoBase,
+      keepRanges: [
+        [30, 40],
+        [44, 58.5]
+      ]
+    })
+    const fc = args[args.indexOf('-filter_complex') + 1]
+    expect(countInputs(args)).toBe(2)
+    expect(fc).toContain(
+      "[0:v]crop=ih*9/16:ih,select='between(t,0,10)+between(t,14,28.5)'," +
+        'setpts=N/FRAME_RATE/TB,scale=1080:1920[vbase];' +
+        '[1:v]scale=194:-1[logo];[vbase][logo]overlay=W-w-48:H-h-48[v]'
+    )
+    expect(fc).toContain("[0:a]aselect='between(t,0,10)+between(t,14,28.5)',asetpts=N/SR/TB[a]")
+    expect(args).toEqual(expect.arrayContaining(['-map', '[v]', '-map', '[a]']))
+  })
+
+  it('split WITH a logo overlays AFTER the vstack and before subtitles', () => {
+    const splitPlan: ReframePlan = {
+      mode: 'split',
+      regions: [
+        { cropX: 0, cropY: 0, cropW: 960, cropH: 540 },
+        { cropX: 960, cropY: 0, cropW: 960, cropH: 540 }
+      ]
+    }
+    const args = exportClipArgsSplit({ ...logoBase, reframePlan: splitPlan })
+    const fc = args[args.indexOf('-filter_complex') + 1]
+    expect(countInputs(args)).toBe(2)
+    expect(fc).toContain(
+      '[lv][rv]vstack=inputs=2[vbase];' +
+        '[1:v]scale=194:-1[logo];' +
+        '[vbase][logo]overlay=W-w-48:H-h-48[v]'
+    )
+    expect(args).toEqual(expect.arrayContaining(['-map', '[v]', '-map', '0:a']))
+  })
+
+  it('no logo ⇒ multi-range and split graphs contain no overlay / 2nd input', () => {
+    const kr: [number, number][] = [
+      [30, 40],
+      [44, 58.5]
+    ]
+    const mr = exportClipArgsMultiRange({ ...base, keepRanges: kr })
+    expect(countInputs(mr)).toBe(1)
+    expect(mr[mr.indexOf('-filter_complex') + 1]).not.toContain('overlay')
+    const sp = exportClipArgsSplit({
+      ...base,
+      reframePlan: {
+        mode: 'split',
+        regions: [
+          { cropX: 0, cropY: 0, cropW: 960, cropH: 540 },
+          { cropX: 960, cropY: 0, cropW: 960, cropH: 540 }
+        ]
+      }
+    })
+    expect(countInputs(sp)).toBe(1)
+    expect(sp[sp.indexOf('-filter_complex') + 1]).not.toContain('overlay')
+  })
+})
+
 describe('thumbnailArgs', () => {
   it('grabs a single reframed frame (-vframes 1) at the given time', () => {
     expect(

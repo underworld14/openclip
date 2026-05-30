@@ -49,6 +49,10 @@ export interface ExportRunnerDeps {
     fontsDir?: string
     keepRanges?: Range[]
     reframePlan?: ReframePlan | null
+    logoPath?: JobParams['export']['logoPath']
+    logoPosition?: JobParams['export']['logoPosition']
+    logoScale?: JobParams['export']['logoScale']
+    logoMargin?: JobParams['export']['logoMargin']
     onProgress?: (pct: number) => void
     signal?: AbortSignal
   }) => Promise<ExportClipResult>
@@ -61,6 +65,7 @@ export interface ExportRunnerDeps {
     clipEnd: number
     style?: NonNullable<JobParams['export']['captions']>['style']
     keywords?: string[]
+    aiEmojiMap?: Record<string, string>
     assPath: string
     keepRanges?: Range[]
   }) => string
@@ -180,6 +185,7 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
         clipEnd: params.endTime,
         style: params.captions.style,
         keywords: params.captions.keywords,
+        aiEmojiMap: params.captions.aiEmojiMap,
         assPath: resolveAssPath(params.projectId, ctx.jobId, params.clipId),
         keepRanges
       })
@@ -197,6 +203,11 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
       fontsDir: assPath ? resolveFontsDir() : undefined,
       keepRanges,
       reframePlan,
+      // Brand-kit logo overlay (Part K) — absent ⇒ no overlay (argv unchanged).
+      logoPath: params.logoPath,
+      logoPosition: params.logoPosition,
+      logoScale: params.logoScale,
+      logoMargin: params.logoMargin,
       onProgress: (pct) => emit.progress(pct, 'encoding'),
       signal: ctx.signal
     })

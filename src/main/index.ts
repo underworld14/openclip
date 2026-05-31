@@ -35,10 +35,19 @@ import {
   registerMediaScheme,
   installMediaProtocolHandler
 } from './utils/media-protocol'
+import { createMediaAccess } from './utils/media-access'
+import { mediaDir, openclipTempRoot } from './utils/paths'
 
 let mainWindow: BrowserWindow | null = null
 const sidecar = new SidecarManager()
 const keyVault = createKeyVault()
+
+// The `openclip-media://` allow-list (audit fix openclip-8tx): the scheme may
+// serve only paths EXPLICITLY granted (import/probe + project load) or under an
+// always-allowed root (the app-owned media dir + the OpenClip temp root, where
+// previews/extracts live). Built once and shared by the protocol handler + ctx.
+// Built lazily inside whenReady (mediaDir()/openclipTempRoot() touch app paths).
+let mediaAccess: ReturnType<typeof createMediaAccess>
 
 // The source-video preview protocol (PRD §6.6) is PRIVILEGED and must be
 // registered before `app.whenReady()` — this runs at module-eval time. The
@@ -95,7 +104,13 @@ function cspHeader(): string {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
     `media-src 'self' blob: file: ${MEDIA_SCHEME}:`,
-    "connect-src 'self' https:",
+    // ── CSP TIGHTENING (audit fix — revert THIS LINE alone to restore `https:`) ──
+    // The renderer makes NO direct outbound network requests: every AI provider
+    // call (OpenAI/Anthropic/Ollama/OpenRouter) runs in the MAIN process via
+    // ai-client.ts, and onnxruntime-web loads its WASM from a LOCAL `wasmPaths`
+    // dir (reframeWasmDir()) in main — also main-side. So the renderer only ever
+    // talks to `'self'`; dropping `https:` removes a needless exfil channel.
+    "connect-src 'self'",
     "font-src 'self' data:"
   ].join('; ')
 }
@@ -246,9 +261,14 @@ app.whenReady().then(async () => {
 
   installCsp()
 
+  // Build the media allow-list (audit fix openclip-8tx) BEFORE installing the
+  // protocol handler. Roots are resolved here (app paths are now available).
+  mediaAccess = createMediaAccess({ alwaysAllowedRoots: [mediaDir(), openclipTempRoot()] })
+
   // Serve the source video to the preview <video> over the privileged scheme
-  // (PRD §6.6). The scheme was registered as privileged at module-eval time.
-  installMediaProtocolHandler()
+  // (PRD §6.6), scoped by the allow-list. The scheme was registered as
+  // privileged at module-eval time.
+  installMediaProtocolHandler(mediaAccess)
 
   // Smoke round-trip used by Gate A.
   ipcMain.handle('ping', () => 'pong')
@@ -285,7 +305,8 @@ app.whenReady().then(async () => {
     ipcMain,
     getMainWindow: () => mainWindow,
     sidecar,
-    keyVault
+    keyVault,
+    mediaAccess
   }
   registerAllHandlers(ctx)
   wireJobControlPlane()
@@ -294,6 +315,12 @@ app.whenReady().then(async () => {
   // with no matching .ocproj (downloads from crashed/abandoned imports). Fire-and-
   // forget so window creation isn't blocked; best-effort + logged.
   void sweepOrphanMediaAtLaunch().catch((err) => console.error('[media] orphan sweep failed:', err))
+
+  // Launch-time orphan-temp sweep (audit fix openclip-2j3): reclaim per-job temp
+  // scratch left by a crash/SIGKILL before a runner's finally could delete it,
+  // preserving every project's content-addressed cache/ + any still-active job.
+  // Fire-and-forget; best-effort + logged.
+  void sweepOrphanTempAtLaunch().catch((err) => console.error('[temp] orphan sweep failed:', err))
 
   createWindow()
 
@@ -324,6 +351,20 @@ async function sweepOrphanMediaAtLaunch(): Promise<void> {
   }
   const { removed } = await sweepOrphanMedia(referenced, mediaDir())
   if (removed.length) console.log(`[media] swept ${removed.length} orphan media dir(s):`, removed)
+}
+
+/**
+ * Reclaim orphaned per-job temp scratch at launch (audit fix openclip-2j3): per-
+ * job dirs under `<temp>/openclip/` are normally removed in each runner's
+ * `finally`, but a crash/SIGKILL can leave them behind. Sweep them, preserving
+ * every project's content-addressed `cache/` and any STILL-active job (so a sweep
+ * fired alongside a running job can't yank its live scratch).
+ */
+async function sweepOrphanTempAtLaunch(): Promise<void> {
+  const { openclipTempRoot } = await import('./utils/paths')
+  const { sweepOrphanTemp } = await import('./services/temp-store')
+  const { removed } = await sweepOrphanTemp(sidecar.activeJobIds(), openclipTempRoot())
+  if (removed.length) console.log(`[temp] swept ${removed.length} orphan temp dir(s):`, removed)
 }
 
 app.on('window-all-closed', () => {

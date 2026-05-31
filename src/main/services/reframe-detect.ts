@@ -233,7 +233,11 @@ export interface MotionRoi {
   h: number
 }
 
-/** One parsed motion sample: a frame time (s, 0-based to the seek) + its energy. */
+/**
+ * One per-instance motion series: parallel {times,values}. `times` are 0-based to
+ * the `-ss` seek; `values` are the per-frame `lavfi.signalstats.YAVG` energy.
+ * `parseMotionMetadata` returns one of these PER `metadata=print` filter instance.
+ */
 export interface MotionSeries {
   times: number[]
   values: number[]
@@ -244,9 +248,10 @@ export interface MotionSeries {
  * we crop, drop to gray, `tblend=all_mode=difference` (frame-to-frame delta), run
  * `signalstats`, and `metadata=print` the per-frame average luma of that delta
  * (`lavfi.signalstats.YAVG`) — higher delta ≈ more motion (a talking speaker).
- * Both ROI chains are `-map`'d to their own `-f null -` sink so ffmpeg emits both
- * series interleaved on stderr metadata; `parseMotionMetadata` separates them by
- * order via the print lines.
+ * Both ROI chains are `-map`'d to their own `-f null -` sink. With one decode
+ * feeding both chains ffmpeg INTERLEAVES the two prints per frame (left then
+ * right), each line tagged with its own `[Parsed_metadata_<N> @ …]` instance;
+ * `parseMotionMetadata` separates them by that instance (first-seen N = left).
  *
  *   ffmpeg -i src -filter_complex
  *     "[0:v]crop=lw:lh:lx:ly,format=gray,tblend=all_mode=difference,
@@ -294,30 +299,58 @@ export function motionArgs(
 }
 
 /**
- * Parse the `metadata=print` stderr into a {times,values} series. ffmpeg prints,
- * per frame, a `frame:<n> pts_time:<t>` line followed by
- * `lavfi.signalstats.YAVG=<v>`; we pair each YAVG with the most-recent pts_time.
- * Pure — matches `motionArgs` output. (When two sinks interleave, the caller
- * derives left/right by splitting the combined series; for a single ROI this is
- * the raw series.)
+ * Parse the `metadata=print` stderr into ONE PER-INSTANCE series per metadata
+ * filter, GROUPED by the `[Parsed_metadata_<N> @ 0x…]` instance number.
+ *
+ * Real ffmpeg feeds a single decode into two `metadata=print` sinks (`[lm]`,
+ * `[rm]`). It does NOT emit all-left-then-all-right: with one decode the two
+ * chains run frame-by-frame, so the print INTERLEAVES per frame (left N, right N,
+ * next frame, …). Each line carries its own `[Parsed_metadata_<N> @ …]` prefix,
+ * so we key on instance N to keep the two series separate. Per frame ffmpeg
+ * prints a `frame:<n> pts_time:<t>` line then a `lavfi.signalstats.YAVG=<v>`
+ * line for the SAME instance, so each YAVG is paired with ITS OWN group's most
+ * recent pts_time (a per-instance `lastTime`, not a single global one).
+ *
+ * Returns an ORDERED list of per-instance series, preserving first-seen instance
+ * order: group[0] is whichever instance printed first (the `[lm]`/left sink,
+ * mapped first in `motionArgs`), group[1] the second, etc. A single-ROI print
+ * yields exactly one group. Pure — matches `motionArgs` output.
  */
-export function parseMotionMetadata(stderr: string): MotionSeries {
-  const times: number[] = []
-  const values: number[] = []
-  let lastTime: number | null = null
+export function parseMotionMetadata(stderr: string): MotionSeries[] {
+  // Ordered groups + per-instance bookkeeping (first-seen order is load-bearing:
+  // see splitMotionSeries — first instance = left, second = right).
+  const order: number[] = []
+  const byInstance = new Map<number, { series: MotionSeries; lastTime: number | null }>()
+
+  const ensure = (n: number): { series: MotionSeries; lastTime: number | null } => {
+    let g = byInstance.get(n)
+    if (!g) {
+      g = { series: { times: [], values: [] }, lastTime: null }
+      byInstance.set(n, g)
+      order.push(n)
+    }
+    return g
+  }
+
   for (const line of stderr.split('\n')) {
+    const mInst = /\[Parsed_metadata_(\d+) @/.exec(line)
+    // Without an instance prefix we can't attribute the line to a group; skip it.
+    if (!mInst) continue
+    const g = ensure(parseInt(mInst[1], 10))
+
     const mt = /pts_time:\s*(-?[\d.]+)/.exec(line)
     if (mt) {
-      lastTime = parseFloat(mt[1])
+      g.lastTime = parseFloat(mt[1])
       continue
     }
     const mv = /lavfi\.signalstats\.YAVG\s*[:=]\s*(-?[\d.]+)/.exec(line)
-    if (mv && lastTime !== null) {
-      times.push(lastTime)
-      values.push(parseFloat(mv[1]))
+    if (mv && g.lastTime !== null) {
+      g.series.times.push(g.lastTime)
+      g.series.values.push(parseFloat(mv[1]))
     }
   }
-  return { times, values }
+
+  return order.map((n) => byInstance.get(n)!.series)
 }
 
 // ============================================================================
@@ -378,8 +411,9 @@ export interface DetectReframeResult {
  * `MotionTimeline`). Frame `idx` is decoded at the squared `modelSize`, handed to
  * the detector, and stamped at ABSOLUTE source time
  * `(startTime + idx/sampleFps) * 1000` ms. The motion pass (when requested) is
- * split into left/right series by interleave order. Pure given injected
- * `run`/`detector`; the real defaults touch ffmpeg + onnxruntime.
+ * grouped per `metadata=print` instance (first-seen = left) then folded into a
+ * `MotionTimeline`. Pure given injected `run`/`detector`; the real defaults touch
+ * ffmpeg + onnxruntime.
  */
 export async function detectReframe(opts: DetectReframeOptions): Promise<DetectReframeResult> {
   const sampleFps = opts.sampleFps ?? 2
@@ -420,30 +454,40 @@ export async function detectReframe(opts: DetectReframeOptions): Promise<DetectR
     opts.motionRois.right
   )
   const { stderr } = await run({ args: motionArgv, binPath: opts.binPath, signal: opts.signal })
-  const series = parseMotionMetadata(stderr)
-  const motion = splitMotionSeries(series, opts.startTime)
+  const groups = parseMotionMetadata(stderr)
+  const motion = splitMotionSeries(groups, opts.startTime)
   return { samples, motion }
 }
 
 /**
- * Split the combined motion print (two interleaved sinks) into a `MotionTimeline`.
- * ffmpeg processes `-map [lm] -f null -` then `-map [rm] -f null -` in order, so
- * the print emits the FULL left series followed by the FULL right series. We split
- * the flat {times,values} in half, take the left half's times as the timeline
- * (offset to absolute source seconds by `startTime`), and pair the two value
- * halves as `left`/`right`. When the halves are uneven we clamp to the shorter.
+ * Fold the per-instance motion groups (from `parseMotionMetadata`) into one
+ * `MotionTimeline`.
+ *
+ * LOAD-BEARING INVARIANT: `motionArgs` maps `[lm]` (the LEFT ROI) FIRST, then
+ * `[rm]` (right). With one decode feeding both sinks, ffmpeg's print INTERLEAVES
+ * per frame but the LEFT sink prints first on each frame, so the FIRST-SEEN
+ * `[Parsed_metadata_N @ …]` instance is always LEFT and the second is RIGHT.
+ * `parseMotionMetadata` preserves that first-seen order, so `groups[0]` = left,
+ * `groups[1]` = right. (Do NOT reorder by instance N — N is assigned by filter
+ * position, not guaranteed ascending across ffmpeg versions; first-seen order is.)
+ *
+ * The shared timeline is the left group's times offset to ABSOLUTE source seconds
+ * by `startTime`. A single-ROI print (one group) mirrors that series onto both
+ * sides. When the two groups are uneven we clamp to the shorter (and to the
+ * timeline length) so the parallel arrays stay aligned.
  */
-export function splitMotionSeries(series: MotionSeries, startTime: number): MotionTimeline {
-  const total = series.values.length
-  const half = Math.floor(total / 2)
-  const n = Math.min(half, total - half)
+export function splitMotionSeries(groups: MotionSeries[], startTime: number): MotionTimeline {
+  if (groups.length === 0) return { times: [], left: [], right: [] }
+  const leftG = groups[0]
+  const rightG = groups[1] ?? groups[0] // single ROI ⇒ mirror onto both sides
+  const n = Math.min(leftG.values.length, rightG.values.length, leftG.times.length)
   const times: number[] = []
   const left: number[] = []
   const right: number[] = []
   for (let i = 0; i < n; i++) {
-    times.push(series.times[i] + startTime)
-    left.push(series.values[i])
-    right.push(series.values[half + i])
+    times.push(leftG.times[i] + startTime)
+    left.push(leftG.values[i])
+    right.push(rightG.values[i])
   }
   return { times, left, right }
 }

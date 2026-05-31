@@ -43,7 +43,14 @@ export function registerProjectHandlers(ctx: IpcContext): void {
       _e,
       req: ChannelReq<IPCChannels.LOAD_PROJECT>
     ): Promise<ChannelRes<IPCChannels.LOAD_PROJECT>> => {
-      return loadProject(projectsDir(), req.id)
+      const project = await loadProject(projectsDir(), req.id)
+      // Grant the project's source path so the openclip-media:// scheme may serve
+      // it to the preview <video> (audit fix openclip-8tx). Residual risk: a
+      // tampered .ocproj naming an arbitrary path is granted here, but the bytes
+      // only feed a media decoder — accepted vs. breaking file-import-from-anywhere
+      // (documented in media-protocol.ts installMediaProtocolHandler).
+      ctx.mediaAccess.grant(project.sourceVideo.path)
+      return project
     }
   )
 

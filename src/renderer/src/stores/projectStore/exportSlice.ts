@@ -34,6 +34,14 @@ export interface ExportSlice {
   exportHistory: ExportRecord[]
   addExportRecord: (record: ExportRecord) => void
   /**
+   * Replace the whole export-history slice. Called by `hydrateFromProject` on
+   * open/new so the slice mirrors the loaded `.ocproj` (and resets to `[]` for a
+   * fresh project). WITHOUT this, `composeProject()` would persist a stale `[]`
+   * over an opened project's real history, and one project's records would leak
+   * into the next (the slice is a singleton, never reset on switch).
+   */
+  setExportHistory: (history: ExportRecord[]) => void
+  /**
    * Compose the Project to export/persist from LIVE slice state (integration-gap
    * fix). Returns null when there is no open project. The returned Project layers
    * the live clips + transcript over the current project document.
@@ -42,20 +50,24 @@ export interface ExportSlice {
 }
 
 /**
- * PURE: layer the live clips + transcript over a base project so the composed
- * document reflects current edits/approvals + the streamed transcript (not the
- * stale snapshot the project was loaded with). Exported for direct unit testing
- * without a store (plan Gate C integration test).
+ * PURE: layer the live clips + transcript + export history over a base project so
+ * the composed document reflects current edits/approvals + the streamed
+ * transcript + the latest export records (not the stale snapshot the project was
+ * loaded with). Exported for direct unit testing without a store (plan Gate C
+ * integration test). The persistence-cluster fix added `exportHistory` so an
+ * export-record save persists the LIVE history rather than the stale one.
  */
 export function composeLiveProject(
   base: Project,
   clips: Clip[],
-  transcript: Project['transcript'] | null
+  transcript: Project['transcript'] | null,
+  exportHistory: ExportRecord[]
 ): Project {
   return {
     ...base,
     clips,
-    transcript: transcript ?? base.transcript
+    transcript: transcript ?? base.transcript,
+    exportHistory
   }
 }
 
@@ -146,9 +158,10 @@ export function buildExportParams(args: {
 export const createExportSlice: StateCreator<ProjectStore, [], [], ExportSlice> = (set, get) => ({
   exportHistory: [],
   addExportRecord: (record) => set((s) => ({ exportHistory: [...s.exportHistory, record] })),
+  setExportHistory: (exportHistory) => set({ exportHistory }),
   composeProject: () => {
-    const { currentProject, clips, transcript } = get()
+    const { currentProject, clips, transcript, exportHistory } = get()
     if (!currentProject) return null
-    return composeLiveProject(currentProject, clips, transcript)
+    return composeLiveProject(currentProject, clips, transcript, exportHistory)
   }
 })

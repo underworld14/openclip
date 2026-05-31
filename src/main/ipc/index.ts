@@ -13,6 +13,7 @@
 import type { IpcMain, BrowserWindow } from 'electron'
 import type { KeyVault } from '@main/utils/security'
 import type { SidecarManager } from '@main/services/sidecar-manager'
+import type { MediaAccess } from '@main/utils/media-access'
 
 import { registerVideoHandlers } from './video'
 import { registerAudioHandlers } from './audio'
@@ -48,6 +49,12 @@ export interface IpcContext {
   readonly sidecar: SidecarManager
   /** API-key vault (safeStorage); raw keys NEVER cross IPC (PRD §12.2). */
   readonly keyVault: KeyVault
+  /**
+   * The `openclip-media://` allow-list (audit fix openclip-8tx). Handlers that
+   * learn of a legitimate source path (import/probe, project load) `grant()` it
+   * so the privileged media scheme may serve it; everything else is 403'd.
+   */
+  readonly mediaAccess: MediaAccess
 }
 
 /** The shape every `ipc/<domain>.ts` exports. */

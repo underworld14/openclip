@@ -3,11 +3,12 @@
  * scripts/bundle-binaries.mjs — populate `resources/` with the native sidecars
  * the PRODUCTION app resolves via `process.resourcesPath` (PRD §13, plan E.6).
  *
- * Reproducible bundling: large binaries are NOT committed; this copies them from
- * `node_modules` (FFmpeg/ffprobe) and a locally-built whisper-cli into:
+ * Reproducible bundling: large binaries are NOT committed; this downloads pinned
+ * + SHA-256-verified FFmpeg/ffprobe and yt-dlp, and copies a locally-built
+ * whisper-cli, into:
  *
- *   resources/ffmpeg/<plat-arch>/ffmpeg     ← ffmpeg-static (libass + videotoolbox)
- *   resources/ffmpeg/<plat-arch>/ffprobe    ← ffmpeg-ffprobe-static
+ *   resources/ffmpeg/<plat-arch>/ffmpeg     ← pinned REDISTRIBUTABLE GPL build (libass + videotoolbox, NOT nonfree), SHA-256 verified (openclip-fh2 / -hk7)
+ *   resources/ffmpeg/<plat-arch>/ffprobe    ← same pinned redistributable build, SHA-256 verified
  *   resources/whisper/<plat-arch>/whisper-cli ← static Metal-embedded build
  *   resources/yt-dlp/<plat-arch>/yt-dlp     ← pinned standalone yt-dlp_macos release, SHA-256 verified (F.4 / G.6 — no Python)
  *
@@ -26,6 +27,8 @@
  * Gate-A invariants honored (verified here, build fails loudly otherwise):
  *   - the bundled ffmpeg MUST expose the libass `subtitles` filter and the
  *     `h264_videotoolbox` encoder (caption burns + HW export).
+ *   - the bundled ffmpeg/ffprobe MUST be REDISTRIBUTABLE: the build configuration
+ *     may NOT contain `--enable-nonfree` (legal guardrail — openclip-fh2).
  *   - the bundled whisper-cli MUST be portable: `otool -L` may reference ONLY
  *     /usr/lib and /System/* dylibs (no @rpath/brew libs), and it must run `-h`.
  *
@@ -58,6 +61,29 @@ const require = createRequire(import.meta.url)
  */
 const YTDLP_VERSION = process.env.OPENCLIP_YTDLP_VERSION || '2026.03.17'
 
+/**
+ * Pinned REDISTRIBUTABLE FFmpeg/ffprobe (openclip-fh2 / openclip-hk7). The
+ * `ffmpeg-static` / `ffmpeg-ffprobe-static` builds report `--enable-nonfree`,
+ * which is legally NON-redistributable in a public MIT dmg. We instead bundle a
+ * pinned, SHA-256-verified GPL build from Martin Riedl's FFmpeg Build Server
+ * (`ffmpeg.martin-riedl.de`): native macOS arm64 static, GPL (NOT nonfree),
+ * keeps the libass `subtitles` filter + `h264_videotoolbox`, signed+notarized,
+ * publishes a per-asset `.sha256` sidecar.
+ *
+ * FFMPEG_MR_BUILD is the pinned build id (`<unix-ts>_<version>`) that scopes the
+ * download URL: https://ffmpeg.martin-riedl.de/download/macos/<arch>/<build>/{ffmpeg,ffprobe}.zip
+ * Each zip has a `<name>.zip.sha256` sidecar (`<hex>  <name>.zip`). We ALSO pin
+ * the expected hashes as consts below so a future bump is intentional (the build
+ * fails loudly if the published sidecar or the download drifts from these). The
+ * detail page exposes the build id at `/info/detail/macos/<arch>/<build>`.
+ *
+ * Override the build id (to bump) via OPENCLIP_FFMPEG_MR_BUILD; when bumping you
+ * MUST also update the two FFMPEG_*_ZIP_SHA256 consts to the new sidecar values.
+ */
+const FFMPEG_MR_BUILD = process.env.OPENCLIP_FFMPEG_MR_BUILD || '1778761665_8.1.1'
+const FFMPEG_ZIP_SHA256 = 'a05b1a47bb3ac89a95a55eec713f8bbb347051bb07015f3b7d08fb62ed81a21e'
+const FFPROBE_ZIP_SHA256 = '135e70d2518beeb568183952dbc4bdeca1628dd49a7376d57e6b27dbc57d209f'
+
 const platArch = `${process.platform}-${process.arch}`
 const isMac = process.platform === 'darwin'
 
@@ -79,33 +105,20 @@ function installBinary(src, dest) {
   log(`copied ${src} → ${dest} (${sz} MB)`)
 }
 
-/** Resolve the ffmpeg-static binary path (its default export is the path). */
-function resolveFfmpegStatic() {
-  const p = require('ffmpeg-static')
-  if (!p || typeof p !== 'string') fail('ffmpeg-static did not resolve a binary path')
-  return p
-}
-
-/** Resolve ffprobe from ffmpeg-ffprobe-static. */
-function resolveFfprobeStatic() {
-  const m = require('ffmpeg-ffprobe-static')
-  if (!m.ffprobePath) fail('ffmpeg-ffprobe-static did not resolve ffprobePath')
-  return m.ffprobePath
-}
-
 /** sha256 of a file, lowercase hex. */
 function sha256File(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
 
-/** curl a URL to stdout (utf8) — used for the small SHA2-256SUMS manifest. */
-function curlText(url) {
+/** curl a URL to stdout (utf8) — used for the small SHA2-256SUMS / .sha256 manifests. */
+function curlText(url, offlineHint) {
   const r = spawnSync('curl', ['-fsSL', url], { encoding: 'utf8' })
   if (r.error || r.status !== 0) {
     fail(
       `failed to fetch ${url} (curl status=${r.status}${r.error ? `, ${r.error.message}` : ''}).\n` +
-        `For an offline/air-gapped build, set OPENCLIP_YTDLP_SRC=<path to a yt-dlp binary> ` +
-        `or pre-seed build/yt-dlp-cache/<plat-arch>/.`
+        (offlineHint ??
+          `For an offline/air-gapped build, set OPENCLIP_YTDLP_SRC=<path to a yt-dlp binary> ` +
+            `or pre-seed build/yt-dlp-cache/<plat-arch>/.`)
     )
   }
   return r.stdout
@@ -166,6 +179,104 @@ function resolveYtDlp() {
   chmodSync(cached, 0o755)
   log(`yt-dlp ${YTDLP_VERSION} checksum OK (sha256 ${expected.slice(0, 16)}…)`)
   return cached
+}
+
+/**
+ * Resolve a pinned, REDISTRIBUTABLE FFmpeg/ffprobe binary (openclip-fh2 / -hk7).
+ * Clones the `resolveYtDlp()` gold-standard: download a PINNED build's zip, look
+ * up its published `.sha256` sidecar, verify the download, AND cross-check that
+ * sidecar against the hash committed as a const (so a swapped sidecar can't slip
+ * a new binary past review). Unzips into build/ffmpeg-cache/<build>/<tool>/ and
+ * returns the staged binary path. macOS arm64 only — the GPL (NOT nonfree) build
+ * keeps the libass `subtitles` filter + `h264_videotoolbox` (proven downstream by
+ * verifyFfmpeg + verifyNotNonfree).
+ *
+ *   tool       = 'ffmpeg' | 'ffprobe'  (the zip + the binary inside share the name)
+ *   expected   = the committed FFMPEG_*_ZIP_SHA256 const (must match the sidecar)
+ *   srcEnv     = an env override pointing at an already-extracted binary (offline)
+ */
+function resolveFfmpegBuildAsset(tool, expected, srcEnv) {
+  if (srcEnv && process.env[srcEnv] && existsSync(process.env[srcEnv])) {
+    return process.env[srcEnv]
+  }
+  if (!isMac || process.arch !== 'arm64') {
+    fail(
+      `the pinned redistributable FFmpeg build is macOS arm64 only (got ${platArch}). ` +
+        `Set ${srcEnv}=<path to a redistributable ${tool}> for other platforms.`
+    )
+  }
+  const base = `https://ffmpeg.martin-riedl.de/download/macos/arm64/${FFMPEG_MR_BUILD}`
+  const zipUrl = `${base}/${tool}.zip`
+  const offlineHint =
+    `For an offline/air-gapped build, set ${srcEnv}=<path to a redistributable ${tool} binary> ` +
+    `or pre-seed build/ffmpeg-cache/${FFMPEG_MR_BUILD}/${tool}/.`
+
+  // 1) Fetch the published per-asset sidecar ("<hex>  <tool>.zip") and confirm it
+  //    equals the hash we pinned in code — refuse a drifted/MITM'd sidecar.
+  const sidecar = curlText(`${zipUrl}.sha256`, offlineHint)
+  const published = sidecar.trim().split(/\s+/)[0]?.toLowerCase()
+  if (!/^[0-9a-f]{64}$/.test(published ?? '')) {
+    fail(
+      `could not parse ${tool}.zip.sha256 sidecar from ${zipUrl}.sha256 (got: ${JSON.stringify(sidecar.slice(0, 80))})`
+    )
+  }
+  if (published !== expected) {
+    const constName = tool === 'ffmpeg' ? 'FFMPEG_ZIP_SHA256' : 'FFPROBE_ZIP_SHA256'
+    fail(
+      `${tool} ${FFMPEG_MR_BUILD} published .sha256 does NOT match the pinned const — ` +
+        `the upstream build changed. Review + bump ${constName} (and OPENCLIP_FFMPEG_MR_BUILD).\n` +
+        `  pinned    ${expected}\n  published ${published}`
+    )
+  }
+
+  const cacheDir = join(repoRoot, 'build', 'ffmpeg-cache', FFMPEG_MR_BUILD, tool)
+  const zipPath = join(cacheDir, `${tool}.zip`)
+  const binPath = join(cacheDir, tool)
+
+  // Reuse the extracted binary only if the cached zip still matches the pin.
+  if (existsSync(binPath) && existsSync(zipPath) && sha256File(zipPath) === expected) {
+    return binPath
+  }
+
+  mkdirSync(cacheDir, { recursive: true })
+  log(`downloading pinned redistributable ${tool} ${FFMPEG_MR_BUILD} → ${zipPath}`)
+  const dl = spawnSync('curl', ['-fsSL', '-o', zipPath, zipUrl], { stdio: 'inherit' })
+  if (dl.error || dl.status !== 0) {
+    fail(
+      `failed to download ${zipUrl} (curl status=${dl.status}${dl.error ? `, ${dl.error.message}` : ''}).\n${offlineHint}`
+    )
+  }
+
+  // 2) Verify the downloaded ZIP against the pinned/published hash before extracting.
+  const actual = sha256File(zipPath)
+  if (actual !== expected) {
+    fail(
+      `${tool} ${FFMPEG_MR_BUILD} SHA-256 MISMATCH — refusing to bundle a possibly-tampered binary.\n` +
+        `  expected ${expected}\n  actual   ${actual}`
+    )
+  }
+  log(`${tool} ${FFMPEG_MR_BUILD} zip checksum OK (sha256 ${expected.slice(0, 16)}…)`)
+
+  // 3) Extract the single binary out of the zip (each zip holds just `<tool>`).
+  const uz = spawnSync('unzip', ['-o', '-q', zipPath, tool, '-d', cacheDir], { stdio: 'inherit' })
+  if (uz.error || uz.status !== 0) {
+    fail(
+      `failed to unzip ${zipPath} (unzip status=${uz.status}${uz.error ? `, ${uz.error.message}` : ''})`
+    )
+  }
+  if (!existsSync(binPath)) fail(`unzip of ${tool}.zip did not yield expected binary: ${binPath}`)
+  chmodSync(binPath, 0o755)
+  return binPath
+}
+
+/** Pinned redistributable ffmpeg (replaces the nonfree ffmpeg-static). */
+function resolveFfmpegRedistributable() {
+  return resolveFfmpegBuildAsset('ffmpeg', FFMPEG_ZIP_SHA256, 'OPENCLIP_FFMPEG_SRC')
+}
+
+/** Pinned redistributable ffprobe (replaces the nonfree ffmpeg-ffprobe-static). */
+function resolveFfprobeRedistributable() {
+  return resolveFfmpegBuildAsset('ffprobe', FFPROBE_ZIP_SHA256, 'OPENCLIP_FFPROBE_SRC')
 }
 
 /** Find the locally-built (static, Metal-embedded) whisper-cli. NEVER brew. */
@@ -281,6 +392,33 @@ function verifyFfmpeg(ffmpegBin) {
   log(`ffmpeg OK: has libass 'subtitles' filter + h264_videotoolbox`)
 }
 
+/**
+ * Hard-guard against shipping a NON-redistributable build (openclip-fh2). The
+ * `--enable-nonfree` configure flag taints the binary so it cannot be legally
+ * redistributed in a public MIT dmg. Read the build configuration straight from
+ * the binary and FAIL THE BUILD if the flag is present — applies to BOTH the
+ * staged ffmpeg AND ffprobe (ffprobe shares the same configure line).
+ */
+function verifyNotNonfree(bin, label) {
+  let conf
+  try {
+    conf = execFileSync(bin, ['-hide_banner', '-buildconf'], { encoding: 'utf8' })
+  } catch (e) {
+    // Fall back to -version, whose `configuration:` line carries the same flags.
+    conf = `${e.stdout ?? ''}`
+    if (!/configuration:/i.test(conf)) {
+      conf = execFileSync(bin, ['-hide_banner', '-version'], { encoding: 'utf8' })
+    }
+  }
+  if (/--enable-nonfree/.test(conf)) {
+    fail(
+      `${label} is built with --enable-nonfree — that build is NOT redistributable in a ` +
+        `public MIT dmg. Bundle a GPL/LGPL redistributable build instead (openclip-fh2).`
+    )
+  }
+  log(`${label} OK: redistributable (no --enable-nonfree in build configuration)`)
+}
+
 /** A portable binary may only link /usr/lib and /System/* dylibs. */
 function verifyPortable(bin, label) {
   if (!isMac) {
@@ -380,8 +518,10 @@ const dest = {
 log(`target plat-arch: ${platArch}`)
 
 if (!verifyOnly) {
-  installBinary(resolveFfmpegStatic(), dest.ffmpeg)
-  installBinary(resolveFfprobeStatic(), dest.ffprobe)
+  // ffmpeg/ffprobe: pinned, SHA-256-verified, REDISTRIBUTABLE GPL build (NOT the
+  // nonfree ffmpeg-static — openclip-fh2 / openclip-hk7).
+  installBinary(resolveFfmpegRedistributable(), dest.ffmpeg)
+  installBinary(resolveFfprobeRedistributable(), dest.ffprobe)
   installBinary(resolveWhisperCli(), dest.whisper)
   installBinary(resolveYtDlp(), dest.ytdlp)
   // Auto-reframe ONNX runtime (Part J): assert the committed YuNet model + stage
@@ -394,6 +534,9 @@ for (const [name, p] of Object.entries(dest)) {
   if (!existsSync(p)) fail(`expected bundled binary missing: ${name} (${p})`)
 }
 verifyFfmpeg(dest.ffmpeg)
+// Legal guardrail (openclip-fh2): refuse to ship a --enable-nonfree build.
+verifyNotNonfree(dest.ffmpeg, 'ffmpeg')
+verifyNotNonfree(dest.ffprobe, 'ffprobe')
 verifyPortable(dest.ffmpeg, 'ffmpeg')
 verifyPortable(dest.ffprobe, 'ffprobe')
 verifyPortable(dest.whisper, 'whisper-cli')

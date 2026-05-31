@@ -194,23 +194,39 @@ describe('nms', () => {
 // ---------------------------------------------------------------------------
 
 describe('parseMotionMetadata', () => {
-  it('pairs each YAVG with the most-recent pts_time', () => {
+  it('groups YAVG values by the [Parsed_metadata_N @ …] instance, first-seen order preserved', () => {
+    // Real ffmpeg with one decode feeding TWO metadata sinks INTERLEAVES per frame:
+    // left(4) then right(5) for frame 0, then frame 1, … Each instance N is its own
+    // group; each YAVG pairs with ITS OWN group's latest pts_time.
     const stderr = [
       '[Parsed_metadata_4 @ 0x1] frame:0    pts:0       pts_time:0',
       '[Parsed_metadata_4 @ 0x1] lavfi.signalstats.YAVG=3.5',
+      '[Parsed_metadata_5 @ 0x2] frame:0    pts:0       pts_time:0',
+      '[Parsed_metadata_5 @ 0x2] lavfi.signalstats.YAVG=30.0',
       '[Parsed_metadata_4 @ 0x1] frame:1    pts:512     pts_time:0.5',
       '[Parsed_metadata_4 @ 0x1] lavfi.signalstats.YAVG=12.0',
-      '[Parsed_metadata_4 @ 0x1] frame:2    pts:1024    pts_time:1.0',
-      '[Parsed_metadata_4 @ 0x1] lavfi.signalstats.YAVG=1.25'
+      '[Parsed_metadata_5 @ 0x2] frame:1    pts:512     pts_time:0.5',
+      '[Parsed_metadata_5 @ 0x2] lavfi.signalstats.YAVG=40.0'
     ].join('\n')
-    expect(parseMotionMetadata(stderr)).toEqual({
-      times: [0, 0.5, 1.0],
-      values: [3.5, 12.0, 1.25]
-    })
+    // First-seen instance 4 = group[0], instance 5 = group[1].
+    expect(parseMotionMetadata(stderr)).toEqual([
+      { times: [0, 0.5], values: [3.5, 12.0] },
+      { times: [0, 0.5], values: [30.0, 40.0] }
+    ])
   })
 
-  it('returns empty series when there are no metadata lines', () => {
-    expect(parseMotionMetadata('frame= 1\nframe= 2\n')).toEqual({ times: [], values: [] })
+  it('returns a single group for one ROI (single-instance print)', () => {
+    const stderr = [
+      '[Parsed_metadata_2 @ 0xa] frame:0 pts_time:0',
+      '[Parsed_metadata_2 @ 0xa] lavfi.signalstats.YAVG=2.0',
+      '[Parsed_metadata_2 @ 0xa] frame:1 pts_time:0.5',
+      '[Parsed_metadata_2 @ 0xa] lavfi.signalstats.YAVG=4.0'
+    ].join('\n')
+    expect(parseMotionMetadata(stderr)).toEqual([{ times: [0, 0.5], values: [2.0, 4.0] }])
+  })
+
+  it('returns no groups when there are no metadata lines', () => {
+    expect(parseMotionMetadata('frame= 1\nframe= 2\n')).toEqual([])
   })
 })
 
@@ -219,17 +235,42 @@ describe('parseMotionMetadata', () => {
 // ---------------------------------------------------------------------------
 
 describe('splitMotionSeries', () => {
-  it('splits the interleaved (left-then-right) print into a MotionTimeline offset to absolute time', () => {
-    // 4 frames per side: first half = left sink, second half = right sink.
-    const series = {
-      times: [0, 0.5, 1.0, 1.5, 0, 0.5, 1.0, 1.5],
-      values: [1, 2, 3, 4, 10, 20, 30, 40]
-    }
-    expect(splitMotionSeries(series, 100)).toEqual({
+  it('maps first-seen group → left, second → right, offset to absolute time', () => {
+    // Two grouped per-instance series (first-seen N = left, second = right).
+    const groups = [
+      { times: [0, 0.5, 1.0, 1.5], values: [1, 2, 3, 4] },
+      { times: [0, 0.5, 1.0, 1.5], values: [10, 20, 30, 40] }
+    ]
+    expect(splitMotionSeries(groups, 100)).toEqual({
       times: [100, 100.5, 101.0, 101.5],
       left: [1, 2, 3, 4],
       right: [10, 20, 30, 40]
     })
+  })
+
+  it('single group (one ROI) → left = right (mirrored), times offset to absolute', () => {
+    const groups = [{ times: [0, 0.5], values: [5, 7] }]
+    expect(splitMotionSeries(groups, 10)).toEqual({
+      times: [10, 10.5],
+      left: [5, 7],
+      right: [5, 7]
+    })
+  })
+
+  it('clamps to the shorter group when the two are uneven', () => {
+    const groups = [
+      { times: [0, 0.5, 1.0], values: [1, 2, 3] },
+      { times: [0, 0.5], values: [10, 20] }
+    ]
+    expect(splitMotionSeries(groups, 0)).toEqual({
+      times: [0, 0.5],
+      left: [1, 2],
+      right: [10, 20]
+    })
+  })
+
+  it('no groups → empty timeline', () => {
+    expect(splitMotionSeries([], 0)).toEqual({ times: [], left: [], right: [] })
   })
 })
 
@@ -276,16 +317,18 @@ describe('detectReframe', () => {
 
   it('runs the motion pass and returns a MotionTimeline when motionRois are supplied', async () => {
     const stdout = Buffer.alloc(FRAME_BYTES) // one frame
+    // Real ffmpeg INTERLEAVES the two sinks per frame (left N then right N), each
+    // line prefixed with its `[Parsed_metadata_N @ 0x…]` instance. First-seen
+    // instance (4) = left sink, second (5) = right sink.
     const motionStderr = [
-      'frame:0 pts_time:0',
-      'lavfi.signalstats.YAVG=2.0',
-      'frame:1 pts_time:0.5',
-      'lavfi.signalstats.YAVG=4.0',
-      // right sink series follows:
-      'frame:0 pts_time:0',
-      'lavfi.signalstats.YAVG=20.0',
-      'frame:1 pts_time:0.5',
-      'lavfi.signalstats.YAVG=40.0'
+      '[Parsed_metadata_4 @ 0x1] frame:0 pts_time:0',
+      '[Parsed_metadata_4 @ 0x1] lavfi.signalstats.YAVG=2.0',
+      '[Parsed_metadata_5 @ 0x2] frame:0 pts_time:0',
+      '[Parsed_metadata_5 @ 0x2] lavfi.signalstats.YAVG=20.0',
+      '[Parsed_metadata_4 @ 0x1] frame:1 pts_time:0.5',
+      '[Parsed_metadata_4 @ 0x1] lavfi.signalstats.YAVG=4.0',
+      '[Parsed_metadata_5 @ 0x2] frame:1 pts_time:0.5',
+      '[Parsed_metadata_5 @ 0x2] lavfi.signalstats.YAVG=40.0'
     ].join('\n')
     const run = vi
       .fn<ReframeRunner>()

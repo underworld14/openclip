@@ -12,7 +12,9 @@
  *   - whisper-cli→ `whisper-cli -h`      (emits its usage/help banner)
  *   - yt-dlp     → `yt-dlp --version`    (URL/YouTube import, F.4)
  * Also confirms the bundled libass font (`fonts/DejaVuSans.ttf`) is present so
- * the caption burn filtergraph (`subtitles=…:fontsdir=…`) resolves a font.
+ * the caption burn filtergraph (`subtitles=…:fontsdir=…`) resolves a font, AND
+ * that a font LICENSE file (`fonts/OFL.txt` / `LICENSE*`) ships beside it so the
+ * fonts' redistribution terms travel with the bundle (openclip-hk7).
  *
  * AND the auto-reframe ONNX assets (Part J): asserts
  * `Contents/Resources/onnx/face_detection_yunet_2023mar.onnx` +
@@ -34,7 +36,15 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, statSync, openSync, readSync, closeSync, readFileSync } from 'node:fs'
+import {
+  existsSync,
+  statSync,
+  openSync,
+  readSync,
+  closeSync,
+  readFileSync,
+  readdirSync
+} from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -180,6 +190,20 @@ log(`bundled ffmpeg OK: libass 'subtitles' filter + h264_videotoolbox present`)
 const font = join(resourcesDir, 'fonts', 'DejaVuSans.ttf')
 if (!existsSync(font)) fail(`bundled caption font missing: ${font}`)
 log(`bundled caption font OK: ${font}`)
+
+// 4b) the bundled fonts MUST ship their license (OFL.txt / LICENSE*) so the
+// redistribution terms travel with the binaries (supply-chain guardrail —
+// openclip-hk7). The shipped faces are OFL (Anton/Archivo/Bebas/Noto/Poppins);
+// electron-builder must include the OFL.txt / LICENSE next to the .ttf files.
+const fontsResDir = join(resourcesDir, 'fonts')
+const fontLicenseNames = readdirSync(fontsResDir).filter((n) => /^OFL\.txt$|^LICENSE/i.test(n))
+if (fontLicenseNames.length === 0) {
+  fail(
+    `no font license file (OFL.txt / LICENSE*) shipped under ${fontsResDir} — ` +
+      `bundled fonts must carry their license. Check electron-builder.yml fonts extraResources filter.`
+  )
+}
+log(`bundled font license OK: ${fontsResDir}/${fontLicenseNames.join(', ')}`)
 
 // 5) auto-reframe ONNX assets (Part J): the YuNet model + the onnxruntime-web
 // WASM the detector loads via `ort.env.wasm.wasmPaths`. Both ship under

@@ -53,8 +53,13 @@ extraResources:
       - '**/*'
   - from: build/fonts
     to: fonts
+    # Ship the fonts AND their license (OFL.txt / LICENSE*) so the redistribution
+    # terms travel with the .ttf files (supply-chain guardrail — openclip-hk7).
+    # verify-package.mjs asserts a license file is present under Resources/fonts.
     filter:
       - '**/*.ttf'
+      - '**/OFL.txt'
+      - '**/LICENSE*'
   # Auto-reframe (Part J): the YuNet model + the onnxruntime-web WASM/loader that
   # scripts/bundle-binaries.mjs stages into build/onnx. Resolved in prod by
   # src/main/utils/paths.ts → reframeOnnxDir() as <Resources>/onnx (and used as

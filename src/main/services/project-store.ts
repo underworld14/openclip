@@ -21,7 +21,8 @@
  * IPC boundary) can branch on `.code` instead of string-matching messages.
  */
 
-import { readFile, writeFile, mkdir, readdir, rm, stat } from 'node:fs/promises'
+import { readFile, writeFile, mkdir, readdir, rm, stat, rename } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { Project } from '@shared/schema'
 import type { Project as ProjectType } from '@shared/schema'
@@ -98,10 +99,20 @@ export async function saveProject(
     ? { ...project, updatedAt: Date.now() }
     : project
   const path = projectFilePath(dir, toPersist.id)
+  // Atomic write: serialize to a sibling temp file, then `rename` it over the
+  // destination. `rename` is atomic on the same filesystem, so a crash or error
+  // mid-write can never leave a half-written `.ocproj` (the prior good file
+  // survives untouched). The temp lives in the SAME dir to guarantee same-FS. A
+  // random suffix keeps concurrent saves of the same project (autosave + a manual
+  // save, or a pagehide flush) from colliding on one temp path.
+  const tmp = `${path}.${randomUUID()}.tmp`
   try {
     await mkdir(dir, { recursive: true })
-    await writeFile(path, JSON.stringify(toPersist, null, 2), 'utf8')
+    await writeFile(tmp, JSON.stringify(toPersist, null, 2), 'utf8')
+    await rename(tmp, path)
   } catch (cause) {
+    // Best-effort cleanup of the orphaned temp file; swallow its own errors.
+    await rm(tmp, { force: true }).catch(() => {})
     throw new ProjectStoreError('IO', `failed to write project ${toPersist.id}`, cause)
   }
   return { path, project: toPersist }

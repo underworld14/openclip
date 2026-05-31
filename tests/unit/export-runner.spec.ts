@@ -139,6 +139,36 @@ describe('export-runner — caption-burn composition', () => {
   })
 })
 
+describe('export-runner — per-job temp cleanup (audit fix openclip-2j3)', () => {
+  it('removes the per-job temp dir after a successful export (done)', async () => {
+    const exportClip = vi.fn().mockResolvedValue(EXPORT_RESULT)
+    const removeJobTemp = vi.fn()
+    const runner = createExportRunner({ exportClip, fontsDir: () => '/fonts', removeJobTemp })
+    await runner(BASE, fakeEmitter(), fakeCtx())
+    // Cleanup runs with (projectId, jobId) — and removes ONLY that job dir.
+    expect(removeJobTemp).toHaveBeenCalledTimes(1)
+    expect(removeJobTemp).toHaveBeenCalledWith('proj-1', 'export-job-1')
+  })
+
+  it('removes the per-job temp dir EVEN WHEN the export throws (finally)', async () => {
+    const exportClip = vi.fn().mockRejectedValue(new Error('ffmpeg exploded'))
+    const removeJobTemp = vi.fn()
+    const runner = createExportRunner({ exportClip, fontsDir: () => '/fonts', removeJobTemp })
+    await expect(runner(BASE, fakeEmitter(), fakeCtx())).rejects.toThrow(/ffmpeg exploded/)
+    // The finally still reclaimed the scratch dir.
+    expect(removeJobTemp).toHaveBeenCalledTimes(1)
+    expect(removeJobTemp).toHaveBeenCalledWith('proj-1', 'export-job-1')
+  })
+
+  it('removes the per-job temp dir on cancellation (export rejects with an abort)', async () => {
+    const exportClip = vi.fn().mockRejectedValue(new Error('export cancelled'))
+    const removeJobTemp = vi.fn()
+    const runner = createExportRunner({ exportClip, fontsDir: () => '/fonts', removeJobTemp })
+    await expect(runner(BASE, fakeEmitter(), fakeCtx())).rejects.toThrow(/cancelled/)
+    expect(removeJobTemp).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('export-runner — silence jump-cuts (Part I.4)', () => {
   it('detects silences → keepRanges threaded into captions + exportClip when removeSilence set', async () => {
     const exportClip = vi.fn().mockResolvedValue(EXPORT_RESULT)

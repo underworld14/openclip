@@ -139,4 +139,40 @@ describe('createUrlDownloadRunner: wiring + failure', () => {
       /Video unavailable/
     )
   })
+
+  // Audit fix openclip-2j3: the per-job download scratch dir must be reclaimed on
+  // error/cancel (a failed import otherwise leaks downloads/<jobId>/), but NOT on
+  // success (the file lives there until the import pipeline adopts it out).
+  it('removes the download scratch dir on error/cancel (and rethrows)', async () => {
+    let removed: string | null = null
+    const runner = createUrlDownloadRunner({
+      resolveOutDir: (jobId) => `/tmp/oc/downloads/${jobId}`,
+      removeOutDir: (dir) => {
+        removed = dir
+      },
+      downloadUrl: async () => {
+        throw new Error('url download cancelled')
+      }
+    })
+    const { emit } = fakeEmit()
+    const ctx = { jobId: 'JOB9', signal: new AbortController().signal, trackPid: () => {} }
+    await expect(runner({ url: 'https://youtu.be/x' }, emit, ctx)).rejects.toThrow(/cancelled/)
+    expect(removed).toBe('/tmp/oc/downloads/JOB9')
+  })
+
+  it('does NOT remove the scratch dir on success (file awaits adoption)', async () => {
+    let removeCalls = 0
+    const runner = createUrlDownloadRunner({
+      resolveOutDir: (jobId) => `/tmp/oc/downloads/${jobId}`,
+      removeOutDir: () => {
+        removeCalls += 1
+      },
+      downloadUrl: async (o) => ({ filePath: `${o.outDir}/v.mp4`, bytes: 5 })
+    })
+    const { emit } = fakeEmit()
+    const ctx = { jobId: 'JOB10', signal: new AbortController().signal, trackPid: () => {} }
+    const res = await runner({ url: 'https://youtu.be/x' }, emit, ctx)
+    expect(res.filePath).toBe('/tmp/oc/downloads/JOB10/v.mp4')
+    expect(removeCalls).toBe(0)
+  })
 })

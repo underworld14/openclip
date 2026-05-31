@@ -107,6 +107,17 @@ describe('registerProjectHandlers wires the project channels', () => {
     expect({ ...loaded, updatedAt: projectFixture.updatedAt }).toEqual(projectFixture)
   })
 
+  it('LOAD_PROJECT grants the source path to the media allow-list (openclip-8tx)', async () => {
+    const { ctx, invoke } = makeFakeContext()
+    registerProjectHandlers(ctx)
+    await invoke(IPCChannels.SAVE_PROJECT, { project: projectFixture })
+
+    await invoke(IPCChannels.LOAD_PROJECT, { id: projectFixture.id })
+
+    // Without this grant the loaded project's source would 403 in the preview.
+    expect(ctx.mediaAccess.grant).toHaveBeenCalledWith(projectFixture.sourceVideo.path)
+  })
+
   it('LIST returns saved-project metadata (the LIST_PROJECTS res shape)', async () => {
     const { ctx, invoke } = makeFakeContext()
     registerProjectHandlers(ctx)

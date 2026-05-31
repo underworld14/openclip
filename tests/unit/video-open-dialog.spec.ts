@@ -26,6 +26,7 @@ vi.mock('@main/services/jobs/url-download-runner', () => ({ urlDownloadRunner: v
 vi.mock('@main/utils/ffprobe', () => ({ probeVideo: vi.fn() }))
 
 import { registerVideoHandlers } from '@main/ipc/video'
+import { probeVideo } from '@main/utils/ffprobe'
 import type { IpcContext } from '@main/ipc/index'
 
 type Handler = (event: unknown, req: unknown) => Promise<unknown>
@@ -36,7 +37,8 @@ function makeCtx(): { ctx: IpcContext; handlers: Map<string, Handler> } {
     ipcMain: { handle: (channel: string, h: Handler) => handlers.set(channel, h) },
     getMainWindow: () => null,
     sidecar: {} as never,
-    keyVault: {} as never
+    keyVault: {} as never,
+    mediaAccess: { grant: vi.fn(), isAllowed: vi.fn() }
   } as unknown as IpcContext
   return { ctx, handlers }
 }
@@ -64,6 +66,25 @@ describe('SHOW_OPEN_DIALOG handler (F.3 native file picker)', () => {
     expect(opts.filters).toEqual([
       { name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'webm', 'm4v', 'avi'] }
     ])
+  })
+
+  it('IMPORT_VIDEO grants the probed source path to the media allow-list (openclip-8tx)', async () => {
+    const sourceVideo = {
+      path: '/Users/me/Movies/source.mp4',
+      duration: 5,
+      resolution: { width: 1920, height: 1080 },
+      fps: 30,
+      format: 'mp4'
+    }
+    vi.mocked(probeVideo).mockResolvedValue(sourceVideo)
+    const { ctx, handlers } = makeCtx()
+    registerVideoHandlers(ctx)
+
+    const h = handlers.get(IPCChannels.IMPORT_VIDEO)!
+    const res = (await h({}, { filePath: sourceVideo.path })) as { sourceVideo: { path: string } }
+
+    // The imported source must be granted, else the preview <video> 403s.
+    expect(ctx.mediaAccess.grant).toHaveBeenCalledWith(res.sourceVideo.path)
   })
 
   it('maps a canceled dialog to { canceled:true, filePaths:[] }', async () => {

@@ -163,15 +163,6 @@ export async function downloadModel(opts: DownloadModelOptions): Promise<Downloa
 
   await new Promise<void>((resolve, reject) => {
     const out = createWriteStream(dest)
-    const onAbort = (): void => {
-      out.destroy()
-      reject(new Error('model download cancelled'))
-    }
-    if (opts.signal) {
-      if (opts.signal.aborted) return onAbort()
-      opts.signal.addEventListener('abort', onAbort, { once: true })
-    }
-
     const reader = (res.body as ReadableStream<Uint8Array>).getReader()
     const sink = new Writable({
       write(chunk: Buffer, _enc, cb) {
@@ -181,6 +172,23 @@ export async function downloadModel(opts: DownloadModelOptions): Promise<Downloa
         out.write(chunk, cb)
       }
     })
+    // Tear the body stream down deterministically on abort/error (audit fix
+    // openclip-0wn): the fetch reader holds a lock + an in-flight read() that the fetch
+    // signal alone doesn't settle, and the manual sink is otherwise never destroyed —
+    // for a multi-GB cancelled download that pins the reader/socket until GC.
+    const teardown = (): void => {
+      out.destroy()
+      reader.cancel().catch(() => {})
+      sink.destroy()
+    }
+    const onAbort = (): void => {
+      teardown()
+      reject(new Error('model download cancelled'))
+    }
+    if (opts.signal) {
+      if (opts.signal.aborted) return onAbort()
+      opts.signal.addEventListener('abort', onAbort, { once: true })
+    }
 
     const pump = async (): Promise<void> => {
       for (;;) {
@@ -204,7 +212,7 @@ export async function downloadModel(opts: DownloadModelOptions): Promise<Downloa
       })
       .catch((err: unknown) => {
         opts.signal?.removeEventListener('abort', onAbort)
-        out.destroy()
+        teardown()
         reject(err instanceof Error ? err : new Error(String(err)))
       })
   }).catch((err) => {

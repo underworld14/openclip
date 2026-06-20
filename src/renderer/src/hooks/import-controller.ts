@@ -170,7 +170,8 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     name: string,
     base: number,
     span: number,
-    appOwned: boolean
+    appOwned: boolean,
+    taskId: string
   ): Promise<void> {
     const projectId = genId()
     // For an app-owned (URL/YouTube) download, ADOPT the file into the persistent
@@ -195,7 +196,7 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
       onProgress: (p, s) => {
         const scaled = base + Math.round((p / 100) * span)
         set({ pct: scaled, stage: s })
-        deps.ui?.upsertTask?.({ jobId: 'import', progress: scaled, status: 'running' })
+        deps.ui?.upsertTask?.({ jobId: taskId, progress: scaled, status: 'running' })
       },
       onPartial: (partial) => deps.store.appendTranscriptPartial(partial),
       onTranscript: (t: JobResult['transcribe']) => deps.store.hydrateTranscript(t)
@@ -224,19 +225,23 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
 
   async function importFile(path: string): Promise<void> {
     if (!path) return
+    // Per-import task key (audit fix openclip-ce3): a hardcoded 'import' key meant two
+    // concurrent imports would share one tasks entry and the first to finish would
+    // clearTask the other's progress. genId() makes each import's task key unique.
+    const taskId = genId()
     set({ busy: true, error: null, pct: 0 })
     try {
       if (!(await ensureModel())) {
         set({ busy: false })
         return
       }
-      await runPipeline(path, basename(path), 0, 100, false) // file import: user's original, not app-owned
+      await runPipeline(path, basename(path), 0, 100, false, taskId) // file import: user's original, not app-owned
       set({ stage: 'done' })
     } catch (e) {
       set({ error: asMessage(e) })
     } finally {
       set({ busy: false })
-      deps.ui?.clearTask?.('import')
+      deps.ui?.clearTask?.(taskId)
     }
   }
 
@@ -250,6 +255,7 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
       set({ needsConsent: true, error: null })
       return
     }
+    const taskId = genId() // per-import task key (audit fix openclip-ce3)
     set({ busy: true, error: null, pct: 0, stage: 'downloading' })
     try {
       if (!(await ensureModel())) {
@@ -261,13 +267,13 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
         url: u,
         onProgress: (p) => set({ pct: Math.round(p * 0.2), stage: 'downloading' }) // 0..20% band
       })
-      await runPipeline(dl.filePath, dl.title ?? 'Imported video', 20, 80, true) // URL import: app-owned download
+      await runPipeline(dl.filePath, dl.title ?? 'Imported video', 20, 80, true, taskId) // URL import: app-owned download
       set({ stage: 'done' })
     } catch (e) {
       set({ error: asMessage(e) })
     } finally {
       set({ busy: false })
-      deps.ui?.clearTask?.('import')
+      deps.ui?.clearTask?.(taskId)
     }
   }
 

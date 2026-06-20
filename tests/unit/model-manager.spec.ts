@@ -8,7 +8,7 @@
  *   - a SHA mismatch rejects and removes the partial file (no corrupt model).
  */
 
-import { describe, expect, it, beforeEach, afterEach } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
@@ -138,6 +138,38 @@ describe('model-manager: downloadModel (injected network)', () => {
       })
     ).rejects.toThrow(/mismatch/i)
     expect(existsSync(dest)).toBe(false)
+  })
+
+  it('cancels the body reader and tears down on abort (audit fix openclip-0wn)', async () => {
+    const ac = new AbortController()
+    const cancel = vi.fn(async () => {})
+    let reads = 0
+    // First read yields a chunk; the second never resolves, so the pump sits waiting
+    // until the abort fires — at which point the reader MUST be cancelled.
+    const reader = {
+      read: (): Promise<{ done: boolean; value?: Uint8Array }> =>
+        new Promise((res) => {
+          reads += 1
+          if (reads === 1) res({ done: false, value: new Uint8Array([1, 2, 3]) })
+          // reads >= 2: intentionally never resolves
+        }),
+      cancel,
+      releaseLock: () => {}
+    }
+    const fetchImpl = (async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      body: { getReader: () => reader }
+    })) as unknown as typeof fetch
+
+    const dest = join(dir, 'ggml-base.bin')
+    const p = downloadModel({ model: 'base', destPath: dest, fetchImpl, signal: ac.signal })
+    await new Promise((r) => setTimeout(r, 15)) // let the pump consume the first chunk
+    ac.abort()
+    await expect(p).rejects.toThrow(/cancel/i)
+    expect(cancel).toHaveBeenCalled() // reader torn down, not left pinned until GC
+    expect(existsSync(dest)).toBe(false) // partial cleaned up
   })
 
   it('rejects when the HTTP status is not ok (e.g. ggml-org 401)', async () => {

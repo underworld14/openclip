@@ -79,7 +79,9 @@ describe('Anthropic adapter', () => {
     const arg = parse.mock.calls[0][0] as Record<string, unknown>
     expect(arg.model).toBe('claude-sonnet-4-5')
     expect(arg.system).toBe('SYS')
-    expect(typeof arg.max_tokens).toBe('number')
+    // Default output budget bumped to 8192 so a full clip set isn't truncated into a
+    // wasted repair round-trip (audit fix openclip-czj).
+    expect(arg.max_tokens).toBe(8192)
     // output_config.format is the zodOutputFormat object (truthy, opaque)
     const oc = arg.output_config as { format: unknown }
     expect(oc.format).toBeTruthy()

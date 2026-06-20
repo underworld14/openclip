@@ -152,9 +152,14 @@ export async function downloadModel(opts: DownloadModelOptions): Promise<Downloa
     throw new Error(`model download failed: HTTP ${res.status} for ${url}`)
   }
 
-  const totalBytes = Number(
-    res.headers.get('x-linked-size') ?? res.headers.get('content-length') ?? 0
-  )
+  // Total size for the progress bar. Prefer HF's authoritative `x-linked-size`; a
+  // non-finite/absent value resolves to 0 = INDETERMINATE (audit fix openclip-flg):
+  // for xet/LFS-backed multi-GB models served via a redirect/CDN, both headers can be
+  // missing. We pass the REAL total (0 when unknown) to onProgress below instead of
+  // faking it as `received`, so the runner shows a byte counter rather than a
+  // misleading near-100% bar from the first chunk.
+  const sizeHeader = Number(res.headers.get('x-linked-size') ?? res.headers.get('content-length'))
+  const totalBytes = Number.isFinite(sizeHeader) && sizeHeader > 0 ? sizeHeader : 0
   const etagSha = parseEtag(res.headers.get('x-linked-etag'))
   const expected = opts.expectedSha256 ?? etagSha ?? KNOWN_SHA256[opts.model]
 
@@ -168,7 +173,7 @@ export async function downloadModel(opts: DownloadModelOptions): Promise<Downloa
       write(chunk: Buffer, _enc, cb) {
         hash.update(chunk)
         received += chunk.length
-        opts.onProgress?.(received, totalBytes || received)
+        opts.onProgress?.(received, totalBytes)
         out.write(chunk, cb)
       }
     })

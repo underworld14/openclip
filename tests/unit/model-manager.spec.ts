@@ -97,6 +97,34 @@ describe('model-manager: downloadModel (injected network)', () => {
     expect(sha256File(dest)).toBe(etag)
   })
 
+  it('reports an INDETERMINATE total (0) when no size header is present (openclip-flg)', async () => {
+    // xet/LFS-backed model served via a redirect: no x-linked-size AND no
+    // content-length. The total must stay 0 (indeterminate), NOT be faked to
+    // `received` (which made the runner show a stuck near-100% bar from chunk 1).
+    const bytes = Buffer.from('xet-lfs-model-bytes')
+    const etag = sha256(bytes)
+    const dest = join(dir, 'ggml-base.bin')
+    const totals: number[] = []
+    const fetchImpl = (async () => ({
+      ok: true,
+      status: 200,
+      headers: {
+        get: (k: string): string | null =>
+          k.toLowerCase() === 'x-linked-etag' ? `"${etag}"` : null
+      },
+      body: Readable.toWeb(Readable.from([bytes]))
+    })) as unknown as typeof fetch
+
+    await downloadModel({
+      model: 'base',
+      destPath: dest,
+      fetchImpl,
+      onProgress: (_received, total) => totals.push(total)
+    })
+    expect(totals.length).toBeGreaterThan(0)
+    expect(totals.every((t) => t === 0)).toBe(true)
+  })
+
   it('rejects + removes the partial file on a SHA mismatch (no corrupt model)', async () => {
     const bytes = Buffer.from('corrupt-ish payload')
     const dest = join(dir, 'ggml-tiny.bin')

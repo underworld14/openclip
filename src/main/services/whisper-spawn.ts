@@ -181,6 +181,12 @@ export function runWhisper(opts: RunWhisperOptions): Promise<ParsedTranscript> {
 
     let stderr = ''
     let stdoutBuf = ''
+    // Progress line buffer (audit fix openclip-2p4): the `-pp` progress arrives as
+    // `whisper_print_progress_callback: progress = N%` lines on stderr, and a chunk
+    // boundary can split one mid-line so parseWhisperProgress misses it. Carry the
+    // trailing partial across chunks and parse only complete lines (mirrors the
+    // stdout word buffer below). Raw `stderr` accumulation is unchanged.
+    let progressResidual = ''
 
     const onAbort = (): void => {
       child.kill('SIGKILL')
@@ -194,8 +200,14 @@ export function runWhisper(opts: RunWhisperOptions): Promise<ParsedTranscript> {
       const text = buf.toString()
       stderr += text
       if (opts.onProgress) {
-        const pct = parseWhisperProgress(text)
-        if (pct !== undefined) opts.onProgress(pct)
+        progressResidual += text
+        let nl: number
+        while ((nl = progressResidual.indexOf('\n')) !== -1) {
+          const line = progressResidual.slice(0, nl)
+          progressResidual = progressResidual.slice(nl + 1)
+          const pct = parseWhisperProgress(line)
+          if (pct !== undefined) opts.onProgress(pct)
+        }
       }
     })
 

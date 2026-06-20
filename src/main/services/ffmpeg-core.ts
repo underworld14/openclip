@@ -121,6 +121,14 @@ export function runFfmpeg(opts: RunFfmpegOptions): Promise<RunFfmpegResult> {
       stdio: ['ignore', 'ignore', 'pipe']
     })
     let stderr = ''
+    // Progress line buffer (audit fix openclip-2p4): FFmpeg's `-progress` writes
+    // `key=value\n` lines, but a stderr chunk boundary can split one mid-token
+    // (e.g. `out_time_us=12` then `34567\n`). parseFfmpegProgress only honours
+    // fully-seen `key=value` pairs, so a split line was silently dropped and that
+    // progress sample lost. Carry the trailing partial line across chunks and parse
+    // only up to the last newline. (Raw `stderr` accumulation below is unchanged so
+    // the error tail still has everything.)
+    let progressResidual = ''
 
     const onAbort = (): void => {
       child.kill('SIGKILL')
@@ -134,7 +142,12 @@ export function runFfmpeg(opts: RunFfmpegOptions): Promise<RunFfmpegResult> {
       const text = buf.toString()
       stderr += text
       if (opts.onProgress) {
-        const snap = parseFfmpegProgress(text)
+        progressResidual += text
+        const lastNl = progressResidual.lastIndexOf('\n')
+        if (lastNl < 0) return // no complete line yet — wait for more
+        const complete = progressResidual.slice(0, lastNl + 1)
+        progressResidual = progressResidual.slice(lastNl + 1)
+        const snap = parseFfmpegProgress(complete)
         const pct = progressPct(snap, opts.totalDurationSec ?? 0)
         if (pct !== undefined || snap.frame !== undefined || snap.done) {
           opts.onProgress(pct, snap)

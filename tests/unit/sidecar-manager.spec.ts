@@ -127,6 +127,31 @@ describe('SidecarManager: a QUEUED job is settled synchronously on cancel/killAl
   })
 })
 
+describe('SidecarManager: settle() never leaks a job when the port throws (audit fix openclip-asx)', () => {
+  it('removes the job from active even when port.postMessage throws (renderer torn down)', async () => {
+    const mgr = new SidecarManager({ coreCount: 10 })
+    // A port whose postMessage ALWAYS throws — as if the peer MessagePort was torn
+    // down. Without the fix, settle()'s postMessage throws BEFORE active.delete, so the
+    // job (and its PIDs) leak in `active` forever.
+    const throwingPort: EventPort = {
+      postMessage: () => {
+        throw new Error('port closed')
+      },
+      close: () => {},
+      on: () => {},
+      start: () => {}
+    }
+    const jobId = mgr.startJob(
+      'transcribe',
+      { projectId: 'p1', wavPath: '/a.wav', model: 'base' },
+      throwingPort
+    )
+    // Let the scripted runner run; every emit throws → the error path reaches settle().
+    await new Promise((r) => setTimeout(r, 20))
+    expect(mgr.activeJobIds()).not.toContain(jobId)
+  })
+})
+
 describe('SidecarManager lifecycle hooks (audit fix openclip-032)', () => {
   it('wires before-quit/will-quit but NOT child-process-gone to killAll', () => {
     const mgr = new SidecarManager({ coreCount: 10 })

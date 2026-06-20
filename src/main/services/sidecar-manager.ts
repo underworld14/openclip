@@ -259,9 +259,22 @@ export class SidecarManager {
     ): void => {
       if (job.settled) return
       job.settled = true
-      port.postMessage(terminal)
-      port.close?.()
+      // Remove from `active` FIRST and guard the port calls (audit fix openclip-asx):
+      // if `port.postMessage`/`close` throws (e.g. the renderer was torn down so the
+      // MessagePort is dead), the job — and its tracked PIDs — would otherwise leak in
+      // `active` forever because the delete below never ran. The terminal event is moot
+      // once the peer is gone, so a throw is swallowed; the job is always reclaimed.
       this.active.delete(jobId)
+      try {
+        port.postMessage(terminal)
+      } catch {
+        /* peer port already gone — terminal is moot, don't leak the job */
+      }
+      try {
+        port.close?.()
+      } catch {
+        /* peer port already gone */
+      }
     }
     // Settle a job that is cancelled while still QUEUED (not yet admitted by the
     // limiter), so cancel()/killAll() deliver the terminal CANCELLED deterministically

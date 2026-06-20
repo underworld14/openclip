@@ -56,6 +56,7 @@ export interface ExportRunnerDeps {
     logoMargin?: JobParams['export']['logoMargin']
     onProgress?: (pct: number) => void
     onSpawn?: (pid: number) => void
+    onExit?: (pid: number) => void
     signal?: AbortSignal
   }) => Promise<ExportClipResult>
   /** Resolve the libass fontsdir (injected for tests). */
@@ -240,8 +241,10 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
         logoMargin: params.logoMargin,
         onProgress: (pct) => emit.progress(pct, 'encoding'),
         // Register the encode child's PID for the sidecar kill-on-quit backstop
-        // (audit fix openclip-a00 — export previously tracked no PID).
+        // (audit fix openclip-a00 — export previously tracked no PID), and untrack it on
+        // exit so a later quit can't SIGKILL a recycled PID (audit fix openclip-yul).
         onSpawn: (pid) => ctx.trackPid(pid),
+        onExit: (pid) => ctx.untrackPid?.(pid),
         signal: ctx.signal
       })
 

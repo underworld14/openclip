@@ -152,6 +152,41 @@ describe('SidecarManager: settle() never leaks a job when the port throws (audit
   })
 })
 
+describe('SidecarManager: untrackPid prevents SIGKILLing a recycled PID (audit fix openclip-yul)', () => {
+  it('a PID untracked on normal child exit is NOT SIGTERM/SIGKILLed on a later cancel', async () => {
+    const killPid = vi.fn()
+    const mgr = new SidecarManager({ coreCount: 10, killPid, killGraceMs: 5 })
+    // A runner whose child spawns (trackPid) then EXITS normally (untrackPid) while the
+    // job keeps running (e.g. a follow-up step). The exited PID must not be killed later.
+    registerRunner('url-download', async (_p, emit, ctx) => {
+      ctx.trackPid(919191)
+      ctx.untrackPid?.(919191) // child exited normally
+      emit.progress(50, 'downloading')
+      await new Promise<void>((_resolve, reject) => {
+        ctx.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+      })
+      return { filePath: '/x', title: 't', bytes: 1 }
+    })
+
+    const { port1, port2 } = new MessageChannel()
+    const eventPort: EventPort = {
+      postMessage: (v) => port2.postMessage(v),
+      close: () => port2.close(),
+      on: (e, l) => port2.on(e, l),
+      start: () => port2.start()
+    }
+    const collected = collectPort(port1 as never)
+    const jobId = mgr.startJob('url-download', { url: 'https://x.test/v' }, eventPort)
+    await new Promise((r) => setTimeout(r, 10)) // let the runner track+untrack the PID
+    mgr.cancel(jobId)
+    await collected.done
+    await new Promise((r) => setTimeout(r, 15)) // past the grace period
+
+    expect(killPid).not.toHaveBeenCalledWith(919191, 'SIGTERM')
+    expect(killPid).not.toHaveBeenCalledWith(919191, 'SIGKILL')
+  })
+})
+
 describe('SidecarManager lifecycle hooks (audit fix openclip-032)', () => {
   it('wires before-quit/will-quit but NOT child-process-gone to killAll', () => {
     const mgr = new SidecarManager({ coreCount: 10 })

@@ -84,6 +84,7 @@ export function createUrlDownloadRunner(
         outDir,
         signal: ctx.signal,
         onPid: (pid) => ctx.trackPid(pid),
+        onExit: (pid) => ctx.untrackPid?.(pid),
         onProgress: ({ downloadedBytes, totalBytes, pct }) => {
           emit.partial({ downloadedBytes, totalBytes, pct })
           emit.progress(Math.min(100, Math.max(0, pct)), 'downloading')

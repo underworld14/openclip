@@ -107,6 +107,12 @@ export interface RunFfmpegOptions {
    * on quit, in addition to the AbortSignal cancel path. No-op if the spawn yields no pid.
    */
   onSpawn?: (pid: number) => void
+  /**
+   * Invoked with the child's PID when it EXITS (audit fix openclip-yul) so a runner can
+   * `ctx.untrackPid(pid)` — preventing a later quit/cancel from SIGKILLing a PID the OS
+   * may have recycled to an unrelated process. Paired with `onSpawn`.
+   */
+  onExit?: (pid: number) => void
 }
 
 export interface RunFfmpegResult {
@@ -170,6 +176,9 @@ export function runFfmpeg(opts: RunFfmpegOptions): Promise<RunFfmpegResult> {
 
     child.on('close', (code) => {
       opts.signal?.removeEventListener('abort', onAbort)
+      // Untrack the exited child's PID so a later quit/cancel can't SIGKILL a recycled
+      // foreign PID (audit fix openclip-yul).
+      if (typeof child.pid === 'number') opts.onExit?.(child.pid)
       if (opts.signal?.aborted) {
         reject(new Error('ffmpeg aborted'))
         return

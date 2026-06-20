@@ -113,6 +113,7 @@ export function createTranscribeRunner(deps: TranscribeRunnerDeps = {}): JobRunn
         language: params.language,
         signal: ctx.signal,
         onSpawn: (pid) => ctx.trackPid(pid),
+        onExit: (pid) => ctx.untrackPid?.(pid),
         onProgress: (pct) => emit.progress(pct, 'transcribing'),
         onWord: (word) => {
           const segments = closeSentenceIfDone(word)

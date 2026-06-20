@@ -146,6 +146,8 @@ export interface RunWhisperOptions extends WhisperArgsOptions {
   binPath?: string
   /** Register the spawned PID with the sidecar for kill-on-quit. */
   onSpawn?: (pid: number) => void
+  /** Untrack the PID when the child exits (audit fix openclip-yul). */
+  onExit?: (pid: number) => void
 }
 
 /** Resolve a safe cwd for whisper (resources dir if it exists, else cwd). */
@@ -233,6 +235,9 @@ export function runWhisper(opts: RunWhisperOptions): Promise<ParsedTranscript> {
 
     child.on('close', (code) => {
       opts.signal?.removeEventListener('abort', onAbort)
+      // Untrack the exited PID so a later quit/cancel can't SIGKILL a recycled foreign
+      // PID (audit fix openclip-yul).
+      if (typeof child.pid === 'number') opts.onExit?.(child.pid)
       if (opts.signal?.aborted) {
         reject(new Error('whisper aborted'))
         return

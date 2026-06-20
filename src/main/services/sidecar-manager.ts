@@ -52,6 +52,14 @@ export interface JobRunnerContext {
   readonly signal: AbortSignal
   /** Runners call this for each native child they spawn so it's killed on quit. */
   trackPid(pid: number): void
+  /**
+   * Runners call this when a tracked child EXITS normally, so its PID is removed from
+   * the kill set (audit fix openclip-yul). Otherwise an exited PID lingers and a later
+   * cancel/quit SIGKILLs it — but the OS may have RECYCLED it to an unrelated process,
+   * killing an innocent bystander. Safe no-op for an untracked pid. Optional so the
+   * many test-constructed contexts need not supply it; production always does.
+   */
+  untrackPid?(pid: number): void
   /** The id of this job (for temp-dir scoping, logs). */
   readonly jobId: string
 }
@@ -282,7 +290,12 @@ export class SidecarManager {
     // is idempotent (the `settled` guard), so the queued task's later admission — which
     // hits the aborted check and returns — is a harmless no-op.
     job.cancelQueued = (): void =>
-      settle({ t: 'error', code: 'CANCELLED', message: 'job cancelled before start', retriable: false })
+      settle({
+        t: 'error',
+        code: 'CANCELLED',
+        message: 'job cancelled before start',
+        retriable: false
+      })
 
     const emit: JobEmitter<K> = {
       progress: (pct, stage, etaMs) => {
@@ -310,6 +323,7 @@ export class SidecarManager {
     const ctx: JobRunnerContext = {
       signal: controller.signal,
       trackPid: (pid: number) => job.pids.add(pid),
+      untrackPid: (pid: number) => job.pids.delete(pid),
       jobId
     }
 

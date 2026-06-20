@@ -142,7 +142,7 @@ describe('SidecarManager.startJob drives a scripted runner to done over a real p
     expect(last.code).toBe('INPUT_INVALID')
   })
 
-  it('cancel() escalates SIGTERM to tracked PIDs', async () => {
+  it('cancel() escalates SIGTERM then SIGKILL after the grace period (audit fix openclip-ai5)', async () => {
     const killPid = vi.fn()
     const mgr = new SidecarManager({ coreCount: 10, killPid, killGraceMs: 5 })
 
@@ -175,6 +175,12 @@ describe('SidecarManager.startJob drives a scripted runner to done over a real p
     const last = collected.events.at(-1) as { t: string; code?: string }
     expect(last.t).toBe('error')
     expect(last.code).toBe('CANCELLED')
+
+    // Prove the SIGTERM→SIGKILL escalation TIMER actually fires the SIGKILL after the
+    // grace period (audit fix openclip-ai5 — previously only the SIGTERM was asserted,
+    // so a broken/zero grace timer would have gone unnoticed). killGraceMs is 5ms here.
+    await new Promise((r) => setTimeout(r, 15))
+    expect(killPid).toHaveBeenCalledWith(424242, 'SIGKILL')
   })
 
   it('forced port-close (renderer crash/nav) is an implicit cancel that terminates the job', async () => {

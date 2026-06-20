@@ -30,6 +30,7 @@ export function Timeline(): React.JSX.Element {
   const clips = useProjectStore((s) => s.clips)
   const selectedClipId = useProjectStore((s) => s.selectedClipId)
   const playhead = useProjectStore((s) => s.playhead)
+  const setPlayhead = useProjectStore((s) => s.setPlayhead)
   const isPlaying = useProjectStore((s) => s.isPlaying)
   const setPlaying = useProjectStore((s) => s.setPlaying)
   const dragClipHandle = useProjectStore((s) => s.dragClipHandle)
@@ -77,6 +78,18 @@ export function Timeline(): React.JSX.Element {
       e.currentTarget.releasePointerCapture(e.pointerId)
     }
   }, [])
+
+  // Click/drag the track BODY to seek the playhead (openclip-3p3): map pointer X → time
+  // and clamp into the clip span (the preview plays that span; its paused playhead→video
+  // sync moves the frame). The trim handles stopPropagation, so dragging them never seeks.
+  const onTrackPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>): void => {
+      if (!bounds) return
+      const t = Math.min(Math.max(eventTime(e.clientX), bounds.start), bounds.end)
+      setPlayhead(t)
+    },
+    [bounds, eventTime, setPlayhead]
+  )
 
   // MVP keyboard set (PRD §6.6 / §11.3): I mark-in, O mark-out, Space play/pause.
   const onKeyDown = useCallback(
@@ -140,7 +153,8 @@ export function Timeline(): React.JSX.Element {
       <div
         ref={trackRef}
         data-testid="timeline-track"
-        className="relative h-10 w-full select-none rounded bg-muted"
+        onPointerDown={onTrackPointerDown}
+        className="relative h-10 w-full cursor-pointer select-none rounded bg-muted"
       >
         {/* The selected clip region. */}
         <div

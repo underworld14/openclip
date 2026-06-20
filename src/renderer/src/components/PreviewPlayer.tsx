@@ -117,6 +117,16 @@ export function PreviewPlayer(): React.JSX.Element {
     else v.pause()
   }, [isPlaying, src, setPlaying])
 
+  // Seek the video when the playhead is moved EXTERNALLY (the seek bar below, or a
+  // timeline click) while PAUSED (openclip-3p3). During playback the video drives the
+  // playhead via handleTimeUpdate, so we only sync when paused — otherwise this would
+  // fight playback. The 50ms deadband avoids a feedback loop with handleTimeUpdate.
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v || isPlaying) return
+    if (Math.abs(v.currentTime - playhead) > 0.05) v.currentTime = playhead
+  }, [playhead, isPlaying])
+
   const handleTimeUpdate = useCallback((): void => {
     const v = videoRef.current
     if (!v) return
@@ -239,6 +249,27 @@ export function PreviewPlayer(): React.JSX.Element {
         <span data-testid="preview-time" className="tabular-nums">
           {formatTime(playhead)}
         </span>
+        {/* Scrub bar (openclip-3p3): drag to seek within the clip span. onChange sets the
+            video frame directly AND the store playhead (which the timeline mirrors). */}
+        {bounds && (
+          <input
+            type="range"
+            data-testid="preview-seek"
+            aria-label="Seek"
+            min={bounds.start}
+            max={bounds.end}
+            step={0.05}
+            value={Math.min(Math.max(playhead, bounds.start), bounds.end)}
+            disabled={!src}
+            onChange={(e) => {
+              const t = Number(e.target.value)
+              const v = videoRef.current
+              if (v) v.currentTime = t
+              setPlayhead(t)
+            }}
+            className="h-1 flex-1 cursor-pointer accent-primary"
+          />
+        )}
         {bounds && (
           <span data-testid="preview-span" className="tabular-nums">
             clip {formatTime(bounds.start)} – {formatTime(bounds.end)} (

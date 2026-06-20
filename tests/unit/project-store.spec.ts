@@ -284,6 +284,50 @@ describe('createAutosave (debounced)', () => {
     expect(save).not.toHaveBeenCalled()
   })
 
+  it('serializes overlapping saves — a new save waits for the in-flight one (openclip-9lf)', async () => {
+    const order: string[] = []
+    let releaseV1 = (): void => {}
+    const save = vi.fn((p: { name: string }): Promise<void> => {
+      order.push(`start:${p.name}`)
+      if (p.name === 'v1') {
+        return new Promise<void>((resolve) => {
+          releaseV1 = (): void => {
+            order.push('end:v1')
+            resolve()
+          }
+        })
+      }
+      order.push('end:v2')
+      return Promise.resolve()
+    })
+    const autosave = createAutosave(save as never, 100)
+
+    autosave({ name: 'v1' } as never)
+    await vi.advanceTimersByTimeAsync(100) // fire → save(v1) starts, stays in-flight
+    expect(order).toEqual(['start:v1'])
+
+    autosave({ name: 'v2' } as never)
+    await vi.advanceTimersByTimeAsync(100) // fire → save(v2) must NOT start until v1 ends
+    expect(order).toEqual(['start:v1']) // not interleaved against the in-flight write
+
+    releaseV1()
+    await vi.advanceTimersByTimeAsync(0) // let the chain drain
+    expect(order).toEqual(['start:v1', 'end:v1', 'start:v2', 'end:v2'])
+  })
+
+  it('a rejected save does not throw out of the debounced call nor wedge later saves (openclip-9lf)', async () => {
+    const save = vi.fn().mockRejectedValueOnce(new Error('disk full')).mockResolvedValue(undefined)
+    const autosave = createAutosave(save, 100)
+
+    autosave(projectFixture)
+    await vi.advanceTimersByTimeAsync(100) // first save REJECTS — swallowed, no unhandled rejection
+    expect(save).toHaveBeenCalledTimes(1)
+
+    autosave(projectFixture)
+    await vi.advanceTimersByTimeAsync(100) // a later save still runs (chain not wedged)
+    expect(save).toHaveBeenCalledTimes(2)
+  })
+
   it('cancel() drops a pending save', async () => {
     const save = vi.fn().mockResolvedValue(undefined)
     const autosave = createAutosave(save, 500)

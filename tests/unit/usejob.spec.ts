@@ -135,3 +135,31 @@ describe('acquireJobPort: bounded wait (audit fix openclip-ki6/me0/jp1)', () => 
     await expect(p).resolves.toBe(fakePort)
   })
 })
+
+describe('jobEvents detaches its message listener on teardown (audit fix openclip-2g3/vet)', () => {
+  it('removeEventListener is called with the same handler it added, then the port closes', async () => {
+    let captured: ((ev: { data: unknown }) => void) | null = null
+    const removeEventListener = vi.fn()
+    const close = vi.fn()
+    const port = {
+      onmessage: null,
+      start: () => {},
+      close,
+      addEventListener: (_t: 'message', l: (ev: { data: unknown }) => void) => {
+        captured = l
+      },
+      removeEventListener
+    } as MessagePortLike
+
+    const gen = jobEvents<'transcribe'>(port)
+    const pump = (async () => {
+      for await (const _ev of gen) void _ev // drain to completion
+    })()
+    // Emit a terminal `done` so the generator returns and runs its finally.
+    captured!({ data: { t: 'done', result: transcribeResultFixture } })
+    await pump
+
+    expect(removeEventListener).toHaveBeenCalledWith('message', captured)
+    expect(close).toHaveBeenCalled()
+  })
+})

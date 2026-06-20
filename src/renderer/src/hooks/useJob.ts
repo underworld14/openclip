@@ -30,6 +30,7 @@ export interface MessagePortLike {
   start?: () => void
   close?: () => void
   addEventListener?: (type: 'message', listener: (ev: { data: unknown }) => void) => void
+  removeEventListener?: (type: 'message', listener: (ev: { data: unknown }) => void) => void
 }
 
 /** A control message the host may send before/around job events. */
@@ -95,6 +96,12 @@ export async function* jobEvents<K extends JobKind>(
       }
     }
   } finally {
+    // Detach the listener SYMMETRICALLY (audit fix openclip-2g3/vet): the generator
+    // previously relied solely on port.close() to make the listener collectable, but
+    // an add without a matching remove is a latent leak if a long-lived/shared port is
+    // ever passed (today each job gets a fresh port). Remove, then close.
+    if (port.removeEventListener) port.removeEventListener('message', handler)
+    else port.onmessage = null
     port.close?.()
   }
 }

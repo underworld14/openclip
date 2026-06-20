@@ -441,21 +441,33 @@ export async function detectReframe(opts: DetectReframeOptions): Promise<DetectR
   // leaked a fresh WASM session. An INJECTED detector is owned by the caller.
   const ownDetector = !opts.detector
   try {
-    // Pass 1 — sample raw frames and detect faces.
+    // Pass 1 — sample raw frames and detect faces (stream-consumed, audit fix
+    // openclip-l41). An INJECTED run (tests) returns a buffered stdout → feed it as a
+    // single chunk through the SAME frame-slicer; production streams frames off ffmpeg
+    // stdout so memory stays ~1 frame instead of holding the whole decoded clip.
     const sampleArgv = frameSampleArgs(opts.sourcePath, opts.startTime, dur, sampleFps, modelSize)
-    const { stdout } = await run({ args: sampleArgv, binPath: opts.binPath, signal: opts.signal })
     const frameBytes = modelSize * modelSize * 3
-    const buf = stdout ?? Buffer.alloc(0)
-    const frameCount = Math.floor(buf.length / frameBytes)
-    const samples: SampleFrame[] = []
-    for (let i = 0; i < frameCount; i++) {
-      if (opts.signal?.aborted) throw new Error('reframe detection aborted')
-      const frame = buf.subarray(i * frameBytes, (i + 1) * frameBytes)
-      const faces = await detector(frame, modelSize, modelSize)
-      samples.push({
-        timeMs: (opts.startTime + i / sampleFps) * 1000,
-        faces
+    const detectOpts = {
+      frameBytes,
+      modelSize,
+      detector,
+      startTime: opts.startTime,
+      sampleFps,
+      signal: opts.signal
+    }
+    let samples: SampleFrame[]
+    if (opts.run) {
+      const { stdout } = await opts.run({
+        args: sampleArgv,
+        binPath: opts.binPath,
+        signal: opts.signal
       })
+      samples = await detectFromFrameChunks(stdout ? [stdout] : [], detectOpts)
+    } else {
+      samples = await detectFromFrameChunks(
+        streamFfmpegStdout({ args: sampleArgv, binPath: opts.binPath, signal: opts.signal }),
+        detectOpts
+      )
     }
 
     if (!opts.motionRois) return { samples }
@@ -569,6 +581,91 @@ async function defaultRunFfmpegCaptureStdout(opts: {
       else reject(new Error(`ffmpeg exited with code ${code}\n${stderr.slice(-2000)}`))
     })
   })
+}
+
+/**
+ * Slice a stream of raw-video byte chunks into fixed `frameBytes` frames, run the YuNet
+ * `detector` on each, and return one `SampleFrame` per frame (audit fix openclip-l41).
+ * Holds only a rolling carry buffer (≤ one partial frame) + the current chunk, so memory
+ * is ~1 frame regardless of clip length — instead of buffering the WHOLE decoded stream
+ * (~221 MB for a 90s clip) before the first inference. The carry remainder is COPIED out
+ * (`Buffer.from`) so consumed chunks are freed, not kept alive by a subarray view. Pure
+ * (no spawn) so it is unit-tested with canned chunks, including frames that straddle a
+ * chunk boundary (the streaming case).
+ */
+export async function detectFromFrameChunks(
+  chunks: AsyncIterable<Buffer> | Iterable<Buffer>,
+  opts: {
+    frameBytes: number
+    modelSize: number
+    detector: FrameDetector
+    startTime: number
+    sampleFps: number
+    signal?: AbortSignal
+  }
+): Promise<SampleFrame[]> {
+  const samples: SampleFrame[] = []
+  let frameIndex = 0
+  let carry: Buffer = Buffer.alloc(0)
+  for await (const chunk of chunks as AsyncIterable<Buffer>) {
+    if (opts.signal?.aborted) throw new Error('reframe detection aborted')
+    carry = carry.length === 0 ? chunk : Buffer.concat([carry, chunk])
+    let offset = 0
+    while (carry.length - offset >= opts.frameBytes) {
+      const frame = carry.subarray(offset, offset + opts.frameBytes)
+      const faces = await opts.detector(frame, opts.modelSize, opts.modelSize)
+      samples.push({ timeMs: (opts.startTime + frameIndex / opts.sampleFps) * 1000, faces })
+      frameIndex += 1
+      offset += opts.frameBytes
+    }
+    // Keep only the partial-frame remainder, COPIED so the big chunk can be GC'd.
+    carry = offset > 0 ? Buffer.from(carry.subarray(offset)) : carry
+  }
+  return samples
+}
+
+/**
+ * Spawn ffmpeg and yield its stdout (the raw-frame pipe) as chunks ARRIVE, instead of
+ * accumulating the whole stream (audit fix openclip-l41). Paired with
+ * `detectFromFrameChunks` so decode overlaps inference and memory stays ~1 frame. stderr
+ * is captured for the error tail; rejects on a non-zero exit / spawn error / abort. The
+ * unit spec injects `run` (the buffered path), so this streaming spawn is exercised only
+ * by the @serial reframe smoke.
+ */
+async function* streamFfmpegStdout(opts: {
+  args: string[]
+  binPath?: string
+  signal?: AbortSignal
+}): AsyncGenerator<Buffer> {
+  const bin = opts.binPath ?? ffmpegPath()
+  const child = spawn(bin, opts.args, { stdio: ['ignore', 'pipe', 'pipe'] })
+  let stderr = ''
+  child.stderr?.on('data', (b: Buffer) => {
+    stderr += b.toString()
+  })
+  const onAbort = (): void => {
+    child.kill('SIGKILL')
+  }
+  if (opts.signal) {
+    if (opts.signal.aborted) onAbort()
+    else opts.signal.addEventListener('abort', onAbort, { once: true })
+  }
+  const exit = new Promise<number | null>((resolve, reject) => {
+    child.on('error', reject)
+    child.on('close', (code) => resolve(code))
+  })
+  try {
+    if (child.stdout) {
+      for await (const chunk of child.stdout as AsyncIterable<Buffer>) {
+        yield chunk
+      }
+    }
+    const code = await exit
+    if (opts.signal?.aborted) throw new Error('ffmpeg aborted')
+    if (code !== 0) throw new Error(`ffmpeg exited with code ${code}\n${stderr.slice(-2000)}`)
+  } finally {
+    opts.signal?.removeEventListener('abort', onAbort)
+  }
 }
 
 /**

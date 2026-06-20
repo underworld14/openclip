@@ -16,6 +16,7 @@ import {
   splitMotionSeries,
   trimMotionRois,
   detectReframe,
+  detectFromFrameChunks,
   planReframe,
   type YuNetOutputs,
   type ReframeRunner
@@ -325,6 +326,62 @@ describe('splitMotionSeries', () => {
 // ---------------------------------------------------------------------------
 // detectReframe (orchestrator, injected run + detector)
 // ---------------------------------------------------------------------------
+
+describe('detectFromFrameChunks — streaming frame slicer (openclip-l41)', () => {
+  const FB = 48 // 4*4*3
+
+  it('slices frames that STRADDLE chunk boundaries and detects each exactly once', async () => {
+    const whole = Buffer.alloc(FB * 2)
+    // Uneven chunks (30 / 50 / 16) so neither frame aligns to a chunk edge.
+    const chunks = [whole.subarray(0, 30), whole.subarray(30, 80), whole.subarray(80, 96)]
+    let calls = 0
+    const detector = vi.fn((): FaceBox[] => {
+      calls += 1
+      return [{ x: calls, y: 0, w: 1, h: 1, confidence: 1 }]
+    })
+    const samples = await detectFromFrameChunks(chunks, {
+      frameBytes: FB,
+      modelSize: 4,
+      detector,
+      startTime: 10,
+      sampleFps: 2
+    })
+    expect(detector).toHaveBeenCalledTimes(2)
+    expect(samples).toEqual([
+      { timeMs: 10000, faces: [{ x: 1, y: 0, w: 1, h: 1, confidence: 1 }] },
+      { timeMs: 10500, faces: [{ x: 2, y: 0, w: 1, h: 1, confidence: 1 }] }
+    ])
+  })
+
+  it('ignores a trailing partial frame (incomplete final frame)', async () => {
+    const chunks = [Buffer.alloc(FB), Buffer.alloc(20)] // one full frame + 20 stray bytes
+    const detector = vi.fn((): FaceBox[] => [])
+    const samples = await detectFromFrameChunks(chunks, {
+      frameBytes: FB,
+      modelSize: 4,
+      detector,
+      startTime: 0,
+      sampleFps: 1
+    })
+    expect(detector).toHaveBeenCalledTimes(1)
+    expect(samples).toHaveLength(1)
+  })
+
+  it('aborts when the signal is already set', async () => {
+    const ctrl = new AbortController()
+    ctrl.abort()
+    await expect(
+      detectFromFrameChunks([Buffer.alloc(FB)], {
+        frameBytes: FB,
+        modelSize: 4,
+        detector: vi.fn((): FaceBox[] => []),
+        startTime: 0,
+        sampleFps: 1,
+        signal: ctrl.signal
+      })
+    ).rejects.toThrow(/aborted/)
+  })
+})
 
 describe('detectReframe', () => {
   const SIZE = 4 // tiny model size → 4*4*3 = 48 bytes per frame

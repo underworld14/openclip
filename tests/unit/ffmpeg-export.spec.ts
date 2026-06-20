@@ -561,6 +561,12 @@ describe('codecArgs: pix_fmt + quality-aware CPU CRF (audit fixes openclip-ucs/i
   })
 })
 
+describe('option-injection guard on path args (audit fix openclip-6l6)', () => {
+  it('exportClipArgs refuses an outputPath that begins with a dash', () => {
+    expect(() => exportClipArgs({ ...base, outputPath: '-y' })).toThrow(/outputPath/)
+  })
+})
+
 describe('escapeFilterPath: full filtergraph special-char set (audit fix openclip-5ir/uas)', () => {
   it('backslash-escapes : , ; [ ] and the quote so a bracketed/comma path cannot split the graph', () => {
     // A perfectly ordinary macOS path with brackets, a comma and a colon.

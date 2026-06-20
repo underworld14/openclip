@@ -33,6 +33,7 @@ import { rename, rm } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { dirname, basename, join } from 'node:path'
 import { runFfmpeg as defaultRunFfmpeg, type RunFfmpegOptions } from './ffmpeg-core'
+import { assertSafePathArg } from '@main/utils/safe-arg'
 import type { AspectRatio } from '@shared/schema'
 import { keptDuration, removesAnything, type Range } from '@shared/keep-ranges'
 import type { ReframePlan } from '@shared/reframe-plan'
@@ -212,7 +213,10 @@ export function outputTailArgs(outputPath: string): string[] {
     '-progress',
     'pipe:2',
     '-nostats',
-    outputPath
+    // Guard the trailing positional output path against option injection (audit fix
+    // openclip-6l6): an outputPath beginning with '-' (e.g. '-y') would be parsed by
+    // ffmpeg as a flag instead of a filename.
+    assertSafePathArg(outputPath, 'outputPath')
   ]
 }
 
@@ -693,6 +697,14 @@ export interface ExportClipResult {
  */
 export async function exportClip(opts: ExportClipOptions): Promise<ExportClipResult> {
   const runFfmpeg = opts.runFfmpeg ?? defaultRunFfmpeg
+  // Guard the user-/project-supplied path args at the spawn boundary against option
+  // injection (audit fix openclip-6l6): JOB_START('export', params) is callable
+  // directly by the renderer with an attacker-chosen outputPath, and sourcePath comes
+  // verbatim from the project. A leading '-' on either would be parsed by ffmpeg as a
+  // flag. (outputTailArgs only sees the derived temp path, so the real outputPath must
+  // be checked here.)
+  assertSafePathArg(opts.sourcePath, 'sourcePath')
+  assertSafePathArg(opts.outputPath, 'outputPath')
   // Atomic output (audit fix openclip-8dg): encode to a HIDDEN sibling temp in the
   // SAME directory as the user's chosen outputPath, then `rename` it onto the target
   // only after a clean exit. On cancel/SIGKILL or a non-zero exit the partial (which,

@@ -13,6 +13,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { SourceVideo } from '@shared/schema'
 import { ffprobePath } from '@main/utils/paths'
+import { assertSafePathArg } from '@main/utils/safe-arg'
 
 const execFileAsync = promisify(execFile)
 
@@ -101,10 +102,13 @@ function finiteDuration(json: FfprobeJson): number {
 /** Probe a video file and return its `SourceVideo` metadata (PRD §6.1). */
 export async function probeVideo(filePath: string, binPath?: string): Promise<SourceVideo> {
   const bin = binPath ?? ffprobePath()
+  // Guard the trailing positional path against option injection (audit fix
+  // openclip-6l6): a filePath beginning with '-' would be parsed by ffprobe as a flag.
+  const safePath = assertSafePathArg(filePath, 'filePath')
   const { stdout } = await execFileAsync(
     bin,
-    ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', filePath],
+    ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', safePath],
     { maxBuffer: 16 * 1024 * 1024 }
   )
-  return parseFfprobeJson(JSON.parse(stdout) as FfprobeJson, filePath)
+  return parseFfprobeJson(JSON.parse(stdout) as FfprobeJson, safePath)
 }

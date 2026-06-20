@@ -32,6 +32,7 @@ import { existsSync } from 'node:fs'
 import type { WordTimestamp } from '@shared/schema'
 import { parseWhisperJson, type ParsedTranscript, type WhisperJson } from './whisper-parse'
 import { whisperCliPath, whisperResourcesDir } from '@main/utils/paths'
+import { assertSafePathArg } from '@main/utils/safe-arg'
 
 // ============================================================================
 // Argument construction (the Gate-A exact invocation)
@@ -54,11 +55,16 @@ export interface WhisperArgsOptions {
  * when a fixed language is requested (otherwise whisper auto-detects).
  */
 export function whisperArgs(opts: WhisperArgsOptions): string[] {
+  // Guard the path args against option injection (audit fix openclip-6l6): a model/
+  // wav/out path beginning with '-' would be parsed by whisper-cli as a flag.
+  const model = assertSafePathArg(opts.model, 'model')
+  const wavPath = assertSafePathArg(opts.wavPath, 'wavPath')
+  const outBase = assertSafePathArg(opts.outBase, 'outBase')
   const args = [
     '-m',
-    opts.model,
+    model,
     '-f',
-    opts.wavPath,
+    wavPath,
     '-ml',
     '1',
     '--split-on-word',
@@ -67,7 +73,7 @@ export function whisperArgs(opts: WhisperArgsOptions): string[] {
     '-pp'
   ]
   if (opts.language) args.push('-l', opts.language)
-  args.push('-of', opts.outBase)
+  args.push('-of', outBase)
   return args
 }
 

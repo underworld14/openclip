@@ -28,6 +28,7 @@ import { statSync, existsSync, renameSync, rmSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { ffmpegPath, ytDlpPath } from '@main/utils/paths'
+import { JobError } from '@shared/jobs'
 
 // ============================================================================
 // Pure progress parsing (unit-tested; no I/O)
@@ -152,16 +153,19 @@ export function parseTitle(stdout: string): string | undefined {
  * (argv injection). Returns the trimmed URL; throws on rejection.
  */
 export function assertSafeUrl(raw: string): string {
+  // An invalid/unsupported URL is a PERMANENT failure — retrying can't fix it — so it
+  // surfaces as a non-retriable INPUT_INVALID, not a retriable SIDECAR_CRASH (audit fix
+  // openclip-1ly).
   const url = (raw ?? '').trim()
-  if (!url || url.startsWith('-')) throw new Error('invalid download URL')
+  if (!url || url.startsWith('-')) throw new JobError('INPUT_INVALID', 'invalid download URL', false)
   let parsed: URL
   try {
     parsed = new URL(url)
   } catch {
-    throw new Error('invalid download URL')
+    throw new JobError('INPUT_INVALID', 'invalid download URL', false)
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`unsupported URL protocol: ${parsed.protocol}`)
+    throw new JobError('INPUT_INVALID', `unsupported URL protocol: ${parsed.protocol}`, false)
   }
   return url
 }

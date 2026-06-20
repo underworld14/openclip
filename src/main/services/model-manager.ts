@@ -23,6 +23,7 @@ import { createWriteStream, existsSync, readFileSync, rmSync, statSync } from 'n
 import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { Writable } from 'node:stream'
+import { JobError } from '@shared/jobs'
 import type { WhisperModelSize } from '@shared/jobs'
 import type { ModelStatus } from '@shared/channels'
 import { modelFilePath, modelsDir } from '@main/utils/paths'
@@ -235,8 +236,13 @@ export async function downloadModel(opts: DownloadModelOptions): Promise<Downloa
   const actual = hash.digest('hex')
   if (!expected) {
     cleanup()
-    throw new Error(
-      `model ${opts.model}: unable to verify integrity — no expected SHA256, no x-linked-etag, and not in KNOWN_SHA256. Refusing to keep an unverified download.`
+    // PERMANENT: no expected hash will ever materialize for this model, so retrying is
+    // futile — surface as a non-retriable INPUT_INVALID, not a retriable SIDECAR_CRASH
+    // (audit fix openclip-1ly).
+    throw new JobError(
+      'INPUT_INVALID',
+      `model ${opts.model}: unable to verify integrity — no expected SHA256, no x-linked-etag, and not in KNOWN_SHA256. Refusing to keep an unverified download.`,
+      false
     )
   }
   if (actual !== expected) {

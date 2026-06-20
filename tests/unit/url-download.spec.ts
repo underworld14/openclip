@@ -24,6 +24,7 @@ import {
   downloadUrl,
   type YtDlpSubprocess
 } from '@main/services/url-download'
+import { JobError } from '@shared/jobs'
 
 // ── parseProgress (pure) ──────────────────────────────────────────────────────
 
@@ -338,6 +339,23 @@ describe('assertSafeUrl: main-process URL validation (G.2 security)', () => {
     expect(() => assertSafeUrl('ftp://x/y')).toThrow(/protocol/i)
     expect(() => assertSafeUrl('not a url')).toThrow(/invalid/i)
     expect(() => assertSafeUrl('')).toThrow(/invalid/i)
+  })
+
+  it('rejects with a non-retriable INPUT_INVALID JobError (audit fix openclip-1ly)', () => {
+    // An invalid/unsupported URL is PERMANENT — the sidecar must surface it as a
+    // non-retriable INPUT_INVALID, not a retriable SIDECAR_CRASH telling the user to
+    // retry a doomed operation.
+    for (const bad of ['', '-o/x', 'not a url', 'ftp://x/y']) {
+      let thrown: unknown
+      try {
+        assertSafeUrl(bad)
+      } catch (e) {
+        thrown = e
+      }
+      expect(thrown).toBeInstanceOf(JobError)
+      expect((thrown as JobError).code).toBe('INPUT_INVALID')
+      expect((thrown as JobError).retriable).toBe(false)
+    }
   })
 })
 

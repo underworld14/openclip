@@ -28,6 +28,7 @@
  */
 
 import { cpus } from 'node:os'
+import { JobError } from '@shared/jobs'
 import type { JobKind, JobParams, JobResult, JobPartial, JobErrorCode } from '@shared/jobs'
 
 // ============================================================================
@@ -346,6 +347,14 @@ export class SidecarManager {
       .catch((err: unknown) => {
         if (controller.signal.aborted) {
           emit.error('CANCELLED', 'job cancelled', false)
+          return
+        }
+        // A runner can CLASSIFY a failure by throwing a JobError (e.g. a permanent,
+        // non-retriable INPUT_INVALID for an invalid URL or an unverifiable model);
+        // otherwise an unexpected throw is a retriable SIDECAR_CRASH (audit fix
+        // openclip-1ly).
+        if (err instanceof JobError) {
+          emit.error(err.code, err.message, err.retriable)
           return
         }
         const message = err instanceof Error ? err.message : String(err)

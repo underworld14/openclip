@@ -419,6 +419,21 @@ describe('buildReframePlan: single-speaker STATIC vs PAN (deadzone)', () => {
     }
   })
 
+  it('PAN when a real sweep exceeds the deadzone even though EMA-smoothing would hide it (openclip-eli)', () => {
+    // Raw centers sweep 900→950 = 50px, well above the 28.8px deadzone — a genuine pan.
+    // The old code decided from the EMA-smoothed path (alpha 0.2, seeded at the first
+    // sample), which lags so heavily the smoothed range (~17px) fell UNDER the deadzone
+    // and wrongly rendered it static. The static/pan decision must come from raw travel.
+    const samples = [
+      sampleAt(0, [900]),
+      sampleAt(200, [916]),
+      sampleAt(400, [933]),
+      sampleAt(600, [950])
+    ]
+    const plan = buildReframePlan({ samples, source: SRC, aspect: NINE_SIXTEEN, mode: 'auto' })
+    expect(plan?.mode).toBe('pan')
+  })
+
   it('PAN when the face sweeps across the frame; xExpr lerps + clamps', () => {
     const samples = [
       sampleAt(0, [300]),

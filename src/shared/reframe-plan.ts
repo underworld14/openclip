@@ -656,33 +656,40 @@ export function buildReframePlan(args: BuildReframePlanArgs): ReframePlan | null
 
   // --- (3) Single-speaker handling -----------------------------------------
   const path = samples.map((s) => ({ t: s.timeMs / 1000, x: weightedCenterX(s.faces) }))
-  const smoothed = emaSmooth(
-    path.map((p) => p.x),
-    EMA_ALPHA
-  )
+  const rawXs = path.map((p) => p.x)
+  // The static/pan decision AND the static resting position come from the RAW weighted
+  // centers, NOT the EMA-smoothed path (audit fix openclip-eli). A 0.2 EMA seeded at
+  // xs[0] lags heavily: it compresses the range (so a genuine sweep whose travel exceeds
+  // the deadzone can read as static) and pulls mean(smoothed) toward the early samples
+  // (an off-center resting crop when the clip opens off-center). The per-frame center-x
+  // σ-gate in filterFaceOutliers already removed jitter specks, so the raw range is a
+  // faithful measure of true travel. EMA stays ONLY for the pan keyframe path below,
+  // where temporal smoothing is the goal.
   // Single-pass min/max (NOT Math.min(...spread): spreading a long sample array
   // overflows the call stack at ~200k elements — bound the path regardless of fps).
-  let minC = smoothed[0]
-  let maxC = smoothed[0]
-  for (const c of smoothed) {
+  let minC = rawXs[0]
+  let maxC = rawXs[0]
+  for (const c of rawXs) {
     if (c < minC) minC = c
     if (c > maxC) maxC = c
   }
 
-  // Within the deadzone → a single STATIC crop centered on the mean center.
+  // Within the deadzone → a single STATIC crop centered on the mean RAW center.
   if (maxC - minC <= deadzonePx) {
-    const cropX = ri(clampCropX(mean(smoothed) - cropW / 2, source.width, cropW))
+    const cropX = ri(clampCropX(mean(rawXs) - cropW / 2, source.width, cropW))
     return { mode: 'static', cropW, cropH, cropX }
   }
 
-  // Otherwise PAN: smoothed center path → clamped crop-x keyframes → linear lerp.
+  // Otherwise PAN: EMA-smoothed center path → clamped crop-x keyframes → linear lerp.
+  const smoothed = emaSmooth(rawXs, EMA_ALPHA)
   const cropXPath = path.map((p, i) => ({
     t: p.t,
     x: clampCropX(smoothed[i] - cropW / 2, source.width, cropW)
   }))
   const keyframes = reduceKeyframes(cropXPath, deadzonePx)
-  // Static fallback (jump-cut path): center on the mean smoothed position.
-  const fallbackX = ri(clampCropX(mean(smoothed) - cropW / 2, source.width, cropW))
+  // Static fallback (jump-cut path): center on the mean RAW position (consistent with
+  // the static branch — not the EMA-lagged mean).
+  const fallbackX = ri(clampCropX(mean(rawXs) - cropW / 2, source.width, cropW))
   return {
     mode: 'pan',
     cropW,

@@ -101,6 +101,12 @@ export interface RunFfmpegOptions {
   signal?: AbortSignal
   /** Override the ffmpeg binary (defaults to resolved `ffmpegPath()`). */
   binPath?: string
+  /**
+   * Invoked with the spawned ffmpeg child's PID (audit fix openclip-a00) so a job
+   * runner can `ctx.trackPid(pid)` — giving the sidecar an OS-level SIGKILL backstop
+   * on quit, in addition to the AbortSignal cancel path. No-op if the spawn yields no pid.
+   */
+  onSpawn?: (pid: number) => void
 }
 
 export interface RunFfmpegResult {
@@ -120,6 +126,8 @@ export function runFfmpeg(opts: RunFfmpegOptions): Promise<RunFfmpegResult> {
     const child: ChildProcessByStdio<null, null, Readable> = spawn(bin, opts.args, {
       stdio: ['ignore', 'ignore', 'pipe']
     })
+    // Register the PID so the sidecar can SIGKILL it on quit (audit fix openclip-a00).
+    if (typeof child.pid === 'number') opts.onSpawn?.(child.pid)
     let stderr = ''
     // Progress line buffer (audit fix openclip-2p4): FFmpeg's `-progress` writes
     // `key=value\n` lines, but a stderr chunk boundary can split one mid-token

@@ -670,6 +670,8 @@ export interface ExportClipOptions extends ExportArgsOptions {
   signal?: AbortSignal
   /** Override the ffmpeg binary (tests / smoke). */
   binPath?: string
+  /** Register the encode child's PID for the sidecar kill-on-quit backstop (openclip-a00). */
+  onSpawn?: (pid: number) => void
   /** Inject the ffmpeg spawn driver (tests). Default: the real `runFfmpeg`. */
   runFfmpeg?: (opts: RunFfmpegOptions) => Promise<unknown>
 }
@@ -730,6 +732,7 @@ export async function exportClip(opts: ExportClipOptions): Promise<ExportClipRes
     totalDurationSec: durationSec,
     binPath: opts.binPath,
     signal: opts.signal,
+    onSpawn: opts.onSpawn,
     onProgress: (pct) => {
       if (pct !== undefined) opts.onProgress?.(pct)
     }

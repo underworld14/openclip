@@ -55,6 +55,7 @@ export interface ExportRunnerDeps {
     logoScale?: JobParams['export']['logoScale']
     logoMargin?: JobParams['export']['logoMargin']
     onProgress?: (pct: number) => void
+    onSpawn?: (pid: number) => void
     signal?: AbortSignal
   }) => Promise<ExportClipResult>
   /** Resolve the libass fontsdir (injected for tests). */
@@ -238,6 +239,9 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
         logoScale: params.logoScale,
         logoMargin: params.logoMargin,
         onProgress: (pct) => emit.progress(pct, 'encoding'),
+        // Register the encode child's PID for the sidecar kill-on-quit backstop
+        // (audit fix openclip-a00 — export previously tracked no PID).
+        onSpawn: (pid) => ctx.trackPid(pid),
         signal: ctx.signal
       })
 

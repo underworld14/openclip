@@ -679,6 +679,22 @@ const params: JobParams['export'] = {
 }
 
 describe('createExportRunner', () => {
+  it('registers the encode child PID via ctx.trackPid (audit fix openclip-a00)', async () => {
+    const tracked: number[] = []
+    const exportClip = vi.fn(async (o: { onSpawn?: (pid: number) => void }) => {
+      o.onSpawn?.(4242) // the real exportClip forwards ffmpeg's child.pid here
+      return { outputPath: '/out/clip.mp4', width: 1080, height: 1920, durationMs: 1000 }
+    })
+    const runner = createExportRunner({ exportClip })
+    const ctx: JobRunnerContext = {
+      signal: new AbortController().signal,
+      trackPid: (pid) => tracked.push(pid),
+      jobId: 'export-test-pid'
+    }
+    await runner(params, fakeEmitter().emit, ctx)
+    expect(tracked).toContain(4242) // kill-on-quit now has an OS-level backstop for export
+  })
+
   it('streams 0→100 progress and returns the export result', async () => {
     const exportClip = vi.fn(async (o: { onProgress?: (p: number) => void }) => {
       o.onProgress?.(50)

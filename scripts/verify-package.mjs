@@ -39,6 +39,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import {
   existsSync,
   statSync,
+  lstatSync,
   openSync,
   readSync,
   closeSync,
@@ -212,7 +213,9 @@ if (existsSync(asarUnpacked)) {
   const walk = (dir) => {
     for (const name of readdirSync(dir)) {
       const p = join(dir, name)
-      if (statSync(p).isDirectory()) walk(p)
+      // lstat (don't follow symlinks) so a directory-symlink loop can't infinite-recurse;
+      // a symlinked file is still byte-scanned (readFileSync follows the link).
+      if (lstatSync(p).isDirectory()) walk(p)
       else scanNonfree(`app.asar.unpacked/${name}`, p)
     }
   }

@@ -19,13 +19,16 @@
  *   • a fractional clamp avoids floating-point drift past the edges.
  */
 
+// Single canonical numeric clamp lives in @shared/reframe-plan (audit fix
+// openclip-szp): import it for this module's internal use AND re-export it so the
+// existing `import { clamp } from '@renderer/components/timeline-math'` consumers
+// (timelineSlice, Timeline) keep working — one definition, no local copy.
+import { clamp } from '@shared/reframe-plan'
+
+export { clamp }
+
 /** Which trim handle is being dragged. */
 export type TrimHandle = 'in' | 'out'
-
-/** Clamp `n` into the inclusive range `[lo, hi]`. */
-export function clamp(n: number, lo: number, hi: number): number {
-  return n < lo ? lo : n > hi ? hi : n
-}
 
 /**
  * Map a pixel X (relative to the track's left edge) to an absolute time in the

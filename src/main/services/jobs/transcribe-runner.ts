@@ -24,7 +24,7 @@ import type { TranscriptSegment, WordTimestamp } from '@shared/schema'
 import type { JobResult, JobParams, WhisperModelSize } from '@shared/jobs'
 import type { JobRunner, JobEmitter, JobRunnerContext } from '@main/services/sidecar-manager'
 import { runWhisper, type RunWhisperOptions } from '@main/services/whisper-spawn'
-import { groupSegments } from '@main/services/whisper-parse'
+import { groupSegments, endsSentence } from '@main/services/whisper-parse'
 import type { ParsedTranscript } from '@main/services/whisper-parse'
 import { modelFilePath } from '@main/utils/paths'
 import { isModelInstalled as defaultIsModelInstalled } from '@main/services/model-manager'
@@ -94,7 +94,7 @@ export function createTranscribeRunner(deps: TranscribeRunnerDeps = {}): JobRunn
     let liveSegSeq = 0
     const closeSentenceIfDone = (word: WordTimestamp): TranscriptSegment[] => {
       openSentence.push(word)
-      if (!isSentenceClosed(word.word)) return []
+      if (!endsSentence(word.word)) return []
       const [closed] = groupSegments(openSentence) // exactly one (it just closed)
       openSentence = []
       return closed ? [{ ...closed, id: `seg-live-${liveSegSeq++}` }] : []
@@ -131,11 +131,6 @@ export function createTranscribeRunner(deps: TranscribeRunnerDeps = {}): JobRunn
       removeOutput(outBase)
     }
   }
-}
-
-/** Whether a word's trimmed text ends a sentence (mirrors whisper-parse). */
-function isSentenceClosed(word: string): boolean {
-  return /[.!?…]["')\]]?$/.test(word.trim())
 }
 
 /**

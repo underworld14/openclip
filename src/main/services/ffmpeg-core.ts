@@ -171,6 +171,9 @@ export function runFfmpeg(opts: RunFfmpegOptions): Promise<RunFfmpegResult> {
 
     child.on('error', (err) => {
       opts.signal?.removeEventListener('abort', onAbort)
+      // Untrack on error too (defensive symmetry, review follow-up to openclip-yul);
+      // delete is idempotent if a 'close' also fires afterwards.
+      if (typeof child.pid === 'number') opts.onExit?.(child.pid)
       reject(err)
     })
 

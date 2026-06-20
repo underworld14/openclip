@@ -230,6 +230,8 @@ export function runWhisper(opts: RunWhisperOptions): Promise<ParsedTranscript> {
 
     child.on('error', (err) => {
       opts.signal?.removeEventListener('abort', onAbort)
+      // Untrack on error too (defensive symmetry, review follow-up to openclip-yul).
+      if (typeof child.pid === 'number') opts.onExit?.(child.pid)
       reject(err)
     })
 

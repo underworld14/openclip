@@ -71,9 +71,8 @@ export function acquireJobPort(jobId: string, timeoutMs = 30_000): Promise<Messa
     return Promise.resolve(existing)
   }
   return new Promise<MessagePortLike>((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined
     const wrappedResolve = (port: MessagePortLike): void => {
-      if (timer) clearTimeout(timer)
+      clearTimeout(timer)
       resolve(port)
     }
     // Bounded wait (audit fix openclip-ki6/me0/jp1): the per-job port is delivered on
@@ -83,7 +82,7 @@ export function acquireJobPort(jobId: string, timeoutMs = 30_000): Promise<Messa
     // `await acquireJobPort(jobId)` hangs FOREVER (stuck progress bar, busy:true, a
     // Promise.all that never settles) — violating the "never a silent hang" spirit.
     // Reject + clear the parked waiter so the consumer surfaces a typed error instead.
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       if (waiters.get(jobId) === wrappedResolve) waiters.delete(jobId)
       reject(
         new Error(

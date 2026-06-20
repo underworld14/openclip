@@ -123,7 +123,13 @@ describe('acquireJobPort: bounded wait (audit fix openclip-ki6/me0/jp1)', () => 
   })
 
   it('still resolves immediately when the port arrives before the timeout fires', async () => {
-    const fakePort = { postMessage() {}, close() {}, start() {}, addEventListener() {} }
+    const noop = (): void => undefined
+    const fakePort = {
+      postMessage: noop,
+      close: noop,
+      start: noop,
+      addEventListener: noop
+    }
     const p = acquireJobPort('port-arrives', 1000)
     registerJobPort('port-arrives', fakePort as unknown as MessagePortLike)
     await expect(p).resolves.toBe(fakePort)

@@ -8,6 +8,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { silenceDetectArgs, parseSilences, detectSilences } from '@main/services/silence-detect'
 
 describe('silenceDetectArgs', () => {
+  it('rejects a sourcePath that begins with a dash — option-injection guard (openclip-6l6)', () => {
+    expect(() => silenceDetectArgs('-af', 0, 5)).toThrow(/sourcePath/)
+  })
+
   it('seeks to the clip span and runs the silencedetect filter to a null sink', () => {
     const args = silenceDetectArgs('/src/in.mp4', 10, 20, { noiseDb: -28, minSilenceSec: 0.7 })
     expect(args).toEqual([

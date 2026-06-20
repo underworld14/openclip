@@ -26,6 +26,13 @@ import type { FaceBox, SampleFrame, MotionTimeline } from '@shared/reframe-plan'
 // ---------------------------------------------------------------------------
 
 describe('frameSampleArgs', () => {
+  it('frameSampleArgs/motionArgs reject a sourcePath beginning with a dash (openclip-6l6)', () => {
+    expect(() => frameSampleArgs('-i', 0, 1, 2, 640)).toThrow(/sourcePath/)
+    expect(() =>
+      motionArgs('-i', 0, 1, { x: 0, y: 0, w: 10, h: 10 }, { x: 0, y: 0, w: 10, h: 10 })
+    ).toThrow(/sourcePath/)
+  })
+
   it('seeks, limits duration, samples at fps and stretches to size x size RGB on stdout', () => {
     expect(frameSampleArgs('/src/in.mp4', 12, 8, 2, 640)).toEqual([
       '-hide_banner',

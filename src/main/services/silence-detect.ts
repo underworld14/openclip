@@ -13,6 +13,7 @@
  */
 
 import { runFfmpeg as defaultRunFfmpeg } from './ffmpeg-core'
+import { assertSafePathArg } from '@main/utils/safe-arg'
 import type { Range } from '@shared/keep-ranges'
 
 export interface SilenceDetectTuning {
@@ -37,7 +38,8 @@ export function silenceDetectArgs(
     '-ss',
     String(startTime),
     '-i',
-    sourcePath,
+    // Option-injection guard (audit fix openclip-6l6).
+    assertSafePathArg(sourcePath, 'sourcePath'),
     '-t',
     String(durationSec),
     '-af',

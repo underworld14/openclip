@@ -13,6 +13,10 @@ import { join } from 'node:path'
 import { audioExtractArgs, wavCacheKey, extractAudio } from '@main/services/ffmpeg-extract'
 
 describe('ffmpeg-extract: verified 16kHz mono WAV argv (PRD §6.1)', () => {
+  it('rejects a sourcePath that begins with a dash — option-injection guard (openclip-6l6)', () => {
+    expect(() => audioExtractArgs('-i', '/tmp/audio.wav')).toThrow(/sourcePath/)
+  })
+
   it('builds -vn -acodec pcm_s16le -ar 16000 -ac 1 -f wav with -progress on stderr', () => {
     const args = audioExtractArgs('/in/video.mp4', '/tmp/job/audio.16k.wav')
     expect(args).toEqual([

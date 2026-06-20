@@ -292,7 +292,9 @@ export function resolveLogo(
   const position = opts.logoPosition ?? DEFAULT_LOGO_POSITION
   const logoW = Math.max(1, Math.round(outW * scale))
   return {
-    input: ['-i', opts.logoPath],
+    // Option-injection guard (audit fix openclip-6l6): logoPath comes from the brand
+    // template on disk; a leading '-' would be parsed by ffmpeg as a flag.
+    input: ['-i', assertSafePathArg(opts.logoPath, 'logoPath')],
     scaleNode: `[${inputIndex}:v]scale=${logoW}:-1[logo]`,
     xy: overlayXY(position, margin)
   }

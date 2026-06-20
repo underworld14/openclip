@@ -19,6 +19,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { runFfmpeg as defaultRunFfmpeg, type RunFfmpegOptions } from './ffmpeg-core'
 import { cacheDirFor } from '@main/utils/paths'
+import { assertSafePathArg } from '@main/utils/safe-arg'
 
 // ============================================================================
 // Pure helpers
@@ -39,7 +40,9 @@ export function audioExtractArgs(sourcePath: string, wavPath: string): string[] 
     '-hide_banner',
     '-y',
     '-i',
-    sourcePath,
+    // Guard against option injection (audit fix openclip-6l6): a sourcePath beginning
+    // with '-' would be parsed by ffmpeg as a flag rather than the input filename.
+    assertSafePathArg(sourcePath, 'sourcePath'),
     '-vn',
     '-acodec',
     'pcm_s16le',

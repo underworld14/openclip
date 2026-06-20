@@ -28,6 +28,7 @@
 
 import { spawn } from 'node:child_process'
 import { ffmpegPath, reframeModelPath, reframeWasmDir } from '@main/utils/paths'
+import { assertSafePathArg } from '@main/utils/safe-arg'
 import type { FaceBox, SampleFrame, MotionTimeline, ReframePlan } from '@shared/reframe-plan'
 import {
   buildReframePlan,
@@ -68,7 +69,8 @@ export function frameSampleArgs(
     '-ss',
     String(startTime),
     '-i',
-    sourcePath,
+    // Option-injection guard (audit fix openclip-6l6).
+    assertSafePathArg(sourcePath, 'sourcePath'),
     '-t',
     String(durationSec),
     '-vf',
@@ -280,7 +282,8 @@ export function motionArgs(
     '-ss',
     String(start),
     '-i',
-    sourcePath,
+    // Option-injection guard (audit fix openclip-6l6).
+    assertSafePathArg(sourcePath, 'sourcePath'),
     '-t',
     String(dur),
     '-filter_complex',

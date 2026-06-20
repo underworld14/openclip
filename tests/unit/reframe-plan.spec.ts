@@ -121,6 +121,16 @@ describe('filterFaceOutliers', () => {
     expect(filterFaceOutliers([{ timeMs: 0, faces: [huge] }], SRC)).toEqual([])
   })
 
+  it('keeps a small-but-real face on a low-res source (dim floor is resolution-scaled, openclip-mnw)', () => {
+    // On a 320x180 source the old fixed 30px floor rejected a 28px face that is ~16%
+    // of width — a real, prominent subject. Normalized to source height the floor is
+    // tiny here, so the area band (0.5%–30%) does the real work and the face survives.
+    const small = { width: 320, height: 180 }
+    // 28x28 = 784 px² ; minArea = 320*180*0.005 = 288 → passes the area gate.
+    const face: FaceBox = { x: 146, y: 60, w: 28, h: 28, confidence: 0.9 }
+    expect(filterFaceOutliers([{ timeMs: 0, faces: [face] }], small)).toHaveLength(1)
+  })
+
   it('keeps a normal face and preserves timestamps', () => {
     const samples = [sampleAt(100, [960])]
     const out = filterFaceOutliers(samples, SRC)

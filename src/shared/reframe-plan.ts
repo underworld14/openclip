@@ -89,8 +89,14 @@ export interface BuildReframePlanArgs {
 // Tuning constants (adapted from supoclip's reframe heuristics)
 // ============================================================================
 
-/** Faces smaller than this (max of w/h, px) are detector noise → dropped. */
-const MIN_FACE_DIM = 30
+/**
+ * Detector-speck floor: a face whose larger dimension is below this FRACTION of the
+ * source HEIGHT is noise → dropped (audit fix openclip-mnw). Resolution-normalized so
+ * it means the same thing on a 4K source and a 320px imported clip — a fixed pixel
+ * count over-pruned real faces on small sources and was redundant on large ones (the
+ * area band already rejects specks there). ≈ the legacy 30px floor at 1080p height.
+ */
+const MIN_FACE_DIM_FRAC = 0.025
 /** Face area must be ≥ this fraction of the frame to count (drops specks). */
 const MIN_FACE_AREA_FRAC = 0.005
 /** Face area above this fraction of the frame is a false/foreground blob. */
@@ -221,12 +227,13 @@ export function filterFaceOutliers(
   const frameArea = source.width * source.height
   const minArea = frameArea * MIN_FACE_AREA_FRAC
   const maxArea = frameArea * MAX_FACE_AREA_FRAC
+  const minDim = source.height * MIN_FACE_DIM_FRAC // resolution-normalized (openclip-mnw)
 
   // Pass 1 — size gate.
   const sized: SampleFrame[] = []
   for (const s of samples) {
     const faces = s.faces.filter((f) => {
-      if (Math.max(f.w, f.h) < MIN_FACE_DIM) return false
+      if (Math.max(f.w, f.h) < minDim) return false
       const area = f.w * f.h
       return area >= minArea && area <= maxArea
     })

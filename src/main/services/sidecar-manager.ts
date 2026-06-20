@@ -13,7 +13,8 @@
  *     streaming `JobEventFor<K>` over the other port. Always terminates with a
  *     `done|error` event (cancel → `{t:'error',code:'CANCELLED'}`).
  *   - PID tracking + kill-on-quit: SIGTERM then SIGKILL after a 3s grace on
- *     before-quit/will-quit/SIGINT/SIGTERM/child-process-gone/port-close.
+ *     before-quit/will-quit/SIGINT/SIGTERM/port-close (NOT child-process-gone —
+ *     openclip-032; that fires for recoverable Electron GPU/utility crashes).
  *   - p-queue concurrency: 1 transcribe; `min(2, ceil(cores/4))` exports;
  *     model-download unthrottled. Queue position surfaced as stage `"queued"`.
  *
@@ -368,8 +369,16 @@ export class SidecarManager {
 
   /**
    * Bind process-lifecycle kill hooks. Call once at main-process init with the
-   * Electron `app`. Registers before-quit/will-quit/SIGINT/SIGTERM/
-   * child-process-gone → killAll (PRD §17 orphan prevention).
+   * Electron `app`. Registers before-quit/will-quit/SIGINT/SIGTERM → killAll (PRD §17
+   * orphan prevention).
+   *
+   * NOTE (audit fix openclip-032): `child-process-gone` is deliberately NOT a kill
+   * trigger. It fires for Electron's OWN child processes (GPU / Utility / renderer),
+   * NOT for our ffmpeg/whisper/yt-dlp children — those are plain `child_process.spawn`
+   * and are torn down by each runner's close/error handlers (+ the per-job port-close
+   * → cancel). A transient GPU-process crash (common on macOS under memory pressure,
+   * exactly during a big export) used to trip killAll() and SIGKILL every running
+   * job, surfacing CANCELLED mid-encode even though the app kept running.
    */
   installLifecycleHooks(app: {
     on(event: string, listener: (...args: unknown[]) => void): void
@@ -377,7 +386,6 @@ export class SidecarManager {
     const kill = (): void => this.killAll()
     app.on('before-quit', kill)
     app.on('will-quit', kill)
-    app.on('child-process-gone', kill)
     process.once('SIGINT', kill)
     process.once('SIGTERM', kill)
   }

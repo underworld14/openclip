@@ -127,6 +127,18 @@ describe('SidecarManager: a QUEUED job is settled synchronously on cancel/killAl
   })
 })
 
+describe('SidecarManager lifecycle hooks (audit fix openclip-032)', () => {
+  it('wires before-quit/will-quit but NOT child-process-gone to killAll', () => {
+    const mgr = new SidecarManager({ coreCount: 10 })
+    const appEvents: string[] = []
+    mgr.installLifecycleHooks({ on: (e: string) => appEvents.push(e) })
+    expect(appEvents).toContain('before-quit')
+    expect(appEvents).toContain('will-quit')
+    // A recoverable GPU/utility child crash must NOT massacre every running job.
+    expect(appEvents).not.toContain('child-process-gone')
+  })
+})
+
 describe('SidecarManager registry + seam', () => {
   it('has runners registered for transcribe + export', () => {
     expect(hasRunner('transcribe')).toBe(true)

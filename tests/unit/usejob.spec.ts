@@ -17,7 +17,7 @@
 import { describe, expect, it } from 'vitest'
 import { MessageChannel } from 'node:worker_threads'
 import { jobEvents, type MessagePortLike, type JobStatus } from '@renderer/hooks/useJob'
-import { acquireJobPort } from '@renderer/hooks/jobPort'
+import { acquireJobPort, registerJobPort } from '@renderer/hooks/jobPort'
 import { driveScriptOverChannel } from '../harness/fake-utility-process'
 import { createMockOpenclip } from '../mocks/openclip'
 import { transcribeResultFixture, transcribePartialFixture } from '../fixtures/contract'
@@ -110,5 +110,22 @@ describe('useJob streaming path drives a consumer to a "done" result', () => {
     expect(progress).toBe(100)
     expect(partials).toBe(1)
     expect(result).toEqual(transcribeResultFixture)
+  })
+})
+
+describe('acquireJobPort: bounded wait (audit fix openclip-ki6/me0/jp1)', () => {
+  it('rejects after the timeout when the per-job port never arrives (no silent hang)', async () => {
+    // No registerJobPort for this id ⇒ the port never arrives. Without the timeout
+    // this Promise would hang forever; with it the consumer gets a typed rejection.
+    await expect(acquireJobPort('port-never-arrives', 20)).rejects.toThrow(
+      /never arrived|timed out/i
+    )
+  })
+
+  it('still resolves immediately when the port arrives before the timeout fires', async () => {
+    const fakePort = { postMessage() {}, close() {}, start() {}, addEventListener() {} }
+    const p = acquireJobPort('port-arrives', 1000)
+    registerJobPort('port-arrives', fakePort as unknown as MessagePortLike)
+    await expect(p).resolves.toBe(fakePort)
   })
 })

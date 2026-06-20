@@ -230,7 +230,17 @@ function wireJobControlPlane(): void {
       // Transfer the peer port to the exact sender frame, tagged with the jobId
       // so the renderer can pair the live port to the job it just started.
       const frame = event.senderFrame
-      if (frame) frame.postMessage(IPCChannels.JOB_PORT, { jobId }, [port2])
+      if (frame) {
+        frame.postMessage(IPCChannels.JOB_PORT, { jobId }, [port2])
+      } else {
+        // The sender frame was destroyed/navigated before we could transfer the port,
+        // so the renderer will NEVER receive this job's event stream (audit fix
+        // openclip-jp1 belt-and-suspenders; the renderer's acquireJobPort timeout is
+        // the primary guard). Close the orphaned port and cancel the just-started job
+        // so it doesn't run consumer-less to completion.
+        port2.close()
+        sidecar.cancel(jobId)
+      }
       return { jobId }
     }
   )

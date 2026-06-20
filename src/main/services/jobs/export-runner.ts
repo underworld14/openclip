@@ -150,58 +150,64 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
       const willAnalyze = !!params.removeSilence || (!!params.reframe && params.reframe !== 'off')
       emit.progress(0, willAnalyze ? 'analyzing' : 'encoding')
 
-      // Jump-cut (Part I.4, opt-in): detect silences in the clip span → compute the
-      // spans to keep. Best-effort — a detection failure (or no removable silence)
-      // falls back to the normal single cut. Done BEFORE captions so the karaoke is
-      // built on the compressed timeline.
-      let keepRanges: Range[] | undefined
-      if (params.removeSilence) {
-        const tuning = typeof params.removeSilence === 'object' ? params.removeSilence : {}
-        const minSilenceSec = tuning.minSilenceSec ?? 0.6
-        try {
-          const silences = await detectSilences({
-            sourcePath: params.sourcePath,
-            startTime: params.startTime,
-            endTime: params.endTime,
-            noiseDb: tuning.noiseDb,
-            minSilenceSec,
-            signal: ctx.signal
-          })
-          const kr = computeKeepRanges(params.startTime, params.endTime, silences, {
-            minSilenceSec,
-            padSec: tuning.padSec
-          })
-          if (removesAnything(kr, params.startTime, params.endTime)) keepRanges = kr
-        } catch {
-          /* silence detection failed → normal single cut (never block the export) */
-        }
-      }
-
-      // Auto-reframe (Part J, opt-in): detect faces → a crop plan (static / pan /
-      // split). Best-effort — any failure, no faces, or a missing source size leaves
-      // the plan null ⇒ the static center-crop (export never fails because of this).
-      let reframePlan: ReframePlan | null = null
-      if (params.reframe && params.reframe !== 'off' && params.sourceResolution) {
-        try {
-          reframePlan = await planReframe({
-            sourcePath: params.sourcePath,
-            startTime: params.startTime,
-            endTime: params.endTime,
-            source: params.sourceResolution,
-            aspect: params.aspectRatio,
-            mode: params.reframe,
-            signal: ctx.signal
-          })
-        } catch (e) {
-          // Best-effort → static center-crop (never block the export). LOG it, though:
-          // a missing/broken model is otherwise indistinguishable from "no faces found".
-          console.warn(
-            `[export] reframe detection failed; falling back to center-crop: ${
-              e instanceof Error ? e.message : String(e)
-            }`
-          )
-        }
-      }
+      // The silence-detect and reframe analysis passes EACH decode the same source span,
+      // but they're independent (silence → keepRanges, reframe → cropPlan; neither feeds
+      // the other), so run them CONCURRENTLY rather than awaiting serially (audit fix
+      // openclip-lri): the analysis latency was doubled for no reason. The p-queue still
+      // bounds total ffmpeg concurrency, and each pass stays best-effort (its own
+      // try/catch returns a fallback so a failure never blocks the export). Silence is
+      // still resolved BEFORE captions are built below, so the karaoke rides the
+      // compressed (jump-cut) timeline.
+      const [keepRanges, reframePlan] = await Promise.all([
+        // Jump-cut (Part I.4, opt-in): detect silences → keep-ranges, or undefined.
+        (async (): Promise<Range[] | undefined> => {
+          if (!params.removeSilence) return undefined
+          const tuning = typeof params.removeSilence === 'object' ? params.removeSilence : {}
+          const minSilenceSec = tuning.minSilenceSec ?? 0.6
+          try {
+            const silences = await detectSilences({
+              sourcePath: params.sourcePath,
+              startTime: params.startTime,
+              endTime: params.endTime,
+              noiseDb: tuning.noiseDb,
+              minSilenceSec,
+              signal: ctx.signal
+            })
+            const kr = computeKeepRanges(params.startTime, params.endTime, silences, {
+              minSilenceSec,
+              padSec: tuning.padSec
+            })
+            return removesAnything(kr, params.startTime, params.endTime) ? kr : undefined
+          } catch {
+            /* silence detection failed → normal single cut (never block the export) */
+            return undefined
+          }
+        })(),
+        // Auto-reframe (Part J, opt-in): detect faces → a crop plan, or null ⇒ center-crop.
+        (async (): Promise<ReframePlan | null> => {
+          if (!(params.reframe && params.reframe !== 'off' && params.sourceResolution)) return null
+          try {
+            return await planReframe({
+              sourcePath: params.sourcePath,
+              startTime: params.startTime,
+              endTime: params.endTime,
+              source: params.sourceResolution,
+              aspect: params.aspectRatio,
+              mode: params.reframe,
+              signal: ctx.signal
+            })
+          } catch (e) {
+            // Best-effort → static center-crop (never block the export). LOG it, though:
+            // a missing/broken model is otherwise indistinguishable from "no faces found".
+            console.warn(
+              `[export] reframe detection failed; falling back to center-crop: ${
+                e instanceof Error ? e.message : String(e)
+              }`
+            )
+            return null
+          }
+        })()
+      ])
 
       // Resolve the .ass to burn: an explicitly-supplied `assPath` wins; otherwise,
       // if karaoke caption inputs are present, GENERATE the .ass into the per-job

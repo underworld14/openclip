@@ -7,9 +7,8 @@
  */
 
 import type { SourceVideo } from '@shared/schema'
-import type { JobResult, JobPartial, WhisperModelSize, JobEventFor } from '@shared/jobs'
-import { jobEvents } from '@renderer/hooks/useJob'
-import { acquireJobPort } from '@renderer/hooks/jobPort'
+import type { JobResult, JobPartial, WhisperModelSize } from '@shared/jobs'
+import { drainJob } from '@renderer/hooks/useJob'
 
 /**
  * The frozen bridge surface, derived from the global `window.openclip` typing
@@ -61,31 +60,18 @@ export async function runImportPipeline(
 
   // 3) Transcribe — streaming job over a per-job MessagePort (PRD §6.2/§10.2).
   // start() resolves { jobId }; the live port is acquired out-of-band by jobId.
-  const { jobId } = await bridge.jobs.start('transcribe', { projectId, wavPath, model, language })
-  const port = await acquireJobPort(jobId)
-  let transcript: JobResult['transcribe'] | null = null
-
-  for await (const ev of jobEvents<'transcribe'>(port)) {
-    const e = ev as JobEventFor<'transcribe'>
-    switch (e.t) {
-      case 'progress':
-        // Scale the transcribe stage into the 25..100 band.
-        report(25 + Math.round((e.pct / 100) * 75), e.stage)
-        break
-      case 'partial':
-        opts.onPartial?.(e.data)
-        break
-      case 'done':
-        transcript = e.result
-        opts.onTranscript?.(e.result)
-        report(100, 'done')
-        break
-      case 'error':
-        throw new Error(`transcribe failed [${e.code}]: ${e.message}`)
+  const transcript = await drainJob(
+    bridge,
+    'transcribe',
+    { projectId, wavPath, model, language },
+    {
+      // Scale the transcribe stage into the 25..100 progress band.
+      onProgress: (pct, stage) => report(25 + Math.round((pct / 100) * 75), stage),
+      onPartial: (data) => opts.onPartial?.(data)
     }
-  }
-
-  if (!transcript) throw new Error('transcribe ended without a result')
+  )
+  opts.onTranscript?.(transcript)
+  report(100, 'done')
   return { sourceVideo, wavPath, transcript }
 }
 
@@ -108,30 +94,15 @@ export interface UrlDownloadOptions {
  * (never hangs) so the caller can surface a retriable toast.
  */
 export async function runUrlDownload(opts: UrlDownloadOptions): Promise<JobResult['url-download']> {
-  const { jobId } = await opts.bridge.jobs.start('url-download', {
-    url: opts.url
-  })
-  const port = await acquireJobPort(jobId)
-  let result: JobResult['url-download'] | null = null
-
-  for await (const ev of jobEvents<'url-download'>(port)) {
-    const e = ev as JobEventFor<'url-download'>
-    switch (e.t) {
-      case 'progress':
-        opts.onProgress?.(e.pct, e.stage)
-        break
-      case 'partial':
-        opts.onProgress?.(e.data.pct, 'downloading')
-        break
-      case 'done':
-        result = e.result
-        opts.onProgress?.(100, 'downloaded')
-        break
-      case 'error':
-        throw new Error(`download failed [${e.code}]: ${e.message}`)
+  const result = await drainJob(
+    opts.bridge,
+    'url-download',
+    { url: opts.url },
+    {
+      onProgress: (pct, stage) => opts.onProgress?.(pct, stage),
+      onPartial: (data) => opts.onProgress?.(data.pct, 'downloading')
     }
-  }
-
-  if (!result) throw new Error('download ended without a result')
+  )
+  opts.onProgress?.(100, 'downloaded')
   return result
 }

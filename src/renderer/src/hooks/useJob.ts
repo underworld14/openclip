@@ -17,7 +17,14 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { JobKind, JobParams, JobResult, JobEventFor, JobErrorCode } from '@shared/jobs'
+import type {
+  JobKind,
+  JobParams,
+  JobResult,
+  JobPartial,
+  JobEventFor,
+  JobErrorCode
+} from '@shared/jobs'
 import { acquireJobPort } from './jobPort'
 
 // ============================================================================
@@ -104,6 +111,62 @@ export async function* jobEvents<K extends JobKind>(
     else port.onmessage = null
     port.close?.()
   }
+}
+
+// ============================================================================
+// drainJob — the one streaming-job consumer (audit fix openclip-60b)
+// ============================================================================
+
+/** Bridge surface derived from the global `window.openclip` typing. */
+type OpenClipBridge = typeof window.openclip
+
+export interface DrainJobCallbacks<K extends JobKind> {
+  /** The assigned jobId, right after start (so callers can track/cancel it). */
+  onStart?: (jobId: string) => void
+  /** 0..100 progress + stage from `{t:'progress'}` events. */
+  onProgress?: (pct: number, stage: string) => void
+  /** Streamed partials (e.g. transcript words, download bytes) from `{t:'partial'}`. */
+  onPartial?: (data: JobPartial[K]) => void
+}
+
+/**
+ * The single streaming-job drain loop (audit fix openclip-60b): start the job, pair the
+ * out-of-band MessagePort, drive `jobEvents` to the terminal event, and enforce the
+ * job-termination invariant (PRD §10.2 — every job ends with `done` xor `error`, never a
+ * silent hang). Previously runExport / runModelDownload / runUrlDownload / the transcribe
+ * tail each repeated this skeleton verbatim and had to keep the error-string format and
+ * the result guard in sync by hand. Per-job specifics (progress banding, on-done side
+ * effects like onTranscript) stay in the caller, which wires the callbacks and post-
+ * processes the returned result. Throws `<kind> failed [code]: message` on a terminal
+ * error and `<kind> ended without a result` if the stream closed with no `done`.
+ */
+export async function drainJob<K extends JobKind>(
+  bridge: OpenClipBridge,
+  kind: K,
+  params: JobParams[K],
+  cbs: DrainJobCallbacks<K> = {}
+): Promise<JobResult[K]> {
+  const { jobId } = await bridge.jobs.start(kind, params)
+  cbs.onStart?.(jobId)
+  const port = await acquireJobPort(jobId)
+  let result: JobResult[K] | null = null
+  for await (const ev of jobEvents<K>(port)) {
+    switch (ev.t) {
+      case 'progress':
+        cbs.onProgress?.(ev.pct, ev.stage)
+        break
+      case 'partial':
+        cbs.onPartial?.(ev.data)
+        break
+      case 'done':
+        result = ev.result
+        break
+      case 'error':
+        throw new Error(`${kind} failed [${ev.code}]: ${ev.message}`)
+    }
+  }
+  if (result === null) throw new Error(`${kind} ended without a result`)
+  return result
 }
 
 // ============================================================================

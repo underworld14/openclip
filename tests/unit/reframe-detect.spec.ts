@@ -269,11 +269,27 @@ describe('splitMotionSeries', () => {
       { times: [0, 0.5, 1.0], values: [1, 2, 3] },
       { times: [0, 0.5], values: [10, 20] }
     ]
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(splitMotionSeries(groups, 0)).toEqual({
       times: [0, 0.5],
       left: [1, 2],
       right: [10, 20]
     })
+    // The silent clamp is now visible (openclip-36u): a per-side count mismatch
+    // (left 3 vs right 2) risks misalignment, so it must be logged, not swallowed.
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/reframe.*motion.*mismatch/i))
+    warn.mockRestore()
+  })
+
+  it('does NOT warn when the two groups are equal length (openclip-36u)', () => {
+    const groups = [
+      { times: [0, 0.5], values: [1, 2] },
+      { times: [0, 0.5], values: [10, 20] }
+    ]
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    splitMotionSeries(groups, 0)
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
   })
 
   it('no groups → empty timeline', () => {

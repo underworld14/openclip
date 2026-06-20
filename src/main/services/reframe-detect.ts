@@ -498,6 +498,16 @@ export function splitMotionSeries(groups: MotionSeries[], startTime: number): Mo
   if (groups.length === 0) return { times: [], left: [], right: [] }
   const leftG = groups[0]
   const rightG = groups[1] ?? groups[0] // single ROI ⇒ mirror onto both sides
+  // Make the silent clamp visible (audit fix openclip-36u): the two sinks share one
+  // decode and should be symmetric, so a per-side count mismatch (degenerate ROI, odd
+  // VFR boundary, one sink emitting a different frame count) means we're clamping to the
+  // shorter and the tail of the longer side is dropped — a misalignment risk worth a log
+  // rather than a quietly wrong active-speaker timeline. Only meaningful with two groups.
+  if (groups.length >= 2 && leftG.values.length !== rightG.values.length) {
+    console.warn(
+      `[reframe] motion series length mismatch (left=${leftG.values.length}, right=${rightG.values.length}); clamping to the shorter — speaker timeline tail may be truncated`
+    )
+  }
   const n = Math.min(leftG.values.length, rightG.values.length, leftG.times.length)
   const times: number[] = []
   const left: number[] = []

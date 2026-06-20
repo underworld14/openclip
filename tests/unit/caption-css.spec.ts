@@ -51,6 +51,17 @@ describe('captionWordStyle', () => {
     expect(css.transform).toBe('scale(1.2)')
   })
 
+  it('suppresses the static keyword scale when a per-word animation is active (openclip-yuk)', () => {
+    // The burn (ass-captions) drops the keyword \fscx/\fscy when perWordAnimation
+    // drives the scale; the preview must match so WYSIWYG holds.
+    const animated = { ...base, keywordScale: 120, perWordAnimation: 'bounce' as const }
+    const css = captionWordStyle(animated, { active: false, keyword: true })
+    expect(css.transform).toBeUndefined()
+    // 'none' is NOT an active animation — the static scale still applies.
+    const none = { ...base, keywordScale: 120, perWordAnimation: 'none' as const }
+    expect(captionWordStyle(none, { active: false, keyword: true }).transform).toBe('scale(1.2)')
+  })
+
   it('opaque bg draws a box; transparent bg does not', () => {
     expect(
       captionWordStyle({ ...base, backgroundColor: '#000000' }, { active: false }).backgroundColor

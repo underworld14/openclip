@@ -64,7 +64,9 @@ describe('save → load round-trip', () => {
     expect(loaded.__futureTopLevel).toBe('added by a newer version')
     expect((loaded.settings as Record<string, unknown>).__futureSetting).toBe(42)
     // And the schema itself preserves them (not just the store).
-    expect(Project.parse(fromNewerBuild)).toMatchObject({ __futureTopLevel: 'added by a newer version' })
+    expect(Project.parse(fromNewerBuild)).toMatchObject({
+      __futureTopLevel: 'added by a newer version'
+    })
   })
 
   it('creates the projects directory if it does not exist', async () => {

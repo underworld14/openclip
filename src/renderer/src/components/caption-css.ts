@@ -74,7 +74,12 @@ export function captionWordStyle(
   if (opts.keyword) {
     if (style.keywordColor) css.color = style.keywordColor
     if (style.keywordBold) css.fontWeight = 900
-    if (typeof style.keywordScale === 'number' && style.keywordScale !== 100) {
+    // Skip the static keyword scale when a per-word animation is active (audit fix
+    // openclip-yuk): the burn does the same (ass-captions) because both drive the font
+    // scale, and a constant keywordScale would fight the animation's target. Keeps the
+    // preview consistent with what gets burned.
+    const perWordActive = !!style.perWordAnimation && style.perWordAnimation !== 'none'
+    if (typeof style.keywordScale === 'number' && style.keywordScale !== 100 && !perWordActive) {
       css.display = 'inline-block'
       css.transform = `scale(${style.keywordScale / 100})`
     }

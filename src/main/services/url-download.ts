@@ -157,7 +157,8 @@ export function assertSafeUrl(raw: string): string {
   // surfaces as a non-retriable INPUT_INVALID, not a retriable SIDECAR_CRASH (audit fix
   // openclip-1ly).
   const url = (raw ?? '').trim()
-  if (!url || url.startsWith('-')) throw new JobError('INPUT_INVALID', 'invalid download URL', false)
+  if (!url || url.startsWith('-'))
+    throw new JobError('INPUT_INVALID', 'invalid download URL', false)
   let parsed: URL
   try {
     parsed = new URL(url)

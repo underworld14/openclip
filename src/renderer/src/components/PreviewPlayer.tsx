@@ -170,13 +170,20 @@ export function PreviewPlayer(): React.JSX.Element {
                     <span
                       key={i}
                       style={captionWordStyle(captionStyle, {
-                        active: i === active.activeIndex,
+                        // Every already-spoken word stays filled, not just the current one
+                        // (openclip-cgw): the libass burn's karaoke (\k) fill is cumulative —
+                        // each word turns the highlight color as the playhead passes it and
+                        // STAYS, so the preview must highlight i<=activeIndex to match.
+                        active: i <= active.activeIndex,
                         keyword: w.isKeyword
                       })}
                     >
                       {i > 0 ? ' ' : ''}
+                      {/* Honor emojiPosition like the burn (openclip-ejk): 'before' puts the
+                          auto-emoji ahead of the word, otherwise it trails. */}
+                      {captionStyle.emojiPosition === 'before' && w.emoji ? `${w.emoji} ` : ''}
                       {w.word}
-                      {w.emoji ? ` ${w.emoji}` : ''}
+                      {captionStyle.emojiPosition !== 'before' && w.emoji ? ` ${w.emoji}` : ''}
                     </span>
                   ))}
                 </div>

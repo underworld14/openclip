@@ -280,9 +280,7 @@ describe('SidecarManager concurrency BEHAVIOR (audit fix openclip-nh3)', () => {
     const collected = collectPort(port1 as never)
     mgr.startJob('transcribe', { projectId: 'p1', wavPath: '/a.wav', model: 'base' }, eventPort)
     await new Promise((r) => setTimeout(r, 10))
-    expect(
-      collected.events.some((e) => e.t === 'progress' && e.stage === 'queued')
-    ).toBe(true)
+    expect(collected.events.some((e) => e.t === 'progress' && e.stage === 'queued')).toBe(true)
   })
 })
 

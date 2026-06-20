@@ -17,6 +17,7 @@ import {
   getRunner,
   concurrencyFor,
   exportConcurrency,
+  defaultArrayLimiterFactory,
   type EventPort
 } from '@main/services/sidecar-manager'
 import { scriptedRunner } from '../harness/fake-utility-process'
@@ -63,6 +64,26 @@ function collectPort(port: {
   port.start()
   return { events, done }
 }
+
+describe('defaultArrayLimiterFactory: a synchronous throw releases the slot (audit fix openclip-40a)', () => {
+  it('does not starve the kind when a task throws synchronously', async () => {
+    const limiter = defaultArrayLimiterFactory(1) // serial: one slot
+    // First task throws SYNCHRONOUSLY (not a rejected promise) — the bug case.
+    const p1 = limiter.add(
+      (() => {
+        throw new Error('sync boom')
+      }) as () => Promise<void>
+    )
+    await expect(p1).rejects.toThrow('sync boom')
+    // The one slot must be freed so a SECOND task runs; without the fix activeCount
+    // would stay at 1 and this add() would queue forever (test would time out).
+    let ran = false
+    await limiter.add(async () => {
+      ran = true
+    })
+    expect(ran).toBe(true)
+  })
+})
 
 describe('SidecarManager registry + seam', () => {
   it('has runners registered for transcribe + export', () => {

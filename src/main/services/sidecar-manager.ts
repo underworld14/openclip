@@ -358,7 +358,7 @@ export class SidecarManager {
 // Production should pass `createPQueueLimiterFactory()` (below) for fairness.
 // ============================================================================
 
-function defaultArrayLimiterFactory(concurrency: number): Limiter {
+export function defaultArrayLimiterFactory(concurrency: number): Limiter {
   let activeCount = 0
   const queue: Array<() => void> = []
   const pump = (): void => {
@@ -375,7 +375,13 @@ function defaultArrayLimiterFactory(concurrency: number): Limiter {
     add<T>(task: () => Promise<T>): Promise<T> {
       return new Promise<T>((resolve, reject) => {
         const run = (): void => {
-          task()
+          // `Promise.resolve().then(task)` so a SYNCHRONOUS throw from `task()` becomes
+          // a rejected promise (audit fix openclip-40a): otherwise the throw escapes
+          // `run()` before `.finally` attaches, `activeCount` is never decremented, and
+          // that kind's slot is permanently consumed — starving every later job of the
+          // kind. The wrapper guarantees the `.finally` (decrement + pump) always runs.
+          Promise.resolve()
+            .then(task)
             .then(resolve, reject)
             .finally(() => {
               activeCount -= 1

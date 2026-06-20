@@ -27,7 +27,20 @@ import type {
   SourceVideo,
   Transcript,
   TargetPlatform,
-  BrandTemplate
+  BrandTemplate,
+  // AI title/caption outputs — inferred from their z.strictObject schemas (openclip-xgk).
+  GenerateTitlesResult,
+  EnhanceCaptionsResult
+} from './schema'
+
+// Re-export the AI title/caption output types (openclip-xgk) so existing consumers that
+// import them from '@shared/channels' keep working now that they're defined (with their
+// Zod schemas) in schema.ts.
+export type {
+  TitleOption,
+  GenerateTitlesResult,
+  EnhancedCaption,
+  EnhanceCaptionsResult
 } from './schema'
 import type { WhisperModelSize, JobKind, JobParams } from './jobs'
 
@@ -139,14 +152,8 @@ export interface GenerateTitlesRequest {
   model: string
   clipTranscript: string
 }
-export interface TitleOption {
-  title: string
-  hook: string
-  psychology: string
-}
-export interface GenerateTitlesResult {
-  options: TitleOption[]
-}
+// TitleOption + GenerateTitlesResult are inferred from their z.strictObject schemas in
+// schema.ts (openclip-xgk) and imported above.
 
 /** AI caption enhancement (PRD §7.5). */
 export interface EnhanceCaptionsRequest {
@@ -161,19 +168,9 @@ export interface EnhanceCaptionsRequest {
   /** Part K (emoji) — distinct caption words to suggest emoji for (mode:'emoji'). */
   words?: string[]
 }
-export interface EnhancedCaption {
-  start_time: number
-  end_time: number
-  text: string
-}
-export interface EnhanceCaptionsResult {
-  enhanced_captions: EnhancedCaption[]
-  /**
-   * Part K (emoji) — normalized word → emoji (mode:'emoji'). Additive: absent on
-   * the original rewrite path. Threaded into the export job as `captions.aiEmojiMap`.
-   */
-  emoji_map?: Record<string, string>
-}
+// EnhancedCaption + EnhanceCaptionsResult are inferred from their z.strictObject schemas
+// in schema.ts (openclip-xgk; emoji_map is the Part K word→emoji dictionary) and imported
+// above.
 
 /** Per-provider key status — value never crosses IPC (plan Part B / PRD §12.2). */
 export interface ApiKeyStatus {

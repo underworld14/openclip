@@ -423,3 +423,42 @@ export const ClipSchema = z.strictObject({
   analysis: ClipAnalysis
 })
 export type ClipSchema = z.infer<typeof ClipSchema>
+
+// ============================================================================
+// AI title + caption generation outputs (PRD §7.4 / §7.5) — audit fix openclip-xgk.
+// These were plain TS interfaces in channels.ts with no Zod schema, so (unlike
+// ClipSchema) the title/caption generators had no strict-json source for
+// z.toJSONSchema / zodOutputFormat, no safeParse/repair path, and no contract fixture.
+// Modeled as z.strictObject (→ additionalProperties:false, all-required) exactly like
+// ClipSchema so the same strict structured-output adapter can drive them when §7.4/§7.5
+// are wired; the channel result types are inferred from these.
+// ============================================================================
+
+/** One AI-suggested title option (PRD §7.4). */
+export const TitleOptionSchema = z.strictObject({
+  title: z.string(),
+  hook: z.string(),
+  psychology: z.string() // why this title hooks (the angle/principle)
+})
+export type TitleOption = z.infer<typeof TitleOptionSchema>
+
+export const GenerateTitlesResultSchema = z.strictObject({
+  options: z.array(TitleOptionSchema)
+})
+export type GenerateTitlesResult = z.infer<typeof GenerateTitlesResultSchema>
+
+/** One rewritten caption segment (PRD §7.5, rewrite mode). */
+export const EnhancedCaptionSchema = z.strictObject({
+  start_time: z.number(),
+  end_time: z.number(),
+  text: z.string()
+})
+export type EnhancedCaption = z.infer<typeof EnhancedCaptionSchema>
+
+export const EnhanceCaptionsResultSchema = z.strictObject({
+  enhanced_captions: z.array(EnhancedCaptionSchema),
+  // Part K (emoji mode): normalized word → emoji. Absent on the rewrite path. A dynamic
+  // dictionary, so it relaxes additionalProperties for ITS values only.
+  emoji_map: z.record(z.string(), z.string()).optional()
+})
+export type EnhanceCaptionsResult = z.infer<typeof EnhanceCaptionsResultSchema>

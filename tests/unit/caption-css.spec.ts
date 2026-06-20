@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest'
 import {
   captionContainerStyle,
   captionWordStyle,
+  captionWordAnimationClass,
   isTransparentBg
 } from '@renderer/components/caption-css'
 import { resolveEffectiveCaptionStyle } from '@renderer/components/captionPresets'
@@ -69,5 +70,22 @@ describe('captionWordStyle', () => {
     expect(
       captionWordStyle({ ...base, backgroundColor: '#00000000' }, { active: false }).backgroundColor
     ).toBeUndefined()
+  })
+})
+
+describe('captionWordAnimationClass — per-word reveal animation in the preview (openclip-4v1)', () => {
+  it('returns the bounce/pop class only for the CURRENT word', () => {
+    const bounce = { ...base, perWordAnimation: 'bounce' as const }
+    expect(captionWordAnimationClass(bounce, true)).toBe('oc-cap-bounce')
+    expect(captionWordAnimationClass(bounce, false)).toBeUndefined()
+    const pop = { ...base, perWordAnimation: 'pop' as const }
+    expect(captionWordAnimationClass(pop, true)).toBe('oc-cap-pop')
+  })
+
+  it("returns undefined for 'none' or an unset animation even on the current word", () => {
+    expect(
+      captionWordAnimationClass({ ...base, perWordAnimation: 'none' as const }, true)
+    ).toBeUndefined()
+    expect(captionWordAnimationClass(base, true)).toBeUndefined()
   })
 })

@@ -27,7 +27,11 @@ import { formatTime } from '@renderer/components/timeline-math'
 import { resolveEffectiveCaptionStyle } from '@renderer/components/captionPresets'
 import { brandCaptionOverride } from '@renderer/components/brandKit'
 import { cssAspectRatio } from '@renderer/components/preview-crop'
-import { captionContainerStyle, captionWordStyle } from '@renderer/components/caption-css'
+import {
+  captionContainerStyle,
+  captionWordStyle,
+  captionWordAnimationClass
+} from '@renderer/components/caption-css'
 import { useKaraokeCaption } from '@renderer/components/useKaraokeCaption'
 import { Button } from '@renderer/components/ui/button'
 import { Play, Pause } from 'lucide-react'
@@ -166,28 +170,38 @@ export function PreviewPlayer(): React.JSX.Element {
               />
               {showCaptions && active && (
                 <div data-testid="preview-captions" style={captionContainerStyle(captionStyle)}>
-                  {active.words.map((w, i) => (
-                    <span
-                      key={i}
-                      style={captionWordStyle(captionStyle, {
-                        // Every already-spoken word stays filled, not just the current one
-                        // (openclip-cgw): the libass burn's karaoke (\k) fill is cumulative —
-                        // each word turns the highlight color as the playhead passes it and
-                        // STAYS, so the preview must highlight i<=activeIndex to match. Gated
-                        // on highlightCurrentWord (openclip-r7k): when off, no word lights up,
-                        // matching the burn's Primary==Secondary collapse.
-                        active: captionStyle.highlightCurrentWord && i <= active.activeIndex,
-                        keyword: w.isKeyword
-                      })}
-                    >
-                      {i > 0 ? ' ' : ''}
-                      {/* Honor emojiPosition like the burn (openclip-ejk): 'before' puts the
+                  {active.words.map((w, i) => {
+                    // Per-word reveal animation on the CURRENT word only (openclip-4v1);
+                    // re-key it ('on' suffix) so React remounts and replays the CSS
+                    // animation each time the playhead reaches a new word.
+                    const animClass = captionWordAnimationClass(
+                      captionStyle,
+                      i === active.activeIndex
+                    )
+                    return (
+                      <span
+                        key={animClass ? `w${i}-on` : `w${i}`}
+                        className={animClass}
+                        style={captionWordStyle(captionStyle, {
+                          // Every already-spoken word stays filled, not just the current one
+                          // (openclip-cgw): the libass burn's karaoke (\k) fill is cumulative —
+                          // each word turns the highlight color as the playhead passes it and
+                          // STAYS, so the preview must highlight i<=activeIndex to match. Gated
+                          // on highlightCurrentWord (openclip-r7k): when off, no word lights up,
+                          // matching the burn's Primary==Secondary collapse.
+                          active: captionStyle.highlightCurrentWord && i <= active.activeIndex,
+                          keyword: w.isKeyword
+                        })}
+                      >
+                        {i > 0 ? ' ' : ''}
+                        {/* Honor emojiPosition like the burn (openclip-ejk): 'before' puts the
                           auto-emoji ahead of the word, otherwise it trails. */}
-                      {captionStyle.emojiPosition === 'before' && w.emoji ? `${w.emoji} ` : ''}
-                      {w.word}
-                      {captionStyle.emojiPosition !== 'before' && w.emoji ? ` ${w.emoji}` : ''}
-                    </span>
-                  ))}
+                        {captionStyle.emojiPosition === 'before' && w.emoji ? `${w.emoji} ` : ''}
+                        {w.word}
+                        {captionStyle.emojiPosition !== 'before' && w.emoji ? ` ${w.emoji}` : ''}
+                      </span>
+                    )
+                  })}
                 </div>
               )}
               {reframeMode !== 'off' && (

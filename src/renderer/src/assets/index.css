@@ -145,4 +145,33 @@
   .vibrant-sidebar {
     background: color-mix(in oklch, var(--sidebar) 88%, transparent);
   }
+  /* Per-word caption reveal animations (openclip-4v1) — DOM approximations of the
+     libass `\t` per-word scale the burn applies in ass-captions: 'bounce' grows
+     100%→115% over 150ms, 'pop' grows 70%→100% over 120ms. Applied to the current
+     word (the one the playhead just reached); PreviewPlayer re-keys that word so the
+     animation replays as each word becomes current. `both` holds the end frame. */
+  @keyframes oc-cap-bounce {
+    from {
+      transform: scale(1);
+    }
+    to {
+      transform: scale(1.15);
+    }
+  }
+  @keyframes oc-cap-pop {
+    from {
+      transform: scale(0.7);
+    }
+    to {
+      transform: scale(1);
+    }
+  }
+  .oc-cap-bounce {
+    display: inline-block;
+    animation: oc-cap-bounce 150ms ease-out both;
+  }
+  .oc-cap-pop {
+    display: inline-block;
+    animation: oc-cap-pop 120ms ease-out both;
+  }
 }

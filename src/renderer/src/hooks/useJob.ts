@@ -160,11 +160,26 @@ export function useJob<K extends JobKind>(kind: K, options: UseJobOptions<K> = {
       setStatus('running')
       setError(null)
       setResult(null)
-      const { jobId: id } = await window.openclip.jobs.start(kind, params)
-      setJobId(id)
-      jobIdRef.current = id
-      // Acquire the LIVE per-job port (delivered out-of-band, keyed by jobId).
-      const port = await acquireJobPort(id)
+      let id: string
+      let port: MessagePortLike
+      try {
+        id = (await window.openclip.jobs.start(kind, params)).jobId
+        setJobId(id)
+        jobIdRef.current = id
+        // Acquire the LIVE per-job port (delivered out-of-band, keyed by jobId).
+        port = await acquireJobPort(id)
+      } catch (e) {
+        // jobs.start() / acquireJobPort() rejected (e.g. the per-job port never arrived,
+        // openclip-ki6) — surface a terminal error instead of leaving status stuck on
+        // 'running' forever (audit fix openclip-73y).
+        setStatus('error')
+        setError({
+          code: 'SIDECAR_CRASH',
+          message: e instanceof Error ? e.message : String(e),
+          retriable: true
+        })
+        return
+      }
       const emitTask = (s: JobStatus, p: number): void =>
         optionsRef.current.onTask?.({ jobId: id, kind, progress: p, status: s })
 

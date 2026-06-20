@@ -24,6 +24,7 @@
 // existing `import { clamp } from '@renderer/components/timeline-math'` consumers
 // (timelineSlice, Timeline) keep working — one definition, no local copy.
 import { clamp } from '@shared/reframe-plan'
+import { formatSeconds } from '@renderer/components/format-time'
 
 export { clamp }
 
@@ -113,13 +114,6 @@ export function markOutAt(
 
 /** Format a time (seconds) as `m:ss.cs` for the timeline/preview readout. */
 export function formatTime(seconds: number): string {
-  const s = Math.max(0, seconds)
-  const m = Math.floor(s / 60)
-  const rem = s - m * 60
-  const whole = Math.floor(rem)
-  const cs = Math.round((rem - whole) * 100)
-  // carry if centiseconds rounded up to 100
-  const ss = cs === 100 ? whole + 1 : whole
-  const csOut = cs === 100 ? 0 : cs
-  return `${m}:${String(ss).padStart(2, '0')}.${String(csOut).padStart(2, '0')}`
+  // Thin wrapper over the single `formatSeconds` formatter (audit fix openclip-64e).
+  return formatSeconds(seconds, { precision: 'cs' })
 }

@@ -6,13 +6,12 @@
  */
 
 import type { Clip, ClipVirality } from '@shared/schema'
+import { formatSeconds } from '@renderer/components/format-time'
 
-/** Format absolute seconds as M:SS. */
+/** Format absolute seconds as M:SS (no hours rollover). Thin wrapper over the single
+ * `formatSeconds` formatter (audit fix openclip-64e). */
 export function formatTimecode(seconds: number): string {
-  const total = Math.max(0, Math.floor(seconds))
-  const m = Math.floor(total / 60)
-  const s = total % 60
-  return `${m}:${s.toString().padStart(2, '0')}`
+  return formatSeconds(seconds)
 }
 
 /** One bar in the virality breakdown (label + raw 0-25 score, for the card). */

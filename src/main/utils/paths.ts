@@ -143,13 +143,20 @@ export function ytDlpPath(): string {
 }
 
 /**
- * Directory holding `default.metallib` (Metal kernels) next to whisper-cli.
- * Whisper-cli loads it relative to its own dir; in prod it ships beside the
- * binary, in dev brew places it in the cellar — resolved as the binary's dir.
+ * Directory holding `default.metallib` (Metal kernels) next to whisper-cli, i.e.
+ * `<resourcesPath>/whisper/<platArch>`. In PROD this ships beside the staged binary.
+ * In DEV `process.resourcesPath` is Electron's OWN resources dir (the project's
+ * binaries aren't staged there), so this path typically does NOT exist — and
+ * `resolveWhisperCwd` (whisper-spawn) `existsSync`-guards it and falls back to
+ * `process.cwd()`. A brew `whisper-cli` normally embeds its Metal shaders, so the
+ * dev cwd not being the binary's directory is harmless.
+ *
+ * (audit fix openclip-13j: the dev/prod branches were byte-identical apart from a
+ * `?? ''` guard, and the old comment falsely claimed dev "resolved the binary's dir";
+ * collapsed to one expression and corrected the comment.)
  */
 export function whisperResourcesDir(): string {
-  if (isDev()) return join(process.resourcesPath ?? '', 'whisper', platArch())
-  return join(process.resourcesPath, 'whisper', platArch())
+  return join(process.resourcesPath ?? '', 'whisper', platArch())
 }
 
 // ============================================================================

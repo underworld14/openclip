@@ -127,6 +127,15 @@ export interface UseJobOptions<K extends JobKind> {
   onTask?: (task: { jobId: string; kind: K; progress: number; status: JobStatus }) => void
 }
 
+/**
+ * RESERVED, NOT YET WIRED (audit note openclip-dz5). The shipping components drive
+ * jobs through the pure `jobEvents()` generator directly (import-pipeline, export-run,
+ * model-download); this React hook + its `onTask` seam feed `uiStore.tasks`, which is
+ * currently WRITTEN but never READ by any component — the global job-queue/progress UI
+ * it was designed for doesn't exist yet. Kept as a deliberate trunk seam for that
+ * future UI; do not mistake it for live runtime plumbing. Delete this + the
+ * `uiStore.tasks` map if the queue UI is dropped from the roadmap.
+ */
 export function useJob<K extends JobKind>(kind: K, options: UseJobOptions<K> = {}): UseJobState<K> {
   const [jobId, setJobId] = useState<string | null>(null)
   const [status, setStatus] = useState<JobStatus>('idle')

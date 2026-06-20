@@ -212,6 +212,80 @@ describe('SidecarManager registry + seam', () => {
   })
 })
 
+describe('SidecarManager concurrency BEHAVIOR (audit fix openclip-nh3)', () => {
+  it('serializes tasks at concurrency 1 — the 2nd starts only after the 1st resolves', async () => {
+    const limiter = defaultArrayLimiterFactory(1)
+    const order: string[] = []
+    let release1: () => void = () => {}
+    const p1 = limiter.add(
+      () =>
+        new Promise<void>((r) => {
+          order.push('start1')
+          release1 = () => {
+            order.push('end1')
+            r()
+          }
+        })
+    )
+    const p2 = limiter.add(async () => {
+      order.push('start2')
+    })
+    await new Promise((r) => setTimeout(r, 5))
+    expect(order).toEqual(['start1']) // task2 is serialized BEHIND the in-flight task1
+    release1()
+    await Promise.all([p1, p2])
+    expect(order).toEqual(['start1', 'end1', 'start2'])
+  })
+
+  it('runs the export cap (2) concurrently but queues the overflow', async () => {
+    const limiter = defaultArrayLimiterFactory(exportConcurrency(10)) // = 2
+    const running: number[] = []
+    const releases: Array<() => void> = []
+    const mk = (i: number): Promise<void> =>
+      limiter.add(
+        () =>
+          new Promise<void>((r) => {
+            running.push(i)
+            releases.push(r)
+          })
+      )
+    const ps = [mk(0), mk(1), mk(2)]
+    await new Promise((r) => setTimeout(r, 5))
+    expect(running).toEqual([0, 1]) // exactly 2 admitted; the 3rd waits
+    releases[0]()
+    await new Promise((r) => setTimeout(r, 5))
+    expect(running).toEqual([0, 1, 2]) // freeing a slot admits the 3rd
+    releases[1]()
+    releases[2]()
+    await Promise.all(ps)
+  })
+
+  it('surfaces queue position as a "queued" progress stage when the limiter is busy', async () => {
+    // A limiter that reports a non-empty queue + never admits — the manager must emit a
+    // `queued` progress for a job that can't start yet (PRD §17 queue UX).
+    const busyLimiter: Limiter = {
+      get pending(): number {
+        return 1
+      },
+      add: <T>(): Promise<T> => new Promise<T>(() => {})
+    }
+    const mgr = new SidecarManager({ coreCount: 10, limiterFactory: () => busyLimiter })
+    const { port1, port2 } = new MessageChannel()
+    const eventPort: EventPort = {
+      postMessage: (v) => port2.postMessage(v),
+      close: () => port2.close(),
+      on: (e, l) => port2.on(e, l),
+      start: () => port2.start()
+    }
+    const collected = collectPort(port1 as never)
+    mgr.startJob('transcribe', { projectId: 'p1', wavPath: '/a.wav', model: 'base' }, eventPort)
+    await new Promise((r) => setTimeout(r, 10))
+    expect(
+      collected.events.some((e) => e.t === 'progress' && e.stage === 'queued')
+    ).toBe(true)
+  })
+})
+
 describe('SidecarManager concurrency math (PRD §17)', () => {
   it('transcribe is strictly serial', () => {
     expect(concurrencyFor('transcribe', 10)).toBe(1)

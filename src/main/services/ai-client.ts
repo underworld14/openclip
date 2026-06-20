@@ -397,7 +397,12 @@ export function chunkSegments(segments: TranscriptSegment[], opts: ChunkOptions)
       const boundaryEnd = current[current.length - 1].end
       const overlap = current.filter((s) => s.end > boundaryEnd - opts.overlapSeconds)
       current = [...overlap]
-      tokens = estimateTokens(current.map((s) => s.text).join(' '))
+      // Sum the per-segment token estimates rather than re-joining + re-estimating the
+      // whole overlap string (audit fix openclip-zfm): the re-join rescanned every
+      // overlap segment's text at each chunk seam, and the joined estimate also drifted
+      // from how `tokens` is otherwise accumulated below (`tokens += segTokens`, a
+      // per-segment sum). Summing is both cheaper and consistent.
+      tokens = overlap.reduce((sum, s) => sum + estimateTokens(s.text), 0)
     }
     current.push(seg)
     tokens += segTokens

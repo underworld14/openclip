@@ -314,6 +314,23 @@ describe('import-controller: managed media adoption (Part H)', () => {
     expect(reclaimMedia).not.toHaveBeenCalled()
   })
 
+  it('does NOT reclaim once the project is committed, even if a later step throws (e5s review)', async () => {
+    // The pipeline succeeds and the project goes live (setCurrentProject), then setView
+    // throws. The media belongs to a project the user can now see — it must NOT be
+    // deleted out from under them.
+    const { ctl, reclaimMedia, setCurrentProject } = build({
+      storage: fakeStorage({ [CONSENT_KEY]: '1' }),
+      ui: {
+        setView: () => {
+          throw new Error('view boom')
+        }
+      } as unknown as ImportControllerDeps['ui']
+    })
+    await ctl.importUrl('https://youtu.be/x')
+    expect(setCurrentProject).toHaveBeenCalledWith(expect.objectContaining({ id: 'PID' }))
+    expect(reclaimMedia).not.toHaveBeenCalled()
+  })
+
   it('an adopt failure surfaces an error and does not create a project', async () => {
     const adoptSource = vi.fn(async () => {
       throw new Error('disk full')

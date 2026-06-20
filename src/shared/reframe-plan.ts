@@ -172,6 +172,40 @@ function median(xs: number[]): number {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2
 }
 
+/**
+ * Travel (max−min) of `xs` with the SINGLE most-extreme-from-median sample removed
+ * (review follow-up to openclip-eli). The plain raw range is sensitive to one bad
+ * detection that survived the σ-gate: on a short clip the σ-band is widened by the
+ * outlier itself, so it can't be relied on to drop it. Trimming the lone extreme
+ * collapses a spike to ~0 while leaving a genuine monotonic sweep essentially intact
+ * (it loses only one endpoint). For <3 samples there's nothing to trim → plain range.
+ * Single-pass min/max (no spread — a long path can overflow the call stack).
+ */
+function robustTravel(xs: number[]): number {
+  if (xs.length < 3) {
+    let lo = xs[0]
+    let hi = xs[0]
+    for (const x of xs) {
+      if (x < lo) lo = x
+      if (x > hi) hi = x
+    }
+    return hi - lo
+  }
+  const med = median(xs)
+  let worst = 0
+  for (let i = 1; i < xs.length; i++) {
+    if (Math.abs(xs[i] - med) > Math.abs(xs[worst] - med)) worst = i
+  }
+  let lo = Infinity
+  let hi = -Infinity
+  for (let i = 0; i < xs.length; i++) {
+    if (i === worst) continue
+    if (xs[i] < lo) lo = xs[i]
+    if (xs[i] > hi) hi = xs[i]
+  }
+  return hi - lo
+}
+
 /** Center-x of a face in source px (`x + w/2`). */
 function faceCenterX(f: FaceBox): number {
   return f.x + f.w / 2
@@ -211,7 +245,8 @@ function clampCropX(cropX: number, sourceW: number, cropW: number): number {
 
 /**
  * Drop detector noise + outliers from `samples`:
- *  1. SIZE gate — reject faces with `max(w,h) < 30px`, or area `< 0.5%` / `> 30%`
+ *  1. SIZE gate — reject faces with `max(w,h) < MIN_FACE_DIM_FRAC * source.height`
+ *     (resolution-normalized speck floor, openclip-mnw), or area `< 0.5%` / `> 30%`
  *     of the frame (specks and foreground blobs).
  *  2. σ gate — reject faces whose center-x falls outside `mean ± 2σ` across ALL
  *     surviving faces (a stray detection far from the speaker). If that would
@@ -665,18 +700,18 @@ export function buildReframePlan(args: BuildReframePlanArgs): ReframePlan | null
   // σ-gate in filterFaceOutliers already removed jitter specks, so the raw range is a
   // faithful measure of true travel. EMA stays ONLY for the pan keyframe path below,
   // where temporal smoothing is the goal.
-  // Single-pass min/max (NOT Math.min(...spread): spreading a long sample array
-  // overflows the call stack at ~200k elements — bound the path regardless of fps).
-  let minC = rawXs[0]
-  let maxC = rawXs[0]
-  for (const c of rawXs) {
-    if (c < minC) minC = c
-    if (c > maxC) maxC = c
-  }
+  // Measure travel with a ROBUST range (review follow-up to openclip-eli): the plain
+  // raw min/max can be flipped to a false pan by a single bad detection the σ-gate let
+  // through (on a short clip the σ-band is inflated by the outlier itself). robustTravel
+  // trims the lone most-extreme sample, collapsing a spike while preserving a genuine
+  // sweep. The static resting crop centers on the MEDIAN raw center (outlier-resistant),
+  // not the mean.
+  const travel = robustTravel(rawXs)
+  const centerX = median(rawXs)
 
-  // Within the deadzone → a single STATIC crop centered on the mean RAW center.
-  if (maxC - minC <= deadzonePx) {
-    const cropX = ri(clampCropX(mean(rawXs) - cropW / 2, source.width, cropW))
+  // Within the deadzone → a single STATIC crop centered on the median RAW center.
+  if (travel <= deadzonePx) {
+    const cropX = ri(clampCropX(centerX - cropW / 2, source.width, cropW))
     return { mode: 'static', cropW, cropH, cropX }
   }
 
@@ -687,9 +722,9 @@ export function buildReframePlan(args: BuildReframePlanArgs): ReframePlan | null
     x: clampCropX(smoothed[i] - cropW / 2, source.width, cropW)
   }))
   const keyframes = reduceKeyframes(cropXPath, deadzonePx)
-  // Static fallback (jump-cut path): center on the mean RAW position (consistent with
+  // Static fallback (jump-cut path): center on the MEDIAN raw position (consistent with
   // the static branch — not the EMA-lagged mean).
-  const fallbackX = ri(clampCropX(mean(rawXs) - cropW / 2, source.width, cropW))
+  const fallbackX = ri(clampCropX(centerX - cropW / 2, source.width, cropW))
   return {
     mode: 'pan',
     cropW,

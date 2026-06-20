@@ -28,6 +28,7 @@ import { statSync, existsSync, renameSync, rmSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { ffmpegPath, ytDlpPath } from '@main/utils/paths'
+import { assertSafePathArg } from '@main/utils/safe-arg'
 import { JobError } from '@shared/jobs'
 
 // ============================================================================
@@ -309,10 +310,13 @@ export async function faststartRemux(
   if (opts.signal?.aborted) return // don't start a remux for an already-cancelled job
   const run = opts.run ?? runFfmpeg
   const tmp = `${filePath}.faststart.mp4`
+  // Option-injection guard (audit fix openclip-6l6, defense-in-depth): filePath is an
+  // app-owned yt-dlp temp path so it can't start with '-', but guard at the spawn anyway.
+  const safeIn = assertSafePathArg(filePath, 'filePath')
   try {
     const ok = await run(
       ffmpegBin,
-      ['-y', '-i', filePath, '-c', 'copy', '-movflags', '+faststart', tmp],
+      ['-y', '-i', safeIn, '-c', 'copy', '-movflags', '+faststart', tmp],
       {
         onPid: opts.onPid,
         onExit: opts.onExit,

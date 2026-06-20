@@ -434,6 +434,22 @@ describe('buildReframePlan: single-speaker STATIC vs PAN (deadzone)', () => {
     expect(plan?.mode).toBe('pan')
   })
 
+  it('STATIC despite one outlier frame the σ-gate let through (eli review follow-up)', () => {
+    // 4 frames dead-center at 960 + 1 spike at 1010. The σ-gate band is inflated by the
+    // spike itself (mean 970, 2σ ≈ ±40 → [930,1010]) so 1010 survives, and raw min/max
+    // would read travel = 50px > 28.8 deadzone → a false pan. A robust range (drop the
+    // single most-extreme sample) collapses the lone spike → correctly static.
+    const samples = [
+      sampleAt(0, [960]),
+      sampleAt(200, [960]),
+      sampleAt(400, [960]),
+      sampleAt(600, [960]),
+      sampleAt(800, [1010])
+    ]
+    const plan = buildReframePlan({ samples, source: SRC, aspect: NINE_SIXTEEN, mode: 'auto' })
+    expect(plan?.mode).toBe('static')
+  })
+
   it('PAN when the face sweeps across the frame; xExpr lerps + clamps', () => {
     const samples = [
       sampleAt(0, [300]),

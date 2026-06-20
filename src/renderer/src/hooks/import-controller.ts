@@ -196,14 +196,19 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
       const adopted = await adoptSource(projectId, filePath)
       sourcePath = adopted.path
     }
+    let committed = false
     try {
-      await runPipelineAfterAdopt(projectId, sourcePath, name, base, span, appOwned, taskId)
+      await runPipelineAfterAdopt(projectId, sourcePath, name, base, span, appOwned, taskId, () => {
+        committed = true
+      })
     } catch (err) {
       // The app-owned download was adopted into persistent media BEFORE any .ocproj was
       // saved; on a failed/cancelled import reclaim the orphan dir now rather than
       // leaving it for the next-launch sweep (audit fix openclip-e5s). Best-effort —
-      // never mask the original error.
-      if (appOwned) await reclaimMedia(projectId).catch(() => {})
+      // never mask the original error. Skip reclaim once the project is COMMITTED (live
+      // via setCurrentProject): a later failure must not delete media out from under a
+      // project the user can already see (review follow-up).
+      if (appOwned && !committed) await reclaimMedia(projectId).catch(() => {})
       throw err
     }
   }
@@ -215,7 +220,8 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     base: number,
     span: number,
     appOwned: boolean,
-    taskId: string
+    taskId: string,
+    markCommitted: () => void
   ): Promise<void> {
     const result = await runImport({
       bridge: deps.bridge,
@@ -252,6 +258,8 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     const sourceVideo = { ...result.sourceVideo, path: sourcePath, appOwned }
     const blank = deps.createBlankProject(name, sourceVideo)
     deps.store.setCurrentProject({ ...blank, id: projectId, transcript: result.transcript })
+    // The project is now LIVE/visible — past here a failure must not reclaim its media.
+    markCommitted()
     deps.ui?.setView?.('editor')
   }
 

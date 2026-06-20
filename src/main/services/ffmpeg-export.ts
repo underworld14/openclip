@@ -656,12 +656,13 @@ export function thumbnailArgs(opts: ThumbnailArgsOptions): string[] {
     '-ss',
     String(opts.atTime),
     '-i',
-    opts.sourcePath,
+    // Option-injection guard for both path args (audit fix openclip-6l6, defense-in-depth).
+    assertSafePathArg(opts.sourcePath, 'sourcePath'),
     '-vframes',
     '1',
     '-vf',
     buildVf({ aspectRatio: opts.aspectRatio }),
-    opts.outputPath
+    assertSafePathArg(opts.outputPath, 'outputPath')
   ]
 }
 

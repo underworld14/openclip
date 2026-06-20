@@ -16,8 +16,12 @@
  * the `.object().strict()` method — verified against current Zod 4 docs).
  * `z.toJSONSchema(ClipSchema)` therefore emits `additionalProperties:false`
  * with every property `required`, exactly what OpenAI strict json_schema and
- * Anthropic `zodOutputFormat` demand. Internal persistence schemas use plain
- * `z.object` (forward-compatible: tolerate unknown keys from newer versions).
+ * Anthropic `zodOutputFormat` demand. Internal persistence schemas use
+ * `z.looseObject` so they are TRULY forward-compatible: unknown keys from a NEWER
+ * app version survive a load→re-save round-trip instead of being silently STRIPPED
+ * (audit fix openclip-9uq — plain `z.object` strips unknown keys in Zod 4, which
+ * meant an older build opening a newer `.ocproj` permanently dropped every newer
+ * field on the next autosave). The AI strictObject schemas stay strict.
  */
 
 import { z } from 'zod'
@@ -54,7 +58,7 @@ import { z } from 'zod'
 // is a serialized contract-change request through the trunk owner (plan E.2).
 
 /** PRD §9.3 `WordTimestamp`. One whisper word (see derivation note above). */
-export const WordTimestamp = z.object({
+export const WordTimestamp = z.looseObject({
   word: z.string(), // trimmed entry text, e.g. "Hello" (no leading space)
   start: z.number(), // seconds, absolute (offsets.from / 1000)
   end: z.number(), // seconds, absolute (offsets.to / 1000)
@@ -63,7 +67,7 @@ export const WordTimestamp = z.object({
 export type WordTimestamp = z.infer<typeof WordTimestamp>
 
 /** PRD §9.3 `TranscriptSegment`. A sentence grouped from the word stream. */
-export const TranscriptSegment = z.object({
+export const TranscriptSegment = z.looseObject({
   id: z.string(), // stable id, e.g. "seg-0", "seg-1", …
   start: z.number(), // seconds, absolute (first word's start)
   end: z.number(), // seconds, absolute (last word's end)
@@ -78,7 +82,7 @@ export type TranscriptSegment = z.infer<typeof TranscriptSegment>
 // ============================================================================
 
 /** PRD §9.3 `CaptionStyle`. Mapped to ASS `Style:` / `force_style` at burn time. */
-export const CaptionStyle = z.object({
+export const CaptionStyle = z.looseObject({
   fontFamily: z.string(),
   fontSize: z.number(),
   fontColor: z.string(), // hex / ASS color
@@ -113,7 +117,7 @@ export type CaptionStyle = z.infer<typeof CaptionStyle>
  * A single rendered caption cue (PRD §9.3 "Caption … as in v1, unchanged").
  * Word entries drive the karaoke `\k` centisecond fill (PRD §6.4).
  */
-export const Caption = z.object({
+export const Caption = z.looseObject({
   start: z.number(), // seconds, relative to the clip
   end: z.number(), // seconds, relative to the clip
   text: z.string(),
@@ -134,7 +138,7 @@ export type ClipStatus = z.infer<typeof ClipStatus>
  * Optional so pre-Part-I `.ocproj` documents still validate (absent ⇒ only the
  * 1-10 headline `viralityScore` is shown). Each sub-score is 0-25; `total` 0-100.
  */
-export const ClipVirality = z.object({
+export const ClipVirality = z.looseObject({
   hook: z.number(),
   engagement: z.number(),
   value: z.number(),
@@ -144,7 +148,7 @@ export const ClipVirality = z.object({
 export type ClipVirality = z.infer<typeof ClipVirality>
 
 /** PRD §9.3 `Clip`. */
-export const Clip = z.object({
+export const Clip = z.looseObject({
   id: z.string(),
   startTime: z.number(), // seconds, absolute (AI-suggested span start)
   endTime: z.number(), // seconds, absolute (AI-suggested span end)
@@ -168,7 +172,7 @@ export type Clip = z.infer<typeof Clip>
 // Speaker (PRD §9.3, v0.4 — typed now, unused in MVP)
 // ============================================================================
 
-export const Speaker = z.object({
+export const Speaker = z.looseObject({
   id: z.string(),
   label: z.string(), // "Speaker A", "Speaker B", or user-renamed
   color: z.string().optional() // per-speaker caption color (v0.4)
@@ -197,7 +201,7 @@ export const ClipStyle = z.enum([
 export type ClipStyle = z.infer<typeof ClipStyle>
 
 /** Per-project generation/export settings (PRD §9.3 `Project.settings`). */
-export const ProjectSettings = z.object({
+export const ProjectSettings = z.looseObject({
   targetPlatform: TargetPlatform,
   aspectRatio: AspectRatio,
   clipStyle: ClipStyle,
@@ -219,7 +223,7 @@ export type ProjectSettings = z.infer<typeof ProjectSettings>
 // Brand template (PRD §6.8 / §9.3, v0.5 — typed now, unused in MVP)
 // ============================================================================
 
-export const BrandTemplate = z.object({
+export const BrandTemplate = z.looseObject({
   id: z.string(),
   name: z.string(),
   logoPath: z.string().optional(),
@@ -240,7 +244,7 @@ export type BrandTemplate = z.infer<typeof BrandTemplate>
 // Export history (PRD §9.3 `ExportRecord … as in v1, unchanged`)
 // ============================================================================
 
-export const ExportRecord = z.object({
+export const ExportRecord = z.looseObject({
   id: z.string(),
   clipId: z.string(),
   outputPath: z.string(),
@@ -255,13 +259,13 @@ export type ExportRecord = z.infer<typeof ExportRecord>
 // Source video metadata (PRD §9.3 `Project.sourceVideo`)
 // ============================================================================
 
-export const VideoResolution = z.object({
+export const VideoResolution = z.looseObject({
   width: z.number(),
   height: z.number()
 })
 export type VideoResolution = z.infer<typeof VideoResolution>
 
-export const SourceVideo = z.object({
+export const SourceVideo = z.looseObject({
   path: z.string(),
   duration: z.number(), // seconds
   resolution: VideoResolution,
@@ -279,7 +283,7 @@ export type SourceVideo = z.infer<typeof SourceVideo>
 // Transcript (PRD §9.3 `Project.transcript`)
 // ============================================================================
 
-export const Transcript = z.object({
+export const Transcript = z.looseObject({
   language: z.string(), // from whisper `result.language` (PRD §6.2 auto-detect)
   segments: z.array(TranscriptSegment),
   // Word stream is kept LOCAL (drives karaoke captions); never sent to the LLM
@@ -293,7 +297,7 @@ export type Transcript = z.infer<typeof Transcript>
 // Project (PRD §9.3 — the top-level .ocproj document)
 // ============================================================================
 
-export const Project = z.object({
+export const Project = z.looseObject({
   id: z.string(), // UUID
   name: z.string(),
   createdAt: z.number(), // epoch ms
@@ -314,7 +318,7 @@ export type Project = z.infer<typeof Project>
 export const AIProvider = z.enum(['openai', 'anthropic', 'google', 'ollama', 'openrouter'])
 export type AIProvider = z.infer<typeof AIProvider>
 
-export const Settings = z.object({
+export const Settings = z.looseObject({
   aiProvider: AIProvider,
   model: z.string(), // resolved current model id (PRD §4.3 — not hardcoded)
   baseUrl: z.string().optional(), // for Ollama / custom endpoints

@@ -49,6 +49,24 @@ describe('save → load round-trip', () => {
     expect(loaded).toEqual(projectFixture)
   })
 
+  it('PRESERVES unknown future-version keys on load→re-save (forward-compat, openclip-9uq)', async () => {
+    // Simulate a .ocproj written by a NEWER app build: extra keys at the top level AND
+    // inside a nested object. With plain z.object these were silently STRIPPED on load,
+    // so the next autosave permanently dropped them. z.looseObject must keep them.
+    const fromNewerBuild = {
+      ...projectFixture,
+      __futureTopLevel: 'added by a newer version',
+      settings: { ...projectFixture.settings, __futureSetting: 42 }
+    } as unknown as typeof projectFixture
+    await saveProject(dir, fromNewerBuild)
+
+    const loaded = (await loadProject(dir, projectFixture.id)) as unknown as Record<string, unknown>
+    expect(loaded.__futureTopLevel).toBe('added by a newer version')
+    expect((loaded.settings as Record<string, unknown>).__futureSetting).toBe(42)
+    // And the schema itself preserves them (not just the store).
+    expect(Project.parse(fromNewerBuild)).toMatchObject({ __futureTopLevel: 'added by a newer version' })
+  })
+
   it('creates the projects directory if it does not exist', async () => {
     const nested = join(dir, 'a', 'b', 'projects')
     expect(existsSync(nested)).toBe(false)

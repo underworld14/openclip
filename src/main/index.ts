@@ -22,8 +22,8 @@ import { join } from 'node:path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { IPCChannels } from '@shared/channels'
-import type { JobKind, JobParams } from '@shared/jobs'
 import { registerAllHandlers, type IpcContext } from './ipc'
+import { validateJobStart } from './ipc/job-start-validation'
 import {
   SidecarManager,
   createPQueueLimiterFactory,
@@ -215,35 +215,36 @@ function createWindow(): void {
  * data port (PRD §10.2).
  */
 function wireJobControlPlane(): void {
-  ipcMain.handle(
-    IPCChannels.JOB_START,
-    (event, payload: { kind: JobKind; params: JobParams[JobKind] }): { jobId: string } => {
-      const { port1, port2 } = new MessageChannelMain()
-      port1.start()
-      const eventPort: EventPort = {
-        postMessage: (value) => port1.postMessage(value),
-        close: () => port1.close(),
-        on: (ev, listener) => port1.on(ev, listener),
-        start: () => port1.start()
-      }
-      const jobId = sidecar.startJob(payload.kind, payload.params, eventPort)
-      // Transfer the peer port to the exact sender frame, tagged with the jobId
-      // so the renderer can pair the live port to the job it just started.
-      const frame = event.senderFrame
-      if (frame) {
-        frame.postMessage(IPCChannels.JOB_PORT, { jobId }, [port2])
-      } else {
-        // The sender frame was destroyed/navigated before we could transfer the port,
-        // so the renderer will NEVER receive this job's event stream (audit fix
-        // openclip-jp1 belt-and-suspenders; the renderer's acquireJobPort timeout is
-        // the primary guard). Close the orphaned port and cancel the just-started job
-        // so it doesn't run consumer-less to completion.
-        port2.close()
-        sidecar.cancel(jobId)
-      }
-      return { jobId }
+  ipcMain.handle(IPCChannels.JOB_START, (event, payload: unknown): { jobId: string } => {
+    // Validate the inbound payload at the trust boundary BEFORE allocating a port or
+    // spawning anything (audit fix openclip-qki): a malformed/hostile renderer payload is
+    // rejected with INPUT_INVALID instead of being forwarded into sidecar.startJob → spawn.
+    const { kind, params } = validateJobStart(payload)
+    const { port1, port2 } = new MessageChannelMain()
+    port1.start()
+    const eventPort: EventPort = {
+      postMessage: (value) => port1.postMessage(value),
+      close: () => port1.close(),
+      on: (ev, listener) => port1.on(ev, listener),
+      start: () => port1.start()
     }
-  )
+    const jobId = sidecar.startJob(kind, params, eventPort)
+    // Transfer the peer port to the exact sender frame, tagged with the jobId
+    // so the renderer can pair the live port to the job it just started.
+    const frame = event.senderFrame
+    if (frame) {
+      frame.postMessage(IPCChannels.JOB_PORT, { jobId }, [port2])
+    } else {
+      // The sender frame was destroyed/navigated before we could transfer the port,
+      // so the renderer will NEVER receive this job's event stream (audit fix
+      // openclip-jp1 belt-and-suspenders; the renderer's acquireJobPort timeout is
+      // the primary guard). Close the orphaned port and cancel the just-started job
+      // so it doesn't run consumer-less to completion.
+      port2.close()
+      sidecar.cancel(jobId)
+    }
+    return { jobId }
+  })
 
   ipcMain.handle(IPCChannels.JOB_CANCEL, (_event, req: { jobId: string }) => {
     sidecar.cancel(req.jobId)

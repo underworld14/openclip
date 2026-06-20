@@ -34,6 +34,8 @@ export interface ImportController {
   importUrl: (url: string) => Promise<void>
   /** Smart entry: routes to importUrl/importFile by detecting an http(s) URL. */
   importAny: (value: string) => Promise<void>
+  /** Cancel the in-flight import (download/transcribe) — openclip-2bm. */
+  cancel: () => Promise<void>
 }
 
 export function useImportController(opts: ImportControllerOptions = {}): ImportController {
@@ -101,6 +103,7 @@ export function useImportController(opts: ImportControllerOptions = {}): ImportC
     declineConsent: controller.declineConsent,
     importFile: controller.importFile,
     importUrl: controller.importUrl,
-    importAny: controller.importAny
+    importAny: controller.importAny,
+    cancel: controller.cancel
   }
 }

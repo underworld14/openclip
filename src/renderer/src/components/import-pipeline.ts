@@ -29,6 +29,8 @@ export interface ImportPipelineOptions {
   onPartial?: (partial: JobPartial['transcribe']) => void
   /** The finalized transcript (the transcribe `done` result). */
   onTranscript?: (transcript: JobResult['transcribe']) => void
+  /** The transcribe jobId, right after start, so the caller can cancel it (openclip-2bm). */
+  onStart?: (jobId: string) => void
 }
 
 export interface ImportPipelineResult {
@@ -65,6 +67,7 @@ export async function runImportPipeline(
     'transcribe',
     { projectId, wavPath, model, language },
     {
+      onStart: opts.onStart,
       // Scale the transcribe stage into the 25..100 progress band.
       onProgress: (pct, stage) => report(25 + Math.round((pct / 100) * 75), stage),
       onPartial: (data) => opts.onPartial?.(data)
@@ -85,6 +88,8 @@ export interface UrlDownloadOptions {
   url: string
   /** 0..100 download progress + stage label. */
   onProgress?: (pct: number, stage: string) => void
+  /** The url-download jobId, right after start, so the caller can cancel it (openclip-2bm). */
+  onStart?: (jobId: string) => void
 }
 
 /**
@@ -99,6 +104,7 @@ export async function runUrlDownload(opts: UrlDownloadOptions): Promise<JobResul
     'url-download',
     { url: opts.url },
     {
+      onStart: opts.onStart,
       onProgress: (pct, stage) => opts.onProgress?.(pct, stage),
       onPartial: (data) => opts.onProgress?.(data.pct, 'downloading')
     }

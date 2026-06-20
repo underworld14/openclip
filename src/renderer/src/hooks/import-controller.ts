@@ -120,6 +120,8 @@ export interface ImportController {
   importUrl(url: string): Promise<void>
   /** Smart entry: routes to importUrl/importFile by detecting an http(s) URL. */
   importAny(value: string): Promise<void>
+  /** Cancel the in-flight import's streaming job (download/transcribe) — openclip-2bm. */
+  cancel(): Promise<void>
   acceptConsent(): void
   declineConsent(): void
 }
@@ -158,6 +160,9 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     needsConsent: false
   }
   let pendingUrl: string | null = null
+  // The in-flight streaming job's id (download or transcribe), tracked so cancel() can
+  // abort it (openclip-2bm). Set on each job's onStart, cleared when the import settles.
+  let activeJobId: string | null = null
   const listeners = new Set<() => void>()
   const set = (patch: Partial<ImportControllerState>): void => {
     state = { ...state, ...patch }
@@ -237,7 +242,10 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
         deps.ui?.upsertTask?.({ jobId: taskId, progress: scaled, status: 'running' })
       },
       onPartial: (partial) => deps.store.appendTranscriptPartial(partial),
-      onTranscript: (t: JobResult['transcribe']) => deps.store.hydrateTranscript(t)
+      onTranscript: (t: JobResult['transcribe']) => deps.store.hydrateTranscript(t),
+      onStart: (jobId) => {
+        activeJobId = jobId
+      }
     })
 
     const current = deps.store.getCurrentProject()
@@ -280,6 +288,7 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     } catch (e) {
       set({ error: asMessage(e) })
     } finally {
+      activeJobId = null
       set({ busy: false })
       deps.ui?.clearTask?.(taskId)
     }
@@ -305,13 +314,17 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
       const dl = await runUrl({
         bridge: deps.bridge,
         url: u,
-        onProgress: (p) => set({ pct: Math.round(p * 0.2), stage: 'downloading' }) // 0..20% band
+        onProgress: (p) => set({ pct: Math.round(p * 0.2), stage: 'downloading' }), // 0..20% band
+        onStart: (jobId) => {
+          activeJobId = jobId
+        }
       })
       await runPipeline(dl.filePath, dl.title ?? 'Imported video', 20, 80, true, taskId) // URL import: app-owned download
       set({ stage: 'done' })
     } catch (e) {
       set({ error: asMessage(e) })
     } finally {
+      activeJobId = null
       set({ busy: false })
       deps.ui?.clearTask?.(taskId)
     }
@@ -334,6 +347,23 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     return isUrl(value) ? importUrl(value) : importFile(value)
   }
 
+  /**
+   * Cancel the in-flight import (openclip-2bm): abort the active streaming job (download
+   * or transcribe) via the bridge. The job emits a terminal CANCELLED error, so the
+   * importUrl/importFile promise rejects and its finally clears busy + reclaims any
+   * adopted media. No-op when nothing is running. Best-effort — a cancel IPC failure is
+   * swallowed so the UI can't get wedged.
+   */
+  async function cancel(): Promise<void> {
+    const jobId = activeJobId
+    if (!jobId) return
+    try {
+      await deps.bridge.jobs.cancel(jobId)
+    } catch {
+      /* best-effort — the job may have already settled */
+    }
+  }
+
   return {
     getState: () => state,
     subscribe: (listener) => {
@@ -345,6 +375,7 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     importFile,
     importUrl,
     importAny,
+    cancel,
     acceptConsent,
     declineConsent
   }

@@ -94,9 +94,20 @@ export function ImportPanel({ onNeedModel }: ImportPanelProps = {}): React.JSX.E
       {ctl.busy && (
         <div className="flex flex-col gap-1">
           <Progress value={ctl.pct} data-testid="import-progress" />
-          <span className="text-xs text-muted-foreground" data-testid="import-stage">
-            {ctl.stage} · {ctl.pct}%
-          </span>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-muted-foreground" data-testid="import-stage">
+              {ctl.stage} · {ctl.pct}%
+            </span>
+            {/* Cancel the in-flight download/transcribe (openclip-2bm). */}
+            <Button
+              variant="ghost"
+              size="sm"
+              data-testid="import-cancel"
+              onClick={() => void ctl.cancel()}
+            >
+              Cancel
+            </Button>
+          </div>
         </div>
       )}
 

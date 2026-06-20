@@ -58,6 +58,7 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
   runUrlDownload: ReturnType<typeof vi.fn>
   adoptSource: ReturnType<typeof vi.fn>
   reclaimMedia: ReturnType<typeof vi.fn>
+  cancelJob: ReturnType<typeof vi.fn>
   onNeedModel: ReturnType<typeof vi.fn>
   pcts: number[]
   storage: ReturnType<typeof fakeStorage>
@@ -106,10 +107,12 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
   }))
 
   const reclaimMedia = vi.fn(async (): Promise<void> => {})
+  const cancelJob = vi.fn(async (): Promise<void> => {})
 
   const ctl = createImportController({
     bridge: {
-      model: { status: async () => [{ model: 'base', installed: true }] }
+      model: { status: async () => [{ model: 'base', installed: true }] },
+      jobs: { cancel: cancelJob }
     } as unknown as ImportControllerDeps['bridge'],
     store,
     createBlankProject: (name, sv) => ({ ...fakeProject('blank-internal', name), sourceVideo: sv }),
@@ -134,6 +137,7 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
     runUrlDownload,
     adoptSource,
     reclaimMedia,
+    cancelJob,
     onNeedModel,
     pcts,
     storage
@@ -312,6 +316,35 @@ describe('import-controller: managed media adoption (Part H)', () => {
     })
     await ctl.importFile('/Users/me/Movies/original.mp4')
     expect(reclaimMedia).not.toHaveBeenCalled()
+  })
+
+  it('cancel() aborts the in-flight job via the bridge (openclip-2bm)', async () => {
+    let release: (v: { filePath: string; title: string; bytes: number }) => void = () => {}
+    const runUrlDownload = vi.fn((o: { onStart?: (id: string) => void }) => {
+      o.onStart?.('DL-JOB-1') // the controller records this as the active job
+      return new Promise((r) => {
+        release = r as typeof release
+      })
+    })
+    const { ctl, cancelJob } = build({
+      storage: fakeStorage({ [CONSENT_KEY]: '1' }),
+      runUrlDownload: runUrlDownload as unknown as ImportControllerDeps['runUrlDownload']
+    })
+    const importing = ctl.importUrl('https://youtu.be/x')
+    await Promise.resolve() // let ensureModel + onStart fire
+    await Promise.resolve()
+    expect(ctl.getState().busy).toBe(true)
+    await ctl.cancel()
+    expect(cancelJob).toHaveBeenCalledWith('DL-JOB-1')
+    // Let the (now-irrelevant) download settle so the import promise resolves.
+    release({ filePath: '/dl/v.mp4', title: 't', bytes: 1 })
+    await importing
+  })
+
+  it('cancel() is a no-op when nothing is importing (openclip-2bm)', async () => {
+    const { ctl, cancelJob } = build()
+    await ctl.cancel()
+    expect(cancelJob).not.toHaveBeenCalled()
   })
 
   it('does NOT reclaim once the project is committed, even if a later step throws (e5s review)', async () => {

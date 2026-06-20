@@ -212,9 +212,21 @@ export async function downloadModel(opts: DownloadModelOptions): Promise<Downloa
     throw err
   })
 
-  // Verify the SHA before declaring success.
+  // Verify the SHA before declaring success. An UNVERIFIABLE download — no explicit
+  // expectedSha256, no `x-linked-etag` from HF, and the model isn't pinned in
+  // KNOWN_SHA256 — must be REFUSED, not kept (audit fix openclip-t1b). Previously the
+  // `if (expected && …)` guard silently skipped verification when `expected` was
+  // undefined, so a corrupt/tampered multi-GB model could land on disk whenever HF
+  // (or a CDN/proxy) omitted the etag header. Integrity is byte-level here, never a
+  // header-only signal.
   const actual = hash.digest('hex')
-  if (expected && actual !== expected) {
+  if (!expected) {
+    cleanup()
+    throw new Error(
+      `model ${opts.model}: unable to verify integrity — no expected SHA256, no x-linked-etag, and not in KNOWN_SHA256. Refusing to keep an unverified download.`
+    )
+  }
+  if (actual !== expected) {
     cleanup()
     throw new Error(
       `model download SHA256 mismatch for ${opts.model}: expected ${expected}, got ${actual}`

@@ -21,7 +21,19 @@ import {
   type OpenClipBridge
 } from '@renderer/components/import-pipeline'
 
-/** localStorage key gating the one-time yt-dlp/TOS consent (PRD §20.4). */
+/**
+ * localStorage key gating the one-time yt-dlp/TOS consent (PRD §20.4).
+ *
+ * SCOPE (audit note openclip-1o1): this is a RENDERER-SIDE UX / legal-acknowledgement
+ * gate, NOT a main-process-enforced security boundary. It exists so the user
+ * affirmatively accepts the yt-dlp/site-TOS terms once before their first URL
+ * download; a buggy/compromised renderer (or a direct `jobs.start('url-download')`)
+ * could reach the main runner without it. That is acceptable because bypassing
+ * consent has no security impact — it only skips a legal acknowledgement, not an
+ * attack-surface check. The real security boundary for URL imports is `assertSafeUrl`
+ * in the MAIN process (validated regardless of the renderer). Do not mistake this
+ * flag for an enforced gate; if it must become one, persist + check it in main.
+ */
 export const CONSENT_KEY = 'openclip:url-consent'
 const DEFAULT_MODEL: WhisperModelSize = 'base'
 

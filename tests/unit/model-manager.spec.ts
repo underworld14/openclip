@@ -111,6 +111,35 @@ describe('model-manager: downloadModel (injected network)', () => {
     expect(existsSync(dest)).toBe(false)
   })
 
+  it('refuses to keep an UNVERIFIABLE model: no expected SHA, no etag, not in KNOWN_SHA256 (openclip-t1b)', async () => {
+    const bytes = Buffer.from('unverifiable multi-GB-ish model bytes')
+    const dest = join(dir, 'ggml-base.bin')
+    await expect(
+      downloadModel({
+        model: 'base', // NOT in KNOWN_SHA256 (only `tiny` is pinned)
+        destPath: dest,
+        // no expectedSha256, and fakeFetch with no etag ⇒ nothing to verify against
+        fetchImpl: fakeFetch(bytes, undefined)
+      })
+    ).rejects.toThrow(/unable to verify|cannot verify|integrity/i)
+    // The unverified download must NOT be left on disk.
+    expect(existsSync(dest)).toBe(false)
+  })
+
+  it('still rejects a WRONG payload for a pinned model via mismatch, not the unverifiable path', async () => {
+    // `tiny` is pinned in KNOWN_SHA256; a wrong payload fails by mismatch (proving
+    // the t1b fix does not over-reject the pinned-hash verification path).
+    const dest = join(dir, 'ggml-tiny.bin')
+    await expect(
+      downloadModel({
+        model: 'tiny',
+        destPath: dest,
+        fetchImpl: fakeFetch(Buffer.from('not the real tiny model'), undefined)
+      })
+    ).rejects.toThrow(/mismatch/i)
+    expect(existsSync(dest)).toBe(false)
+  })
+
   it('rejects when the HTTP status is not ok (e.g. ggml-org 401)', async () => {
     const dest = join(dir, 'ggml-tiny.bin')
     const failing = (async () =>

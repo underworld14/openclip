@@ -14,8 +14,16 @@ import {
   TEMP_NAMES,
   platArch
 } from '@main/utils/paths'
-import { KeyVault, type SafeStorageLike, type SecretStoreBackend } from '@main/utils/security'
+import {
+  KeyVault,
+  fileBackend,
+  type SafeStorageLike,
+  type SecretStoreBackend
+} from '@main/utils/security'
 import { parseFfmpegProgress, progressPct } from '@main/services/ffmpeg-core'
+import { mkdtempSync, statSync, writeFileSync, chmodSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 describe('paths: pure temp-file lifecycle helpers (PRD §17)', () => {
   const base = '/tmp'
@@ -53,6 +61,34 @@ function memBackend(): SecretStoreBackend {
     }
   }
 }
+
+describe('security: fileBackend writes secrets.json owner-only (audit fix openclip-g7f)', () => {
+  it('creates the secrets file with mode 0o600 (no group/other read)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oc-secrets-'))
+    try {
+      const path = join(dir, 'secrets.json')
+      fileBackend(path).write({ openai: 'enc:abc' })
+      expect(statSync(path).mode & 0o777).toBe(0o600)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('tightens an already-existing world-readable secrets file on the next write', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oc-secrets-'))
+    try {
+      const path = join(dir, 'secrets.json')
+      // Simulate a legacy file written before the fix (0o644, group/other readable).
+      writeFileSync(path, '{}', 'utf8')
+      chmodSync(path, 0o644)
+      expect(statSync(path).mode & 0o777).toBe(0o644)
+      fileBackend(path).write({ anthropic: 'enc:xyz' })
+      expect(statSync(path).mode & 0o777).toBe(0o600)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
 
 describe('security: KeyVault (raw key never crosses IPC — PRD §12.2)', () => {
   it('persists encrypted, exposes only {provider,hasKey,last4}', () => {

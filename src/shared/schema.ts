@@ -164,7 +164,13 @@ export const Clip = z.looseObject({
   thumbnailPath: z.string().optional(),
   // Part I — optional 4-D breakdown + opening-hook type (absent on old projects).
   virality: ClipVirality.optional(),
-  hookType: z.string().optional()
+  hookType: z.string().optional(),
+  // AI-suggested social post metadata carried from DetectedClip (audit fix
+  // openclip-5cd): the model produces these per clip, so persist them instead of
+  // discarding — a social caption + hashtags for the user when posting the clip.
+  // Optional ⇒ absent on old projects and on clips created before detection.
+  suggestedCaption: z.string().optional(),
+  hashtags: z.array(z.string()).optional()
 })
 export type Clip = z.infer<typeof Clip>
 

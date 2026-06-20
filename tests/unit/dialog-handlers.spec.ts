@@ -64,6 +64,19 @@ describe('SHOW_DIRECTORY_DIALOG handler (batch output folder)', () => {
   })
 })
 
+describe('CHECK_UPDATE handler (audit fix openclip-4qr — was an unhandled channel)', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  it('registers a system:check-update handler so the derived bridge method does not reject', async () => {
+    const { ctx, handlers } = makeCtx()
+    registerVideoHandlers(ctx)
+    const h = handlers.get(IPCChannels.CHECK_UPDATE)
+    expect(h).toBeTruthy() // previously absent → "No handler registered" at runtime
+    const res = (await h!({}, undefined)) as { updateAvailable: boolean }
+    expect(res).toEqual({ updateAvailable: false }) // honest stub until electron-updater (openclip-e5w)
+  })
+})
+
 describe('SHOW_IMAGE_DIALOG handler (brand logo)', () => {
   beforeEach(() => showOpenDialog.mockReset())
   afterEach(() => vi.clearAllMocks())

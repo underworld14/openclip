@@ -120,6 +120,18 @@ export function registerVideoHandlers(ctx: IpcContext): void {
     }
   )
 
+  // ── System: check for updates (PRD §4.1) ─────────────────────────────────
+  // The bridge derives `window.openclip.system.checkUpdate()` from CHECK_UPDATE, so
+  // a missing handler made it reject with "No handler registered" at runtime (audit
+  // fix openclip-4qr). electron-updater is not wired yet (tracked by openclip-e5w),
+  // so this is an honest stub that reports no update rather than an unhandled reject.
+  ctx.ipcMain.handle(
+    IPCChannels.CHECK_UPDATE,
+    async (): Promise<{ updateAvailable: boolean; version?: string }> => {
+      return { updateAvailable: false }
+    }
+  )
+
   // ── System: open / reveal folder (PRD §10.1) ─────────────────────────────
   // If `path` is a directory, open it; otherwise reveal the file in its folder
   // (the export UX hands the output FILE path — "open folder" reveals the clip).

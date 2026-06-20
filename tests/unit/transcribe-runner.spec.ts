@@ -86,6 +86,39 @@ describe('transcribe-runner: streams words/segments then a contract-valid done',
   })
 })
 
+describe('transcribe-runner: coalesces per-word partials (openclip-1zf)', () => {
+  it('batches words so partial events are far fewer than the word count', async () => {
+    const ctx = { signal: new AbortController().signal, trackPid: () => {}, jobId: 'jB' }
+    const batchSizes: number[] = []
+    const emit = {
+      progress: () => {},
+      partial: (p: { words: unknown[] }) => batchSizes.push(p.words.length),
+      done: () => {},
+      error: () => {}
+    } as unknown as Parameters<ReturnType<typeof createTranscribeRunner>>[1]
+    const runner = createTranscribeRunner({
+      resolveModelPath: () => '/m.bin',
+      isModelInstalled: () => true,
+      runWhisper: async (o) => {
+        // 60 words, NONE ending a sentence (no terminal punctuation) → the only flush
+        // trigger is the word-count batch, not sentence-close.
+        for (let i = 0; i < 60; i++) {
+          o.onWord?.({ word: `w${i}`, start: i, end: i + 0.5, confidence: 0 })
+        }
+        return {
+          language: 'en',
+          words: transcriptFixture.words,
+          segments: transcriptFixture.segments
+        }
+      }
+    })
+    await runner({ projectId: 'p1', wavPath: '/tmp/a.wav', model: 'base' }, emit, ctx)
+    // Heavily coalesced (was one partial per word → 60), and a batch carried >1 word.
+    expect(batchSizes.length).toBeLessThanOrEqual(10)
+    expect(Math.max(...batchSizes)).toBeGreaterThan(1)
+  })
+})
+
 describe('transcribe-runner: missing model surfaces a typed input error', () => {
   it('throws when the model is not installed (no silent hang)', async () => {
     const runner = createTranscribeRunner({

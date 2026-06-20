@@ -100,6 +100,21 @@ export function createTranscribeRunner(deps: TranscribeRunnerDeps = {}): JobRunn
       return closed ? [{ ...closed, id: `seg-live-${liveSegSeq++}` }] : []
     }
 
+    // Coalesce per-word partials (audit fix openclip-1zf): whisper emits one word per
+    // stdout line, so a 60-min talk is ~10k words. Emitting one `partial` per word was
+    // ~10k IPC messages and ~10k Zustand notifications, each appending to the renderer's
+    // growing word/segment arrays via spread — quadratic. Buffer words and flush as ONE
+    // partial when a sentence closes (so segments stream promptly) OR the buffer reaches
+    // WORD_BATCH (so a long unpunctuated stretch still streams). Any tail left when the
+    // run ends is superseded by the authoritative `done` transcript, so it needn't flush.
+    const WORD_BATCH = 25
+    let wordBuf: WordTimestamp[] = []
+    const flushWords = (segments: TranscriptSegment[]): void => {
+      if (wordBuf.length === 0 && segments.length === 0) return
+      emit.partial({ words: wordBuf, segments })
+      wordBuf = []
+    }
+
     // Whisper writes `<outBase>.json` next to the WAV (inside the content-addressed
     // `<projectId>/cache/`). That dir is intentionally preserved by the launch-time
     // temp sweep, so the JSON has no backstop — reclaim it in a `finally` whether the
@@ -116,8 +131,11 @@ export function createTranscribeRunner(deps: TranscribeRunnerDeps = {}): JobRunn
         onExit: (pid) => ctx.untrackPid?.(pid),
         onProgress: (pct) => emit.progress(pct, 'transcribing'),
         onWord: (word) => {
+          wordBuf.push(word)
           const segments = closeSentenceIfDone(word)
-          emit.partial({ words: [word], segments })
+          // Flush on a closed sentence (segment ready) or a full word batch; otherwise
+          // keep buffering so we don't emit a partial per word (openclip-1zf).
+          if (segments.length > 0 || wordBuf.length >= WORD_BATCH) flushWords(segments)
         }
       })
 

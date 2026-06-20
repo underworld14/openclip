@@ -27,6 +27,12 @@ import { cacheDirFor } from '@main/utils/paths'
 /**
  * The verified ffmpeg argv for 16kHz mono PCM extraction. `-progress pipe:2
  * -nostats` makes ffmpeg-core's stderr parser emit progress snapshots.
+ *
+ * `-f wav` is EXPLICIT (not inferred from the output extension): the atomic-cache
+ * write (audit fix openclip-2bg) routes the real encode to a `.tmp` path, and
+ * without `-f` ffmpeg would fail to choose a muxer for `.tmp` (exit 234). Pinning
+ * the muxer decouples extraction from the temp filename. (regression guard for the
+ * review finding on openclip-2bg.)
  */
 export function audioExtractArgs(sourcePath: string, wavPath: string): string[] {
   return [
@@ -41,6 +47,8 @@ export function audioExtractArgs(sourcePath: string, wavPath: string): string[] 
     '16000',
     '-ac',
     '1',
+    '-f',
+    'wav',
     '-progress',
     'pipe:2',
     '-nostats',

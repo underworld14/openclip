@@ -558,8 +558,11 @@ export function exportClipArgsSplit(opts: ExportArgsOptions): string[] {
   // Each tile fills the top/bottom half of the CHOSEN aspect's output (audit fix
   // openclip-omd): full output width × half its height, vstacked → the full output
   // size. Previously hard-coded 1080×960 (9:16) so a 4:5/1:1/16:9 split silently
-  // produced a 9:16 file with wrong reported dims. All output heights are even, so
-  // TILE_H = height/2 is integral and 2× sums back to the exact output height.
+  // produced a 9:16 file with wrong reported dims. Every output height is even, so
+  // TILE_H = height/2 is integral and 2× sums back to the exact output height; the
+  // ENCODED vstack frame is even on both axes (required by yuv420p) even where a
+  // tile is odd (4:5 → 1080×675 tiles → an even 1080×1350) — intermediate filter
+  // tiles aren't encoded, so their odd height is harmless.
   const { width: TILE_W, height: outH } = outputDimensions(opts.aspectRatio)
   const TILE_H = outH / 2
   const duration = opts.endTime - opts.startTime
@@ -694,7 +697,10 @@ export async function exportClip(opts: ExportClipOptions): Promise<ExportClipRes
   // truncated half-written clip and the final file appears atomically. Same-dir temp
   // keeps the rename atomic (no cross-filesystem copy).
   const finalOut = opts.outputPath
-  const tmpOut = join(dirname(finalOut), `.${basename(finalOut)}.${randomUUID()}.part.mp4`)
+  // Cap the temp stem so a near-255-char chosen filename can't push the `.part.mp4`
+  // temp over ENAMETOOLONG; the random suffix still makes it unique + collision-free.
+  const tmpStem = basename(finalOut).slice(0, 200)
+  const tmpOut = join(dirname(finalOut), `.${tmpStem}.${randomUUID()}.part.mp4`)
   const argvOpts: ExportClipOptions = { ...opts, outputPath: tmpOut }
 
   // Jump-cut path (Part I.4): only when keep ranges actually drop something —

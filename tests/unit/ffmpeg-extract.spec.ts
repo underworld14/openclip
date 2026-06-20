@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { audioExtractArgs, wavCacheKey, extractAudio } from '@main/services/ffmpeg-extract'
 
 describe('ffmpeg-extract: verified 16kHz mono WAV argv (PRD §6.1)', () => {
-  it('builds -vn -acodec pcm_s16le -ar 16000 -ac 1 with -progress on stderr', () => {
+  it('builds -vn -acodec pcm_s16le -ar 16000 -ac 1 -f wav with -progress on stderr', () => {
     const args = audioExtractArgs('/in/video.mp4', '/tmp/job/audio.16k.wav')
     expect(args).toEqual([
       '-hide_banner',
@@ -27,11 +27,21 @@ describe('ffmpeg-extract: verified 16kHz mono WAV argv (PRD §6.1)', () => {
       '16000',
       '-ac',
       '1',
+      '-f',
+      'wav',
       '-progress',
       'pipe:2',
       '-nostats',
       '/tmp/job/audio.16k.wav'
     ])
+  })
+
+  it('pins -f wav explicitly so a .tmp atomic-write path still muxes (openclip-2bg regression)', () => {
+    // The cache write encodes to a `.tmp` sibling first; without -f, ffmpeg infers
+    // the muxer from the extension and fails (exit 234) on `.tmp`. -f wav decouples
+    // the muxer from the output filename.
+    const args = audioExtractArgs('/in/v.mp4', '/c/.deadbeef.tmp')
+    expect(args.slice(args.indexOf('-f'), args.indexOf('-f') + 2)).toEqual(['-f', 'wav'])
   })
 })
 

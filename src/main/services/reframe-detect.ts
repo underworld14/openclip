@@ -654,6 +654,11 @@ async function* streamFfmpegStdout(opts: {
     child.on('error', reject)
     child.on('close', (code) => resolve(code))
   })
+  // Mark `exit` observed so a spawn-failure rejection can't surface as an UNHANDLED
+  // rejection (review follow-up to openclip-l41): if `child.stdout` errors, the for-await
+  // below throws and propagates out before `await exit` is reached, leaving the original
+  // promise's rejection unawaited. `await exit` (happy path only) is unaffected.
+  void exit.catch(() => {})
   try {
     if (child.stdout) {
       for await (const chunk of child.stdout as AsyncIterable<Buffer>) {
@@ -665,6 +670,11 @@ async function* streamFfmpegStdout(opts: {
     if (code !== 0) throw new Error(`ffmpeg exited with code ${code}\n${stderr.slice(-2000)}`)
   } finally {
     opts.signal?.removeEventListener('abort', onAbort)
+    // Tear the child down on ANY early exit — not just abort (review follow-up to
+    // openclip-l41): if the consumer (detectFromFrameChunks → YuNet) throws mid-stream, the
+    // generator's return() runs this finally; without a kill the ffmpeg child is orphaned
+    // (the reframe spawns aren't PID-tracked). kill() on an already-exited child is a no-op.
+    if (!child.killed) child.kill('SIGKILL')
   }
 }
 

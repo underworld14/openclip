@@ -162,6 +162,25 @@ describe('buildKaraokeLine — EXACT {\\k<cs>} cue strings (golden)', () => {
     expect(endSec).toBeCloseTo(0.6, 6)
   })
 
+  it('the \\k cue sum equals the line duration in cs — no accumulated drift (openclip-a9z)', () => {
+    // Three contiguous 0.125s words (12.5cs each). Rounding EACH independently gives
+    // 13+13+13 = 39cs, but the line is 0.375s = round(37.5) = 38cs — a 1cs drift.
+    // The cumulative-offset-difference cues must sum to EXACTLY 38.
+    const scoped = scopeWordsToClip(
+      [
+        { word: 'aa', start: 0.0, end: 0.125, confidence: 1 },
+        { word: 'bb', start: 0.125, end: 0.25, confidence: 1 },
+        { word: 'cc', start: 0.25, end: 0.375, confidence: 1 }
+      ],
+      0,
+      1
+    )
+    const { text, startSec, endSec } = buildKaraokeLine(scoped)
+    const sum = [...text.matchAll(/\\k(\d+)/g)].reduce((n, m) => n + Number(m[1]), 0)
+    expect(sum).toBe(toCentiseconds(endSec - startSec))
+    expect(sum).toBe(38) // not the drifted 39
+  })
+
   it('no gap syllable when words are contiguous; first word has no leading space', () => {
     const scoped = scopeWordsToClip(
       [

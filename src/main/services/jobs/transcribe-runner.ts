@@ -19,6 +19,7 @@
  * terminal JSON parse in `runWhisper` (the `done` result).
  */
 
+import { rmSync } from 'node:fs'
 import type { TranscriptSegment, WordTimestamp } from '@shared/schema'
 import type { JobResult, JobParams, WhisperModelSize } from '@shared/jobs'
 import type { JobRunner, JobEmitter, JobRunnerContext } from '@main/services/sidecar-manager'
@@ -39,6 +40,23 @@ export interface TranscribeRunnerDeps {
   isModelInstalled?: (model: WhisperModelSize) => boolean
   /** The whisper spawn driver (injected for tests). */
   runWhisper?: (opts: RunWhisperOptions) => Promise<ParsedTranscript>
+  /**
+   * Reclaim the whisper `<outBase>.json` scratch file (audit fix openclip-5ji/qgr
+   * — injected for tests). Default: best-effort `rmSync(${outBase}.json, {force})`.
+   * The JSON is written next to the content-addressed WAV under `<projectId>/cache/`,
+   * which the launch-time temp sweep deliberately PRESERVES — so without this finally
+   * the per-transcribe JSON would accumulate unbounded. Never throws.
+   */
+  removeOutput?: (outBase: string) => void
+}
+
+/** Best-effort removal of whisper's `<outBase>.json` scratch — never throws (audit fix openclip-5ji/qgr). */
+function defaultRemoveOutput(outBase: string): void {
+  try {
+    rmSync(`${outBase}.json`, { force: true })
+  } catch {
+    /* never let scratch cleanup fail the job */
+  }
 }
 
 // ============================================================================
@@ -54,6 +72,7 @@ export function createTranscribeRunner(deps: TranscribeRunnerDeps = {}): JobRunn
   const resolveModelPath = deps.resolveModelPath ?? modelFilePath
   const isModelInstalled = deps.isModelInstalled ?? defaultIsModelInstalled
   const whisper = deps.runWhisper ?? runWhisper
+  const removeOutput = deps.removeOutput ?? defaultRemoveOutput
 
   return async (
     params: JobParams['transcribe'],
@@ -81,27 +100,36 @@ export function createTranscribeRunner(deps: TranscribeRunnerDeps = {}): JobRunn
       return closed ? [{ ...closed, id: `seg-live-${liveSegSeq++}` }] : []
     }
 
-    const parsed = await whisper({
-      model: resolveModelPath(params.model),
-      wavPath: params.wavPath,
-      outBase: tempOutBase(ctx.jobId, params.wavPath),
-      language: params.language,
-      signal: ctx.signal,
-      onSpawn: (pid) => ctx.trackPid(pid),
-      onProgress: (pct) => emit.progress(pct, 'transcribing'),
-      onWord: (word) => {
-        const segments = closeSentenceIfDone(word)
-        emit.partial({ words: [word], segments })
-      }
-    })
+    // Whisper writes `<outBase>.json` next to the WAV (inside the content-addressed
+    // `<projectId>/cache/`). That dir is intentionally preserved by the launch-time
+    // temp sweep, so the JSON has no backstop — reclaim it in a `finally` whether the
+    // run succeeds, throws, or is cancelled (audit fix openclip-5ji/qgr).
+    const outBase = tempOutBase(ctx.jobId, params.wavPath)
+    try {
+      const parsed = await whisper({
+        model: resolveModelPath(params.model),
+        wavPath: params.wavPath,
+        outBase,
+        language: params.language,
+        signal: ctx.signal,
+        onSpawn: (pid) => ctx.trackPid(pid),
+        onProgress: (pct) => emit.progress(pct, 'transcribing'),
+        onWord: (word) => {
+          const segments = closeSentenceIfDone(word)
+          emit.partial({ words: [word], segments })
+        }
+      })
 
-    emit.progress(100, 'transcribing')
-    // An explicitly requested language is authoritative over whisper's detected/
-    // omitted label (Part I): the user chose it AND it was passed as `-l`, so the
-    // transcript is in that language regardless of what the JSON reports.
-    const requested = params.language?.trim()
-    const language = requested ? requested : parsed.language
-    return { language, segments: parsed.segments, words: parsed.words }
+      emit.progress(100, 'transcribing')
+      // An explicitly requested language is authoritative over whisper's detected/
+      // omitted label (Part I): the user chose it AND it was passed as `-l`, so the
+      // transcript is in that language regardless of what the JSON reports.
+      const requested = params.language?.trim()
+      const language = requested ? requested : parsed.language
+      return { language, segments: parsed.segments, words: parsed.words }
+    } finally {
+      removeOutput(outBase)
+    }
   }
 }
 

@@ -8,6 +8,9 @@
 
 import { describe, expect, it } from 'vitest'
 import { MessageChannel } from 'node:worker_threads'
+import { mkdtempSync, writeFileSync, existsSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { SidecarManager, type EventPort } from '@main/services/sidecar-manager'
 import { createTranscribeRunner } from '@main/services/jobs/transcribe-runner'
 import { jobEvents, type MessagePortLike } from '@renderer/hooks/useJob'
@@ -105,6 +108,62 @@ describe('transcribe-runner: missing model surfaces a typed input error', () => 
         jobId: 'j1'
       })
     ).rejects.toThrow(/model.*not installed|not installed/i)
+  })
+})
+
+describe('transcribe-runner: reclaims its <base>.json scratch (audit fix openclip-5ji/qgr)', () => {
+  const ctx = { signal: new AbortController().signal, trackPid: () => {}, jobId: 'jX' }
+  const emit = { progress: () => {}, partial: () => {}, done: () => {}, error: () => {} }
+
+  it('removes the whisper <outBase>.json after a successful run', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oc-transcribe-'))
+    let writtenJson = ''
+    const runner = createTranscribeRunner({
+      resolveModelPath: () => '/m.bin',
+      isModelInstalled: () => true,
+      runWhisper: async (o) => {
+        writtenJson = `${o.outBase}.json`
+        writeFileSync(writtenJson, '{}')
+        return {
+          language: 'en',
+          words: transcriptFixture.words,
+          segments: transcriptFixture.segments
+        }
+      }
+    })
+    try {
+      await runner(
+        { projectId: 'p1', wavPath: join(dir, 'audio.16k.wav'), model: 'base' },
+        emit,
+        ctx
+      )
+      expect(writtenJson).not.toBe('')
+      expect(existsSync(writtenJson)).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('removes the <outBase>.json even when whisper throws (no leaked scratch)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oc-transcribe-'))
+    let writtenJson = ''
+    const runner = createTranscribeRunner({
+      resolveModelPath: () => '/m.bin',
+      isModelInstalled: () => true,
+      runWhisper: async (o) => {
+        writtenJson = `${o.outBase}.json`
+        writeFileSync(writtenJson, '{}')
+        throw new Error('whisper boom')
+      }
+    })
+    try {
+      await expect(
+        runner({ projectId: 'p1', wavPath: join(dir, 'audio.16k.wav'), model: 'base' }, emit, ctx)
+      ).rejects.toThrow(/boom/)
+      expect(existsSync(writtenJson)).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

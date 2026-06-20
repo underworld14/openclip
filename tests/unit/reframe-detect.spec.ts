@@ -315,6 +315,30 @@ describe('detectReframe', () => {
     expect(res.motion).toBeUndefined()
   })
 
+  it('does NOT dispose an INJECTED detector — the caller owns it (audit fix openclip-y3h)', async () => {
+    // y3h disposes the WASM session ONLY for the DEFAULT detector it creates itself;
+    // a caller-injected detector must be left intact (its lifecycle is the caller's).
+    const stdout = Buffer.alloc(FRAME_BYTES)
+    const run = vi.fn<ReframeRunner>(async () => ({ stdout, stderr: '' }))
+    const dispose = vi.fn(async () => {})
+    const detector = Object.assign(
+      vi.fn((): FaceBox[] => []),
+      { dispose }
+    )
+    await detectReframe({
+      sourcePath: '/src/in.mp4',
+      startTime: 0,
+      endTime: 1,
+      sampleFps: 1,
+      source: { width: 100, height: 100 },
+      modelSize: SIZE,
+      run,
+      detector
+    })
+    expect(detector).toHaveBeenCalled()
+    expect(dispose).not.toHaveBeenCalled()
+  })
+
   it('runs the motion pass and returns a MotionTimeline when motionRois are supplied', async () => {
     const stdout = Buffer.alloc(FRAME_BYTES) // one frame
     // Real ffmpeg INTERLEAVES the two sinks per frame (left N then right N), each

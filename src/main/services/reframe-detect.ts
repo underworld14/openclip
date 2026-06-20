@@ -425,38 +425,46 @@ export async function detectReframe(opts: DetectReframeOptions): Promise<DetectR
     opts.run ??
     ((a) => defaultRunFfmpegCaptureStdout({ args: a.args, binPath: a.binPath, signal: a.signal }))
   const detector = opts.detector ?? defaultYuNetDetector(opts.source, modelSize)
+  // Dispose ONLY a detector we created ourselves (audit fix openclip-y3h): the default
+  // YuNet detector lazily opens an onnxruntime-web WASM InferenceSession; without a
+  // deterministic release it lived until the closure was GC'd, so each reframed export
+  // leaked a fresh WASM session. An INJECTED detector is owned by the caller.
+  const ownDetector = !opts.detector
+  try {
+    // Pass 1 — sample raw frames and detect faces.
+    const sampleArgv = frameSampleArgs(opts.sourcePath, opts.startTime, dur, sampleFps, modelSize)
+    const { stdout } = await run({ args: sampleArgv, binPath: opts.binPath, signal: opts.signal })
+    const frameBytes = modelSize * modelSize * 3
+    const buf = stdout ?? Buffer.alloc(0)
+    const frameCount = Math.floor(buf.length / frameBytes)
+    const samples: SampleFrame[] = []
+    for (let i = 0; i < frameCount; i++) {
+      if (opts.signal?.aborted) throw new Error('reframe detection aborted')
+      const frame = buf.subarray(i * frameBytes, (i + 1) * frameBytes)
+      const faces = await detector(frame, modelSize, modelSize)
+      samples.push({
+        timeMs: (opts.startTime + i / sampleFps) * 1000,
+        faces
+      })
+    }
 
-  // Pass 1 — sample raw frames and detect faces.
-  const sampleArgv = frameSampleArgs(opts.sourcePath, opts.startTime, dur, sampleFps, modelSize)
-  const { stdout } = await run({ args: sampleArgv, binPath: opts.binPath, signal: opts.signal })
-  const frameBytes = modelSize * modelSize * 3
-  const buf = stdout ?? Buffer.alloc(0)
-  const frameCount = Math.floor(buf.length / frameBytes)
-  const samples: SampleFrame[] = []
-  for (let i = 0; i < frameCount; i++) {
-    if (opts.signal?.aborted) throw new Error('reframe detection aborted')
-    const frame = buf.subarray(i * frameBytes, (i + 1) * frameBytes)
-    const faces = await detector(frame, modelSize, modelSize)
-    samples.push({
-      timeMs: (opts.startTime + i / sampleFps) * 1000,
-      faces
-    })
+    if (!opts.motionRois) return { samples }
+
+    // Pass 2 — per-side motion energy.
+    const motionArgv = motionArgs(
+      opts.sourcePath,
+      opts.startTime,
+      opts.endTime,
+      opts.motionRois.left,
+      opts.motionRois.right
+    )
+    const { stderr } = await run({ args: motionArgv, binPath: opts.binPath, signal: opts.signal })
+    const groups = parseMotionMetadata(stderr)
+    const motion = splitMotionSeries(groups, opts.startTime)
+    return { samples, motion }
+  } finally {
+    if (ownDetector) await (detector as { dispose?: () => Promise<void> }).dispose?.()
   }
-
-  if (!opts.motionRois) return { samples }
-
-  // Pass 2 — per-side motion energy.
-  const motionArgv = motionArgs(
-    opts.sourcePath,
-    opts.startTime,
-    opts.endTime,
-    opts.motionRois.left,
-    opts.motionRois.right
-  )
-  const { stderr } = await run({ args: motionArgv, binPath: opts.binPath, signal: opts.signal })
-  const groups = parseMotionMetadata(stderr)
-  const motion = splitMotionSeries(groups, opts.startTime)
-  return { samples, motion }
 }
 
 /**
@@ -571,7 +579,7 @@ function defaultYuNetDetector(
     return sessionP
   }
 
-  return async (rgb: Uint8Array | Buffer): Promise<FaceBox[]> => {
+  const detect = async (rgb: Uint8Array | Buffer): Promise<FaceBox[]> => {
     const session = await ensureSession()
     const ort = ortMod as typeof OrtModule
 
@@ -601,6 +609,15 @@ function defaultYuNetDetector(
       { source, modelSize }
     )
   }
+  // Deterministic teardown of the lazily-created WASM session (audit fix openclip-y3h):
+  // detectReframe calls this in a `finally` so the session memory is freed at the end
+  // of a detection pass rather than waiting for GC of this closure.
+  ;(detect as FrameDetector & { dispose?: () => Promise<void> }).dispose = async () => {
+    const s = await sessionP?.catch(() => null)
+    sessionP = null
+    await s?.release?.()
+  }
+  return detect
 }
 
 /**

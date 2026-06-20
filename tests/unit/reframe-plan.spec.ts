@@ -302,6 +302,78 @@ describe('buildStepPanExpr', () => {
 })
 
 // ===========================================================================
+// pan-expr VALUE checks (openclip-niq): the shape tests above prove the xExpr
+// is structurally well-formed, but a sign error in the lerp or an off-by-one in
+// the step boundary would still emit a valid-looking string. ffmpeg evaluates
+// the expression at render time (only hit by the self-skipping @serial smoke), so
+// here we evaluate the SAME documented subset in JS and assert the numeric crop-x.
+// ===========================================================================
+
+/**
+ * Evaluate the ffmpeg crop-x expression at time `t`. Handles the exact subset the
+ * builders emit: `max`/`min`, `if(cond,then,else)`, `between(t,a,b)`, `lt(a,b)`,
+ * arithmetic, parens, `t`. Commas are un-escaped; `if(` → `iff(` so it isn't a JS
+ * keyword. (Eager arg eval is fine — every sub-expr is pure arithmetic.)
+ */
+function evalPanExpr(xExpr: string, t: number): number {
+  const js = xExpr.replace(/\\,/g, ',').replace(/\bif\(/g, 'iff(')
+  const between = (tt: number, a: number, b: number): number => (tt >= a && tt <= b ? 1 : 0)
+  const lt = (a: number, b: number): number => (a < b ? 1 : 0)
+  const iff = (c: number, a: number, b: number): number => (c ? a : b)
+  const fn = new Function('t', 'iff', 'between', 'lt', 'min', 'max', `return ${js}`) as (
+    ...a: unknown[]
+  ) => number
+  return fn(t, iff, between, lt, Math.min, Math.max)
+}
+
+describe('pan expr value-checks (openclip-niq)', () => {
+  it('linear pan interpolates to the exact clamped crop-x at keyframes and a midpoint', () => {
+    const e = buildLinearPanExpr(
+      [
+        { t: 0, x: 100 },
+        { t: 10, x: 500 }
+      ],
+      1920,
+      608
+    )
+    expect(evalPanExpr(e, 0)).toBeCloseTo(100) // at KF0
+    expect(evalPanExpr(e, 10)).toBeCloseTo(500) // at KF1
+    expect(evalPanExpr(e, 5)).toBeCloseTo(300) // midpoint lerp: 100 + 400*0.5
+    expect(evalPanExpr(e, 2.5)).toBeCloseTo(200) // quarter: 100 + 400*0.25
+    expect(evalPanExpr(e, 20)).toBeCloseTo(500) // holds the last KF past the end
+  })
+
+  it('linear pan CLAMPS a keyframe beyond the [0, width-cropW] range', () => {
+    // ceiling = 1920 - 608 = 1312; a 2000 keyframe must clamp to 1312, a negative to 0.
+    const e = buildLinearPanExpr(
+      [
+        { t: 0, x: -50 },
+        { t: 10, x: 2000 }
+      ],
+      1920,
+      608
+    )
+    expect(evalPanExpr(e, 0)).toBe(0) // -50 clamped up to 0
+    expect(evalPanExpr(e, 10)).toBe(1312) // 2000 clamped down to width-cropW
+  })
+
+  it('step pan holds each value until its boundary, then switches (no off-by-one)', () => {
+    const e = buildStepPanExpr(
+      [
+        { end: 5, x: 200 },
+        { end: 10, x: 800 }
+      ],
+      1920,
+      608
+    )
+    expect(evalPanExpr(e, 3)).toBe(200) // before the first boundary
+    expect(evalPanExpr(e, 4.999)).toBe(200) // just before
+    expect(evalPanExpr(e, 5)).toBe(800) // AT the boundary → next step (lt is strict)
+    expect(evalPanExpr(e, 9)).toBe(800) // past it, holds
+  })
+})
+
+// ===========================================================================
 // clusterTwoFaceRegions / clusterTileRegion
 // ===========================================================================
 

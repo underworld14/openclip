@@ -690,6 +690,38 @@ function roiOf(r: { cropX: number; cropY: number; cropW: number; cropH: number }
   return { x: r.cropX, y: r.cropY, w: r.cropW, h: r.cropH }
 }
 
+/**
+ * Clip two split-render tiles into MUTUALLY-EXCLUSIVE motion ROIs (audit fix
+ * openclip-sx0). The split tiles are 2.8x face-width and overlap when the two speakers
+ * are only ~15% of the width apart, so each side's motion energy would contain the
+ * OTHER speaker and the active-speaker comparison gets contaminated. Partition at the
+ * midpoint between the two cluster centers: trim the left tile's right edge and the
+ * right tile's left edge to that boundary, so `left.x + left.w <= right.x`. The tiles'
+ * vertical extent is unchanged; only the horizontal overlap is removed. (The wide tiles
+ * are still used for the split-screen RENDER — this only tightens the motion ROIs.)
+ */
+export function trimMotionRois(
+  tileA: MotionRoi,
+  tileB: MotionRoi,
+  centerA: number,
+  centerB: number
+): { left: MotionRoi; right: MotionRoi } {
+  // Order by center so 'left' is genuinely the smaller-x speaker.
+  let lt = tileA
+  let rt = tileB
+  if (centerA > centerB) {
+    lt = tileB
+    rt = tileA
+  }
+  const boundary = Math.round((Math.min(centerA, centerB) + Math.max(centerA, centerB)) / 2)
+  const lRight = Math.min(lt.x + lt.w, boundary)
+  const rLeft = Math.max(rt.x, boundary)
+  return {
+    left: { x: lt.x, y: lt.y, w: Math.max(1, lRight - lt.x), h: lt.h },
+    right: { x: rLeft, y: rt.y, w: Math.max(1, rt.x + rt.w - rLeft), h: rt.h }
+  }
+}
+
 export interface PlanReframeOptions {
   sourcePath: string
   startTime: number
@@ -732,12 +764,20 @@ export async function planReframe(opts: PlanReframeOptions): Promise<ReframePlan
   const clusters = clusterTwoFaceRegions(filtered, opts.source)
   if (opts.mode === 'auto' && clusters) {
     try {
+      // Tighten the wide split tiles into non-overlapping motion ROIs (openclip-sx0) so
+      // each side's motion energy contains only its own speaker.
+      const rois = trimMotionRois(
+        roiOf(clusterTileRegion(clusters[0], opts.source)),
+        roiOf(clusterTileRegion(clusters[1], opts.source)),
+        clusters[0].centerX,
+        clusters[1].centerX
+      )
       motion = await motionFn({
         sourcePath: opts.sourcePath,
         startTime: opts.startTime,
         endTime: opts.endTime,
-        left: roiOf(clusterTileRegion(clusters[0], opts.source)),
-        right: roiOf(clusterTileRegion(clusters[1], opts.source)),
+        left: rois.left,
+        right: rois.right,
         signal: opts.signal,
         binPath: opts.binPath
       })

@@ -14,6 +14,7 @@ import {
   nms,
   parseMotionMetadata,
   splitMotionSeries,
+  trimMotionRois,
   detectReframe,
   planReframe,
   type YuNetOutputs,
@@ -240,6 +241,30 @@ describe('parseMotionMetadata', () => {
 // ---------------------------------------------------------------------------
 // splitMotionSeries
 // ---------------------------------------------------------------------------
+
+describe('trimMotionRois — mutually-exclusive motion ROIs (openclip-sx0)', () => {
+  it('clips two overlapping split tiles at the midpoint between cluster centers', () => {
+    // Left tile 100..400 (center 250), right tile 350..650 (center 500) overlap 350..400.
+    const leftTile = { x: 100, y: 0, w: 300, h: 1080 }
+    const rightTile = { x: 350, y: 0, w: 300, h: 1080 }
+    const { left, right } = trimMotionRois(leftTile, rightTile, 250, 500)
+    // Midpoint = (250+500)/2 = 375; tiles meet there and no longer overlap.
+    expect(left.x + left.w).toBeLessThanOrEqual(right.x)
+    expect(left.x + left.w).toBe(375)
+    expect(right.x).toBe(375)
+    // Vertical extent is preserved.
+    expect(left.h).toBe(1080)
+    expect(right.h).toBe(1080)
+  })
+
+  it('orders by center so a right-first argument pair still yields left.x < right.x', () => {
+    const a = { x: 350, y: 0, w: 300, h: 100 } // center 500 (the RIGHT speaker)
+    const b = { x: 100, y: 0, w: 300, h: 100 } // center 250 (the LEFT speaker)
+    const { left, right } = trimMotionRois(a, b, 500, 250)
+    expect(left.x).toBeLessThan(right.x)
+    expect(left.x + left.w).toBeLessThanOrEqual(right.x)
+  })
+})
 
 describe('splitMotionSeries', () => {
   it('maps first-seen group → left, second → right, offset to absolute time', () => {

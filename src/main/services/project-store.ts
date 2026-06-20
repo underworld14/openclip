@@ -189,13 +189,20 @@ export async function listProjects(dir: string): Promise<ProjectListEntry[]> {
     if (!name.endsWith(OCPROJ_EXT)) continue
     const path = join(dir, name)
     try {
-      const json = JSON.parse(await readFile(path, 'utf8'))
-      // Minimal validation: we only need id/name/updatedAt for the list. A fuller
-      // re-validation happens on actual `loadProject`. Skip anything malformed.
-      const parsed = Project.safeParse(json)
-      if (!parsed.success) continue
-      const p = parsed.data
-      entries.push({ id: p.id, name: p.name, updatedAt: p.updatedAt, path })
+      // The recents list only needs id/name/updatedAt, so we SHALLOW-validate those
+      // three fields rather than running the full `Project.safeParse` over the entire
+      // document (audit fix openclip-p0l): a long video's `.ocproj` embeds thousands
+      // of word timestamps + segments + clips, and fully validating every file just to
+      // render a name + date made the Dashboard mount O(total transcript size). The
+      // authoritative full re-validation still happens on `loadProject` when opened.
+      const json = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
+      if (
+        typeof json.id === 'string' &&
+        typeof json.name === 'string' &&
+        typeof json.updatedAt === 'number'
+      ) {
+        entries.push({ id: json.id, name: json.name, updatedAt: json.updatedAt, path })
+      }
     } catch {
       continue // unparseable file — skip, don't fail the whole list
     }

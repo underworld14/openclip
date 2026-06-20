@@ -76,7 +76,13 @@ export function clipViewModel(clip: Clip): ClipViewModel {
   }
 }
 
-/** Sort clips for the sidebar: highest virality first, mapped to view models. */
-export function sortClipsForSidebar(clips: Clip[]): ClipViewModel[] {
-  return [...clips].sort((a, b) => b.viralityScore - a.viralityScore).map(clipViewModel)
+/**
+ * Sort clips for the sidebar: highest virality first. Returns the sorted `Clip[]`
+ * directly (audit fix openclip-0hp/don): the sidebar previously got back view models,
+ * then did an O(n) `clips.find()` PER ROW (O(n²)) to recover each Clip, and ClipCard
+ * rebuilt the view model a second time. Returning Clips lets the sidebar render
+ * `ClipCard` straight from the sorted list (ClipCard builds the view model once).
+ */
+export function sortClipsForSidebar(clips: Clip[]): Clip[] {
+  return [...clips].sort((a, b) => b.viralityScore - a.viralityScore)
 }

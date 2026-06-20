@@ -149,6 +149,7 @@ function App(): React.JSX.Element {
                   variant="secondary"
                   size="sm"
                   className="gap-1.5"
+                  data-testid="auto-generate-clips"
                   disabled={!hasTranscript || generating}
                   onClick={handleGenerateClips}
                 >

@@ -26,6 +26,7 @@ import type {
   ClipSchema,
   SourceVideo,
   Transcript,
+  TargetPlatform,
   BrandTemplate
 } from './schema'
 import type { WhisperModelSize, JobKind, JobParams } from './jobs'
@@ -106,7 +107,17 @@ export interface GenerateClipsRequest {
   durationSeconds: number
   clipStyle: ClipStyle
   numClips: number
-  targetPlatform: 'tiktok' | 'youtube' | 'instagram' | 'all'
+  // Derived from the schema enum, not a hand-typed duplicate (audit fix openclip-z2q):
+  // if TargetPlatform gains/renames a member the two can no longer silently drift.
+  targetPlatform: TargetPlatform
+  /**
+   * Clip-length bounds in seconds (audit fix openclip-t0v). When present they drive
+   * the prompt's "each clip must be between X and Y seconds" line AND the in-code
+   * clamp; the renderer populates them from project settings so a user's min/max
+   * duration is honoured instead of the handler's old hard-coded 15/90.
+   */
+  minDuration?: number
+  maxDuration?: number
 }
 
 /** AI title/hook generation (PRD §7.4). */

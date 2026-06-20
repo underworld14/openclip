@@ -35,10 +35,13 @@ describe('buildGenerateClipsRequest', () => {
       segments: projectFixture.transcript.segments,
       videoTitle: projectFixture.name,
       durationSeconds: projectFixture.sourceVideo.duration,
-      // clipStyle / targetPlatform come from the PROJECT settings, not app settings
+      // clipStyle / targetPlatform / min+maxDuration come from the PROJECT settings
       clipStyle: projectFixture.settings.clipStyle,
       numClips: 8,
-      targetPlatform: projectFixture.settings.targetPlatform
+      targetPlatform: projectFixture.settings.targetPlatform,
+      // Clip-length bounds threaded from project settings (audit fix openclip-t0v).
+      minDuration: projectFixture.settings.minDuration,
+      maxDuration: projectFixture.settings.maxDuration
     })
   })
 

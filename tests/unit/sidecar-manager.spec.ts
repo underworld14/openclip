@@ -18,7 +18,8 @@ import {
   concurrencyFor,
   exportConcurrency,
   defaultArrayLimiterFactory,
-  type EventPort
+  type EventPort,
+  type Limiter
 } from '@main/services/sidecar-manager'
 import { scriptedRunner } from '../harness/fake-utility-process'
 import { transcribeResultFixture, transcribePartialFixture } from '../fixtures/contract'
@@ -69,11 +70,9 @@ describe('defaultArrayLimiterFactory: a synchronous throw releases the slot (aud
   it('does not starve the kind when a task throws synchronously', async () => {
     const limiter = defaultArrayLimiterFactory(1) // serial: one slot
     // First task throws SYNCHRONOUSLY (not a rejected promise) — the bug case.
-    const p1 = limiter.add(
-      (() => {
-        throw new Error('sync boom')
-      }) as () => Promise<void>
-    )
+    const p1 = limiter.add((() => {
+      throw new Error('sync boom')
+    }) as () => Promise<void>)
     await expect(p1).rejects.toThrow('sync boom')
     // The one slot must be freed so a SECOND task runs; without the fix activeCount
     // would stay at 1 and this add() would queue forever (test would time out).
@@ -82,6 +81,49 @@ describe('defaultArrayLimiterFactory: a synchronous throw releases the slot (aud
       ran = true
     })
     expect(ran).toBe(true)
+  })
+})
+
+describe('SidecarManager: a QUEUED job is settled synchronously on cancel/killAll', () => {
+  // A limiter that NEVER admits the task — simulates a job stuck behind a full queue.
+  const neverAdmit = (): Limiter => ({
+    get pending(): number {
+      return 1
+    },
+    add: <T>(): Promise<T> => new Promise<T>(() => {}) // never resolves ⇒ runner never starts
+  })
+  const mkPort = (): { eventPort: EventPort; collected: ReturnType<typeof collectPort> } => {
+    const { port1, port2 } = new MessageChannel()
+    const eventPort: EventPort = {
+      postMessage: (v) => port2.postMessage(v),
+      close: () => port2.close(),
+      on: (e, l) => port2.on(e, l),
+      start: () => port2.start()
+    }
+    return { eventPort, collected: collectPort(port1 as never) }
+  }
+  const params = { projectId: 'p1', wavPath: '/a.wav', model: 'base' as const }
+
+  it('cancel() on a QUEUED job emits CANCELLED now, not after the limiter drains (openclip-yyi)', async () => {
+    const mgr = new SidecarManager({ coreCount: 10, limiterFactory: neverAdmit })
+    const { eventPort, collected } = mkPort()
+    const jobId = mgr.startJob('transcribe', params, eventPort)
+    mgr.cancel(jobId) // runner never started ⇒ must settle synchronously
+    await collected.done
+    const last = collected.events.at(-1) as { t: string; code?: string }
+    expect(last.t).toBe('error')
+    expect(last.code).toBe('CANCELLED')
+  })
+
+  it('killAll() settles a QUEUED job with terminal CANCELLED (openclip-sf0)', async () => {
+    const mgr = new SidecarManager({ coreCount: 10, limiterFactory: neverAdmit })
+    const { eventPort, collected } = mkPort()
+    mgr.startJob('transcribe', params, eventPort)
+    mgr.killAll()
+    await collected.done
+    const last = collected.events.at(-1) as { t: string; code?: string }
+    expect(last.t).toBe('error')
+    expect(last.code).toBe('CANCELLED')
   })
 })
 

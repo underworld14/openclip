@@ -143,6 +143,10 @@ interface ActiveJob {
   controller: AbortController
   pids: Set<number>
   settled: boolean
+  /** True once the limiter has ADMITTED this job's runner (vs. still queued). */
+  started: boolean
+  /** Settle a still-QUEUED job with the terminal CANCELLED (audit fix openclip-yyi/sf0). */
+  cancelQueued: () => void
 }
 
 export interface SidecarManagerOptions {
@@ -237,7 +241,14 @@ export class SidecarManager {
   startJob<K extends JobKind>(kind: K, params: JobParams[K], port: EventPort): string {
     const jobId = this.nextJobId(kind)
     const controller = new AbortController()
-    const job: ActiveJob = { kind, controller, pids: new Set(), settled: false }
+    const job: ActiveJob = {
+      kind,
+      controller,
+      pids: new Set(),
+      settled: false,
+      started: false,
+      cancelQueued: () => {}
+    }
     this.active.set(jobId, job)
 
     const settle = (
@@ -251,6 +262,13 @@ export class SidecarManager {
       port.close?.()
       this.active.delete(jobId)
     }
+    // Settle a job that is cancelled while still QUEUED (not yet admitted by the
+    // limiter), so cancel()/killAll() deliver the terminal CANCELLED deterministically
+    // instead of waiting for the limiter to drain (audit fix openclip-yyi/sf0). settle
+    // is idempotent (the `settled` guard), so the queued task's later admission — which
+    // hits the aborted check and returns — is a harmless no-op.
+    job.cancelQueued = (): void =>
+      settle({ t: 'error', code: 'CANCELLED', message: 'job cancelled before start', retriable: false })
 
     const emit: JobEmitter<K> = {
       progress: (pct, stage, etaMs) => {
@@ -287,6 +305,9 @@ export class SidecarManager {
 
     limiter
       .add(async () => {
+        // Admitted by the limiter — mark started so cancel()/killAll() use the runner's
+        // abort path (not the queued short-circuit) from here on (openclip-yyi/sf0).
+        job.started = true
         if (controller.signal.aborted) {
           emit.error('CANCELLED', 'job cancelled before start', false)
           return
@@ -316,6 +337,10 @@ export class SidecarManager {
     if (!job) return
     job.controller.abort()
     this.escalateKill(job)
+    // A still-QUEUED job has no running runner to emit its terminal on abort, so settle
+    // it synchronously rather than waiting for the limiter to admit + reject it
+    // (audit fix openclip-yyi). A started job's runner emits CANCELLED via its abort.
+    if (!job.started) job.cancelQueued()
   }
 
   /** SIGTERM all tracked PIDs, then SIGKILL after the grace period (PRD §17). */
@@ -332,6 +357,11 @@ export class SidecarManager {
     for (const [jobId, job] of this.active) {
       job.controller.abort()
       this.escalateKill(job)
+      // Deliver the terminal CANCELLED for a still-QUEUED job NOW instead of letting
+      // its limiter task fire later on a torn-down port (audit fix openclip-sf0).
+      // cancelQueued is idempotent + already deletes from `active`, so guard the loop's
+      // own delete below for the started/already-settled case.
+      if (!job.started && !job.settled) job.cancelQueued()
       this.active.delete(jobId)
     }
   }

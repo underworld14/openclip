@@ -50,6 +50,10 @@ export enum IPCChannels {
   // Media: adopt a downloaded source file into <userData>/media/<projectId>/ so it
   // persists with the project + is deleted with it (Part H) → `media.adoptSource`.
   MEDIA_ADOPT_SOURCE = 'media:adopt-source',
+  // Reclaim (delete) a project's adopted media dir immediately — used when an app-owned
+  // import fails after adopt but before any .ocproj was saved (openclip-e5s) →
+  // `media.reclaim`.
+  MEDIA_RECLAIM = 'media:reclaim',
   // Brand kit (Part K) — the APP-LEVEL brand library persisted main-side under
   // <userData>/brands/<id>/ (mirrors media-store). list/save/delete + adopt a PNG
   // logo into the brand dir → `brand.list|save|delete|setLogo`.
@@ -254,6 +258,7 @@ export interface ChannelMap {
     { projectId: string; filePath: string },
     { path: string }
   >
+  [IPCChannels.MEDIA_RECLAIM]: ChannelPayload<{ projectId: string }, { reclaimed: boolean }>
 
   // --- Brand kit (Part K) — app-level brand library, persisted main-side ---
   [IPCChannels.BRAND_LIST]: ChannelPayload<void, BrandTemplate[]>

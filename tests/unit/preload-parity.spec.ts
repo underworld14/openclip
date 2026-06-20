@@ -93,7 +93,7 @@ describe('preload parity: real bridge method-set === mock method-set', () => {
       'generateTitles',
       'listModels'
     ])
-    expect(methodKeys(realBridge.media)).toEqual(['adoptSource'])
+    expect(methodKeys(realBridge.media)).toEqual(['adoptSource', 'reclaim'])
     expect(methodKeys(realBridge.brand)).toEqual(['delete', 'list', 'save', 'setLogo'])
     expect(methodKeys(realBridge.settings)).toEqual(['apiKeyStatus', 'get', 'set', 'setApiKey'])
     expect(methodKeys(realBridge.model)).toEqual(['download', 'status'])

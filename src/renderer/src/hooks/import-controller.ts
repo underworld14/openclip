@@ -94,6 +94,13 @@ export interface ImportControllerDeps {
    */
   adoptSource?(projectId: string, filePath: string): Promise<{ path: string }>
   /**
+   * Reclaim (delete) a project's adopted media dir. Defaults to
+   * `bridge.media.reclaim`. Called best-effort when an APP-OWNED import fails after
+   * the download was already adopted into persistent media but before any .ocproj was
+   * saved, so the orphan isn't left until the next-launch sweep (audit fix openclip-e5s).
+   */
+  reclaimMedia?(projectId: string): Promise<void>
+  /**
    * Source transcription language (PRD §6.2 / Part I cross-language). Read LAZILY
    * at import time so the latest Settings value is used without rebuilding the
    * controller (mirrors the `onNeedModel` ref pattern in `useImportController`).
@@ -132,6 +139,10 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
   const adoptSource =
     deps.adoptSource ??
     ((pid, fp) => deps.bridge.media.adoptSource({ projectId: pid, filePath: fp }))
+  const reclaimMedia =
+    deps.reclaimMedia ??
+    ((pid: string): Promise<void> =>
+      deps.bridge.media.reclaim({ projectId: pid }).then(() => undefined))
   const storage: StorageLike | null =
     deps.storage !== undefined
       ? deps.storage
@@ -185,6 +196,27 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
       const adopted = await adoptSource(projectId, filePath)
       sourcePath = adopted.path
     }
+    try {
+      await runPipelineAfterAdopt(projectId, sourcePath, name, base, span, appOwned, taskId)
+    } catch (err) {
+      // The app-owned download was adopted into persistent media BEFORE any .ocproj was
+      // saved; on a failed/cancelled import reclaim the orphan dir now rather than
+      // leaving it for the next-launch sweep (audit fix openclip-e5s). Best-effort —
+      // never mask the original error.
+      if (appOwned) await reclaimMedia(projectId).catch(() => {})
+      throw err
+    }
+  }
+
+  async function runPipelineAfterAdopt(
+    projectId: string,
+    sourcePath: string,
+    name: string,
+    base: number,
+    span: number,
+    appOwned: boolean,
+    taskId: string
+  ): Promise<void> {
     const result = await runImport({
       bridge: deps.bridge,
       filePath: sourcePath,

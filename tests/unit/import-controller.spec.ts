@@ -57,6 +57,7 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
   runImportPipeline: ReturnType<typeof vi.fn>
   runUrlDownload: ReturnType<typeof vi.fn>
   adoptSource: ReturnType<typeof vi.fn>
+  reclaimMedia: ReturnType<typeof vi.fn>
   onNeedModel: ReturnType<typeof vi.fn>
   pcts: number[]
   storage: ReturnType<typeof fakeStorage>
@@ -104,6 +105,8 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
     path: `/media/PID/${fp.split('/').pop()}`
   }))
 
+  const reclaimMedia = vi.fn(async (): Promise<void> => {})
+
   const ctl = createImportController({
     bridge: {
       model: { status: async () => [{ model: 'base', installed: true }] }
@@ -114,6 +117,7 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
     storage,
     onNeedModel,
     adoptSource,
+    reclaimMedia,
     runImportPipeline: runImportPipeline as unknown as ImportControllerDeps['runImportPipeline'],
     runUrlDownload: runUrlDownload as unknown as ImportControllerDeps['runUrlDownload'],
     ...overrides
@@ -129,6 +133,7 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
     runImportPipeline,
     runUrlDownload,
     adoptSource,
+    reclaimMedia,
     onNeedModel,
     pcts,
     storage
@@ -282,6 +287,31 @@ describe('import-controller: managed media adoption (Part H)', () => {
     const project = setCurrentProject.mock.calls.at(-1)?.[0]
     expect(project.sourceVideo.path).toBe('/Users/me/Movies/original.mp4')
     expect(project.sourceVideo.appOwned).toBe(false)
+  })
+
+  it('reclaims the adopted media when an app-owned import fails after adopt (openclip-e5s)', async () => {
+    const { ctl, adoptSource, reclaimMedia } = build({
+      storage: fakeStorage({ [CONSENT_KEY]: '1' }),
+      runImportPipeline: vi.fn(async () => {
+        throw new Error('transcribe failed')
+      }) as unknown as ImportControllerDeps['runImportPipeline']
+    })
+    await ctl.importUrl('https://youtu.be/x')
+    // The download was adopted into persistent media before the (failing) pipeline; the
+    // orphan dir must be reclaimed now, not left for the next-launch sweep.
+    expect(adoptSource).toHaveBeenCalledWith('PID', '/dl/v.mp4')
+    expect(reclaimMedia).toHaveBeenCalledWith('PID')
+    expect(ctl.getState().error).toBeTruthy()
+  })
+
+  it('does NOT reclaim media when a (non-app-owned) file import fails (openclip-e5s)', async () => {
+    const { ctl, reclaimMedia } = build({
+      runImportPipeline: vi.fn(async () => {
+        throw new Error('transcribe failed')
+      }) as unknown as ImportControllerDeps['runImportPipeline']
+    })
+    await ctl.importFile('/Users/me/Movies/original.mp4')
+    expect(reclaimMedia).not.toHaveBeenCalled()
   })
 
   it('an adopt failure surfaces an error and does not create a project', async () => {

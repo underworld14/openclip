@@ -301,7 +301,16 @@ export function buildStyleLine(style: CaptionStyle): string {
   const bg = toAssColor(style.backgroundColor) // box (BackColour)
   // Part I caption presets — all optional; the defaults reproduce the pre-Part-I
   // output byte-for-byte (yellow highlight, opaque-black outline width 3, no shadow).
-  const highlight = style.highlightColor ? toAssColor(style.highlightColor) : HIGHLIGHT_COLOR_ASS
+  // Honor highlightCurrentWord (audit fix openclip-r7k): when the user turns the
+  // current-word highlight OFF, set PrimaryColour == SecondaryColour so the `\k`
+  // karaoke fill produces no visible color change (the words stay one color — static
+  // captions). The `\k` cues remain (timing-accurate) but light nothing up.
+  const highlight =
+    style.highlightCurrentWord === false
+      ? fontColor
+      : style.highlightColor
+        ? toAssColor(style.highlightColor)
+        : HIGHLIGHT_COLOR_ASS
   const outlineColor = style.strokeColor ? toAssColor(style.strokeColor) : '&H00000000'
   const outlineWidth = style.strokeWidth ?? 3
   const shadow = style.shadow ? 2 : 0

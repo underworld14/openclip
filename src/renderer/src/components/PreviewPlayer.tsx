@@ -173,8 +173,10 @@ export function PreviewPlayer(): React.JSX.Element {
                         // Every already-spoken word stays filled, not just the current one
                         // (openclip-cgw): the libass burn's karaoke (\k) fill is cumulative —
                         // each word turns the highlight color as the playhead passes it and
-                        // STAYS, so the preview must highlight i<=activeIndex to match.
-                        active: i <= active.activeIndex,
+                        // STAYS, so the preview must highlight i<=activeIndex to match. Gated
+                        // on highlightCurrentWord (openclip-r7k): when off, no word lights up,
+                        // matching the burn's Primary==Secondary collapse.
+                        active: captionStyle.highlightCurrentWord && i <= active.activeIndex,
                         keyword: w.isKeyword
                       })}
                     >

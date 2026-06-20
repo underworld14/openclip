@@ -244,6 +244,15 @@ describe('buildStyleLine — CaptionStyle → ASS V4+ Style line (golden)', () =
     )
   })
 
+  it('highlightCurrentWord=false collapses Primary==Secondary so \\k shows no sweep (openclip-r7k)', () => {
+    const noHl: CaptionStyle = { ...STYLE, highlightCurrentWord: false }
+    const fields = buildStyleLine(noHl).replace('Style: ', '').split(',')
+    // PrimaryColour (idx 3) is the karaoke fill; SecondaryColour (idx 4) the base word.
+    // Equal ⇒ a word never visibly changes color as \k reaches it (static captions).
+    expect(fields[3]).toBe(fields[4])
+    expect(fields[3]).toBe('&H00FFFFFF') // both = fontColor (white), not the yellow highlight
+  })
+
   it('a style with NO Part I fields is byte-identical to the pre-Part-I output', () => {
     // Regression guard: optional fields absent ⇒ yellow highlight, black outline
     // width 3, no shadow, opaque-bg box (BorderStyle 3) — exactly as before.

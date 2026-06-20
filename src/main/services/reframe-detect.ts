@@ -414,6 +414,13 @@ export interface DetectReframeResult {
  * grouped per `metadata=print` instance (first-seen = left) then folded into a
  * `MotionTimeline`. Pure given injected `run`/`detector`; the real defaults touch
  * ffmpeg + onnxruntime.
+ *
+ * NOTE (audit note openclip-a29): the `motionRois` Pass 2 here is exercised ONLY by
+ * the unit spec — the production `planReframe` never passes `motionRois` (it calls
+ * `detectReframe` for FACES only, then runs the standalone `detectMotion` for the
+ * split-screen motion timeline). So this is a SECOND copy of the motionArgs → parse →
+ * `splitMotionSeries` flow; if you fix the ffmpeg interleaving/length handling, apply
+ * it to `detectMotion` (the live path) too, or collapse the two onto one entry point.
  */
 export async function detectReframe(opts: DetectReframeOptions): Promise<DetectReframeResult> {
   const sampleFps = opts.sampleFps ?? 2

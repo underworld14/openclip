@@ -89,7 +89,16 @@ export enum IPCChannels {
   // directory picker / single-PNG picker; the renderer cannot widen them.
   SHOW_DIRECTORY_DIALOG = 'system:directory-dialog',
   SHOW_IMAGE_DIALOG = 'system:image-dialog',
-  CHECK_UPDATE = 'system:check-update'
+  CHECK_UPDATE = 'system:check-update',
+  // Quit-time autosave durability (openclip-49y). FLUSH_BEFORE_QUIT is a ONE-WAY
+  // main→renderer signal (forwarded as a window message like JOB_PORT, NOT in ChannelMap)
+  // sent from `before-quit`. It uses the `lifecycle:` prefix DELIBERATELY (not `system:`)
+  // so `buildNamespace('system')` — which derives a bridge method per matching enum value —
+  // does NOT auto-expose it as an invoke (it isn't one). The renderer flushes its pending
+  // debounced save and then calls `system.autosaveFlushed()` (the AUTOSAVE_FLUSHED invoke
+  // below) so main can quit as soon as the save lands instead of racing renderer teardown.
+  FLUSH_BEFORE_QUIT = 'lifecycle:flush-before-quit',
+  AUTOSAVE_FLUSHED = 'system:autosave-flushed'
 }
 
 // ============================================================================
@@ -324,6 +333,9 @@ export interface ChannelMap {
     { canceled: boolean; filePaths: string[] }
   >
   [IPCChannels.CHECK_UPDATE]: ChannelPayload<void, UpdateStatus>
+  // Renderer→main ACK that the pending autosave was flushed at quit (openclip-49y) →
+  // `system.autosaveFlushed()`. main resolves its before-quit wait and proceeds.
+  [IPCChannels.AUTOSAVE_FLUSHED]: ChannelPayload<void, { ok: boolean }>
 }
 
 // ============================================================================

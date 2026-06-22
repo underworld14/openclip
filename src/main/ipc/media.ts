@@ -13,7 +13,7 @@
 import { IPCChannels } from '@shared/channels'
 import type { ChannelReq, ChannelRes } from '@shared/channels'
 import { mediaDir } from '@main/utils/paths'
-import { adoptIntoMedia } from '@main/services/media-store'
+import { adoptIntoMedia, deleteProjectMedia } from '@main/services/media-store'
 import type { IpcContext } from './index'
 
 export function registerMediaHandlers(ctx: IpcContext): void {
@@ -25,6 +25,19 @@ export function registerMediaHandlers(ctx: IpcContext): void {
     ): Promise<ChannelRes<IPCChannels.MEDIA_ADOPT_SOURCE>> => {
       const path = await adoptIntoMedia(req.filePath, req.projectId, mediaDir())
       return { path }
+    }
+  )
+
+  // Reclaim a project's adopted media dir immediately (openclip-e5s). `projectId` is
+  // validated as a single path segment by deleteProjectMedia before any fs write.
+  ctx.ipcMain.handle(
+    IPCChannels.MEDIA_RECLAIM,
+    async (
+      _e,
+      req: ChannelReq<IPCChannels.MEDIA_RECLAIM>
+    ): Promise<ChannelRes<IPCChannels.MEDIA_RECLAIM>> => {
+      const { deleted } = await deleteProjectMedia(req.projectId, mediaDir())
+      return { reclaimed: deleted }
     }
   )
 }

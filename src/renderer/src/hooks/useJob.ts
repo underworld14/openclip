@@ -17,7 +17,14 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { JobKind, JobParams, JobResult, JobEventFor, JobErrorCode } from '@shared/jobs'
+import type {
+  JobKind,
+  JobParams,
+  JobResult,
+  JobPartial,
+  JobEventFor,
+  JobErrorCode
+} from '@shared/jobs'
 import { acquireJobPort } from './jobPort'
 
 // ============================================================================
@@ -30,6 +37,7 @@ export interface MessagePortLike {
   start?: () => void
   close?: () => void
   addEventListener?: (type: 'message', listener: (ev: { data: unknown }) => void) => void
+  removeEventListener?: (type: 'message', listener: (ev: { data: unknown }) => void) => void
 }
 
 /** A control message the host may send before/around job events. */
@@ -95,8 +103,70 @@ export async function* jobEvents<K extends JobKind>(
       }
     }
   } finally {
+    // Detach the listener SYMMETRICALLY (audit fix openclip-2g3/vet): the generator
+    // previously relied solely on port.close() to make the listener collectable, but
+    // an add without a matching remove is a latent leak if a long-lived/shared port is
+    // ever passed (today each job gets a fresh port). Remove, then close.
+    if (port.removeEventListener) port.removeEventListener('message', handler)
+    else port.onmessage = null
     port.close?.()
   }
+}
+
+// ============================================================================
+// drainJob — the one streaming-job consumer (audit fix openclip-60b)
+// ============================================================================
+
+/** Bridge surface derived from the global `window.openclip` typing. */
+type OpenClipBridge = typeof window.openclip
+
+export interface DrainJobCallbacks<K extends JobKind> {
+  /** The assigned jobId, right after start (so callers can track/cancel it). */
+  onStart?: (jobId: string) => void
+  /** 0..100 progress + stage from `{t:'progress'}` events. */
+  onProgress?: (pct: number, stage: string) => void
+  /** Streamed partials (e.g. transcript words, download bytes) from `{t:'partial'}`. */
+  onPartial?: (data: JobPartial[K]) => void
+}
+
+/**
+ * The single streaming-job drain loop (audit fix openclip-60b): start the job, pair the
+ * out-of-band MessagePort, drive `jobEvents` to the terminal event, and enforce the
+ * job-termination invariant (PRD §10.2 — every job ends with `done` xor `error`, never a
+ * silent hang). Previously runExport / runModelDownload / runUrlDownload / the transcribe
+ * tail each repeated this skeleton verbatim and had to keep the error-string format and
+ * the result guard in sync by hand. Per-job specifics (progress banding, on-done side
+ * effects like onTranscript) stay in the caller, which wires the callbacks and post-
+ * processes the returned result. Throws `<kind> failed [code]: message` on a terminal
+ * error and `<kind> ended without a result` if the stream closed with no `done`.
+ */
+export async function drainJob<K extends JobKind>(
+  bridge: OpenClipBridge,
+  kind: K,
+  params: JobParams[K],
+  cbs: DrainJobCallbacks<K> = {}
+): Promise<JobResult[K]> {
+  const { jobId } = await bridge.jobs.start(kind, params)
+  cbs.onStart?.(jobId)
+  const port = await acquireJobPort(jobId)
+  let result: JobResult[K] | null = null
+  for await (const ev of jobEvents<K>(port)) {
+    switch (ev.t) {
+      case 'progress':
+        cbs.onProgress?.(ev.pct, ev.stage)
+        break
+      case 'partial':
+        cbs.onPartial?.(ev.data)
+        break
+      case 'done':
+        result = ev.result
+        break
+      case 'error':
+        throw new Error(`${kind} failed [${ev.code}]: ${ev.message}`)
+    }
+  }
+  if (result === null) throw new Error(`${kind} ended without a result`)
+  return result
 }
 
 // ============================================================================
@@ -127,6 +197,15 @@ export interface UseJobOptions<K extends JobKind> {
   onTask?: (task: { jobId: string; kind: K; progress: number; status: JobStatus }) => void
 }
 
+/**
+ * RESERVED, NOT YET WIRED (audit note openclip-dz5). The shipping components drive
+ * jobs through the pure `jobEvents()` generator directly (import-pipeline, export-run,
+ * model-download); this React hook + its `onTask` seam feed `uiStore.tasks`, which is
+ * currently WRITTEN but never READ by any component — the global job-queue/progress UI
+ * it was designed for doesn't exist yet. Kept as a deliberate trunk seam for that
+ * future UI; do not mistake it for live runtime plumbing. Delete this + the
+ * `uiStore.tasks` map if the queue UI is dropped from the roadmap.
+ */
 export function useJob<K extends JobKind>(kind: K, options: UseJobOptions<K> = {}): UseJobState<K> {
   const [jobId, setJobId] = useState<string | null>(null)
   const [status, setStatus] = useState<JobStatus>('idle')
@@ -151,11 +230,26 @@ export function useJob<K extends JobKind>(kind: K, options: UseJobOptions<K> = {
       setStatus('running')
       setError(null)
       setResult(null)
-      const { jobId: id } = await window.openclip.jobs.start(kind, params)
-      setJobId(id)
-      jobIdRef.current = id
-      // Acquire the LIVE per-job port (delivered out-of-band, keyed by jobId).
-      const port = await acquireJobPort(id)
+      let id: string
+      let port: MessagePortLike
+      try {
+        id = (await window.openclip.jobs.start(kind, params)).jobId
+        setJobId(id)
+        jobIdRef.current = id
+        // Acquire the LIVE per-job port (delivered out-of-band, keyed by jobId).
+        port = await acquireJobPort(id)
+      } catch (e) {
+        // jobs.start() / acquireJobPort() rejected (e.g. the per-job port never arrived,
+        // openclip-ki6) — surface a terminal error instead of leaving status stuck on
+        // 'running' forever (audit fix openclip-73y).
+        setStatus('error')
+        setError({
+          code: 'SIDECAR_CRASH',
+          message: e instanceof Error ? e.message : String(e),
+          retriable: true
+        })
+        return
+      }
       const emitTask = (s: JobStatus, p: number): void =>
         optionsRef.current.onTask?.({ jobId: id, kind, progress: p, status: s })
 

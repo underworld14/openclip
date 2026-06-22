@@ -23,11 +23,25 @@ import { CAPTION_PRESETS, resolveEffectiveCaptionStyle } from '@renderer/compone
 import { brandCaptionOverride, brandLogoParams } from '@renderer/components/brandKit'
 import { fetchAiEmojiMap } from '@renderer/components/caption-emoji'
 import { resolveBounds } from '@shared/clip-bounds'
-import type { CaptionStyle } from '@shared/schema'
+import type { AspectRatio, CaptionStyle } from '@shared/schema'
 import { Button } from '@renderer/components/ui/button'
 import { Progress } from '@renderer/components/ui/progress'
 
 type Phase = 'idle' | 'exporting' | 'done' | 'error'
+
+/**
+ * Output pixel dimensions per aspect ratio for the export summary (audit fix
+ * openclip-7b5 — the panel previously hard-coded "1080×1920" for every aspect).
+ * Mirrors `outputDimensions()` in the main-process ffmpeg-export service, which is
+ * the authoritative encoder size; kept as a tiny renderer-local map because
+ * `@main` can't be imported across the process boundary.
+ */
+const EXPORT_DIMENSIONS: Record<AspectRatio, string> = {
+  '9:16': '1080×1920',
+  '1:1': '1080×1080',
+  '4:5': '1080×1350',
+  '16:9': '1920×1080'
+}
 
 /** A selectable caption-template chip (Part K gallery). */
 function TemplateChip(props: {
@@ -294,7 +308,8 @@ export function ExportPanel(): React.JSX.Element {
             {span && (
               <span className="text-xs text-muted-foreground" data-testid="export-clip-span">
                 {span.start.toFixed(2)}s – {span.end.toFixed(2)}s (
-                {(span.end - span.start).toFixed(2)}s) · {aspectRatio} · 1080×1920
+                {(span.end - span.start).toFixed(2)}s) · {aspectRatio} ·{' '}
+                {EXPORT_DIMENSIONS[aspectRatio]}
               </span>
             )}
           </div>

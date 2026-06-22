@@ -101,6 +101,18 @@ export interface RunFfmpegOptions {
   signal?: AbortSignal
   /** Override the ffmpeg binary (defaults to resolved `ffmpegPath()`). */
   binPath?: string
+  /**
+   * Invoked with the spawned ffmpeg child's PID (audit fix openclip-a00) so a job
+   * runner can `ctx.trackPid(pid)` — giving the sidecar an OS-level SIGKILL backstop
+   * on quit, in addition to the AbortSignal cancel path. No-op if the spawn yields no pid.
+   */
+  onSpawn?: (pid: number) => void
+  /**
+   * Invoked with the child's PID when it EXITS (audit fix openclip-yul) so a runner can
+   * `ctx.untrackPid(pid)` — preventing a later quit/cancel from SIGKILLing a PID the OS
+   * may have recycled to an unrelated process. Paired with `onSpawn`.
+   */
+  onExit?: (pid: number) => void
 }
 
 export interface RunFfmpegResult {
@@ -120,7 +132,17 @@ export function runFfmpeg(opts: RunFfmpegOptions): Promise<RunFfmpegResult> {
     const child: ChildProcessByStdio<null, null, Readable> = spawn(bin, opts.args, {
       stdio: ['ignore', 'ignore', 'pipe']
     })
+    // Register the PID so the sidecar can SIGKILL it on quit (audit fix openclip-a00).
+    if (typeof child.pid === 'number') opts.onSpawn?.(child.pid)
     let stderr = ''
+    // Progress line buffer (audit fix openclip-2p4): FFmpeg's `-progress` writes
+    // `key=value\n` lines, but a stderr chunk boundary can split one mid-token
+    // (e.g. `out_time_us=12` then `34567\n`). parseFfmpegProgress only honours
+    // fully-seen `key=value` pairs, so a split line was silently dropped and that
+    // progress sample lost. Carry the trailing partial line across chunks and parse
+    // only up to the last newline. (Raw `stderr` accumulation below is unchanged so
+    // the error tail still has everything.)
+    let progressResidual = ''
 
     const onAbort = (): void => {
       child.kill('SIGKILL')
@@ -134,7 +156,12 @@ export function runFfmpeg(opts: RunFfmpegOptions): Promise<RunFfmpegResult> {
       const text = buf.toString()
       stderr += text
       if (opts.onProgress) {
-        const snap = parseFfmpegProgress(text)
+        progressResidual += text
+        const lastNl = progressResidual.lastIndexOf('\n')
+        if (lastNl < 0) return // no complete line yet — wait for more
+        const complete = progressResidual.slice(0, lastNl + 1)
+        progressResidual = progressResidual.slice(lastNl + 1)
+        const snap = parseFfmpegProgress(complete)
         const pct = progressPct(snap, opts.totalDurationSec ?? 0)
         if (pct !== undefined || snap.frame !== undefined || snap.done) {
           opts.onProgress(pct, snap)
@@ -144,11 +171,17 @@ export function runFfmpeg(opts: RunFfmpegOptions): Promise<RunFfmpegResult> {
 
     child.on('error', (err) => {
       opts.signal?.removeEventListener('abort', onAbort)
+      // Untrack on error too (defensive symmetry, review follow-up to openclip-yul);
+      // delete is idempotent if a 'close' also fires afterwards.
+      if (typeof child.pid === 'number') opts.onExit?.(child.pid)
       reject(err)
     })
 
     child.on('close', (code) => {
       opts.signal?.removeEventListener('abort', onAbort)
+      // Untrack the exited child's PID so a later quit/cancel can't SIGKILL a recycled
+      // foreign PID (audit fix openclip-yul).
+      if (typeof child.pid === 'number') opts.onExit?.(child.pid)
       if (opts.signal?.aborted) {
         reject(new Error('ffmpeg aborted'))
         return

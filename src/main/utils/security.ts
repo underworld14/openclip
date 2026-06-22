@@ -17,7 +17,7 @@
  * `userData/secrets.json`. We keep it self-contained (no settings coupling).
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { App, SafeStorage } from 'electron'
 import type { AIProvider } from '@shared/schema'
@@ -40,8 +40,9 @@ export interface SecretStoreBackend {
   write(map: Record<string, string>): void
 }
 
-/** Default backend: a JSON file under userData (resolved lazily). */
-function fileBackend(filePath: string): SecretStoreBackend {
+/** Default backend: a JSON file under userData (resolved lazily). Exported for the
+ * owner-only-permission test (audit fix openclip-g7f). */
+export function fileBackend(filePath: string): SecretStoreBackend {
   return {
     read(): Record<string, string> {
       if (!existsSync(filePath)) return {}
@@ -53,7 +54,16 @@ function fileBackend(filePath: string): SecretStoreBackend {
     },
     write(map: Record<string, string>): void {
       mkdirSync(dirname(filePath), { recursive: true })
-      writeFileSync(filePath, JSON.stringify(map, null, 2), 'utf8')
+      // 0o600 (owner read/write only): the BYOK secrets file must never be group/
+      // other readable, even though the values are safeStorage-encrypted (audit fix
+      // openclip-g7f). `mode` only applies when CREATING the file, so chmod an
+      // existing one too. Best-effort chmod for platforms without POSIX modes.
+      writeFileSync(filePath, JSON.stringify(map, null, 2), { encoding: 'utf8', mode: 0o600 })
+      try {
+        chmodSync(filePath, 0o600)
+      } catch {
+        /* non-POSIX FS (e.g. Windows) — safeStorage encryption is the primary gate */
+      }
     }
   }
 }

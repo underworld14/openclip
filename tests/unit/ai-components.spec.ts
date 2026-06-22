@@ -11,12 +11,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import {
-  formatTimecode,
-  clipViewModel,
-  sortClipsForSidebar,
-  type ClipViewModel
-} from '@renderer/components/clipView'
+import { formatTimecode, clipViewModel, sortClipsForSidebar } from '@renderer/components/clipView'
 import {
   providerLabel,
   keyStatusLabel,
@@ -87,9 +82,9 @@ describe('sortClipsForSidebar', () => {
     viralityScore: score
   })
 
-  it('orders by virality score descending', () => {
-    const vms: ClipViewModel[] = sortClipsForSidebar([mk('a', 3), mk('b', 9), mk('c', 6)])
-    expect(vms.map((v) => v.id)).toEqual(['b', 'c', 'a'])
+  it('orders clips by virality score descending (returns sorted Clip[], openclip-0hp/don)', () => {
+    const sorted: Clip[] = sortClipsForSidebar([mk('a', 3), mk('b', 9), mk('c', 6)])
+    expect(sorted.map((c) => c.id)).toEqual(['b', 'c', 'a'])
   })
 
   it('returns an empty array for no clips', () => {

@@ -28,6 +28,7 @@
 
 import { spawn } from 'node:child_process'
 import { ffmpegPath, reframeModelPath, reframeWasmDir } from '@main/utils/paths'
+import { assertSafePathArg } from '@main/utils/safe-arg'
 import type { FaceBox, SampleFrame, MotionTimeline, ReframePlan } from '@shared/reframe-plan'
 import {
   buildReframePlan,
@@ -68,7 +69,8 @@ export function frameSampleArgs(
     '-ss',
     String(startTime),
     '-i',
-    sourcePath,
+    // Option-injection guard (audit fix openclip-6l6).
+    assertSafePathArg(sourcePath, 'sourcePath'),
     '-t',
     String(durationSec),
     '-vf',
@@ -280,7 +282,8 @@ export function motionArgs(
     '-ss',
     String(start),
     '-i',
-    sourcePath,
+    // Option-injection guard (audit fix openclip-6l6).
+    assertSafePathArg(sourcePath, 'sourcePath'),
     '-t',
     String(dur),
     '-filter_complex',
@@ -414,6 +417,13 @@ export interface DetectReframeResult {
  * grouped per `metadata=print` instance (first-seen = left) then folded into a
  * `MotionTimeline`. Pure given injected `run`/`detector`; the real defaults touch
  * ffmpeg + onnxruntime.
+ *
+ * NOTE (audit note openclip-a29): the `motionRois` Pass 2 here is exercised ONLY by
+ * the unit spec — the production `planReframe` never passes `motionRois` (it calls
+ * `detectReframe` for FACES only, then runs the standalone `detectMotion` for the
+ * split-screen motion timeline). So this is a SECOND copy of the motionArgs → parse →
+ * `splitMotionSeries` flow; if you fix the ffmpeg interleaving/length handling, apply
+ * it to `detectMotion` (the live path) too, or collapse the two onto one entry point.
  */
 export async function detectReframe(opts: DetectReframeOptions): Promise<DetectReframeResult> {
   const sampleFps = opts.sampleFps ?? 2
@@ -425,38 +435,58 @@ export async function detectReframe(opts: DetectReframeOptions): Promise<DetectR
     opts.run ??
     ((a) => defaultRunFfmpegCaptureStdout({ args: a.args, binPath: a.binPath, signal: a.signal }))
   const detector = opts.detector ?? defaultYuNetDetector(opts.source, modelSize)
+  // Dispose ONLY a detector we created ourselves (audit fix openclip-y3h): the default
+  // YuNet detector lazily opens an onnxruntime-web WASM InferenceSession; without a
+  // deterministic release it lived until the closure was GC'd, so each reframed export
+  // leaked a fresh WASM session. An INJECTED detector is owned by the caller.
+  const ownDetector = !opts.detector
+  try {
+    // Pass 1 — sample raw frames and detect faces (stream-consumed, audit fix
+    // openclip-l41). An INJECTED run (tests) returns a buffered stdout → feed it as a
+    // single chunk through the SAME frame-slicer; production streams frames off ffmpeg
+    // stdout so memory stays ~1 frame instead of holding the whole decoded clip.
+    const sampleArgv = frameSampleArgs(opts.sourcePath, opts.startTime, dur, sampleFps, modelSize)
+    const frameBytes = modelSize * modelSize * 3
+    const detectOpts = {
+      frameBytes,
+      modelSize,
+      detector,
+      startTime: opts.startTime,
+      sampleFps,
+      signal: opts.signal
+    }
+    let samples: SampleFrame[]
+    if (opts.run) {
+      const { stdout } = await opts.run({
+        args: sampleArgv,
+        binPath: opts.binPath,
+        signal: opts.signal
+      })
+      samples = await detectFromFrameChunks(stdout ? [stdout] : [], detectOpts)
+    } else {
+      samples = await detectFromFrameChunks(
+        streamFfmpegStdout({ args: sampleArgv, binPath: opts.binPath, signal: opts.signal }),
+        detectOpts
+      )
+    }
 
-  // Pass 1 — sample raw frames and detect faces.
-  const sampleArgv = frameSampleArgs(opts.sourcePath, opts.startTime, dur, sampleFps, modelSize)
-  const { stdout } = await run({ args: sampleArgv, binPath: opts.binPath, signal: opts.signal })
-  const frameBytes = modelSize * modelSize * 3
-  const buf = stdout ?? Buffer.alloc(0)
-  const frameCount = Math.floor(buf.length / frameBytes)
-  const samples: SampleFrame[] = []
-  for (let i = 0; i < frameCount; i++) {
-    if (opts.signal?.aborted) throw new Error('reframe detection aborted')
-    const frame = buf.subarray(i * frameBytes, (i + 1) * frameBytes)
-    const faces = await detector(frame, modelSize, modelSize)
-    samples.push({
-      timeMs: (opts.startTime + i / sampleFps) * 1000,
-      faces
-    })
+    if (!opts.motionRois) return { samples }
+
+    // Pass 2 — per-side motion energy.
+    const motionArgv = motionArgs(
+      opts.sourcePath,
+      opts.startTime,
+      opts.endTime,
+      opts.motionRois.left,
+      opts.motionRois.right
+    )
+    const { stderr } = await run({ args: motionArgv, binPath: opts.binPath, signal: opts.signal })
+    const groups = parseMotionMetadata(stderr)
+    const motion = splitMotionSeries(groups, opts.startTime)
+    return { samples, motion }
+  } finally {
+    if (ownDetector) await (detector as { dispose?: () => Promise<void> }).dispose?.()
   }
-
-  if (!opts.motionRois) return { samples }
-
-  // Pass 2 — per-side motion energy.
-  const motionArgv = motionArgs(
-    opts.sourcePath,
-    opts.startTime,
-    opts.endTime,
-    opts.motionRois.left,
-    opts.motionRois.right
-  )
-  const { stderr } = await run({ args: motionArgv, binPath: opts.binPath, signal: opts.signal })
-  const groups = parseMotionMetadata(stderr)
-  const motion = splitMotionSeries(groups, opts.startTime)
-  return { samples, motion }
 }
 
 /**
@@ -480,6 +510,16 @@ export function splitMotionSeries(groups: MotionSeries[], startTime: number): Mo
   if (groups.length === 0) return { times: [], left: [], right: [] }
   const leftG = groups[0]
   const rightG = groups[1] ?? groups[0] // single ROI ⇒ mirror onto both sides
+  // Make the silent clamp visible (audit fix openclip-36u): the two sinks share one
+  // decode and should be symmetric, so a per-side count mismatch (degenerate ROI, odd
+  // VFR boundary, one sink emitting a different frame count) means we're clamping to the
+  // shorter and the tail of the longer side is dropped — a misalignment risk worth a log
+  // rather than a quietly wrong active-speaker timeline. Only meaningful with two groups.
+  if (groups.length >= 2 && leftG.values.length !== rightG.values.length) {
+    console.warn(
+      `[reframe] motion series length mismatch (left=${leftG.values.length}, right=${rightG.values.length}); clamping to the shorter — speaker timeline tail may be truncated`
+    )
+  }
   const n = Math.min(leftG.values.length, rightG.values.length, leftG.times.length)
   const times: number[] = []
   const left: number[] = []
@@ -544,6 +584,101 @@ async function defaultRunFfmpegCaptureStdout(opts: {
 }
 
 /**
+ * Slice a stream of raw-video byte chunks into fixed `frameBytes` frames, run the YuNet
+ * `detector` on each, and return one `SampleFrame` per frame (audit fix openclip-l41).
+ * Holds only a rolling carry buffer (≤ one partial frame) + the current chunk, so memory
+ * is ~1 frame regardless of clip length — instead of buffering the WHOLE decoded stream
+ * (~221 MB for a 90s clip) before the first inference. The carry remainder is COPIED out
+ * (`Buffer.from`) so consumed chunks are freed, not kept alive by a subarray view. Pure
+ * (no spawn) so it is unit-tested with canned chunks, including frames that straddle a
+ * chunk boundary (the streaming case).
+ */
+export async function detectFromFrameChunks(
+  chunks: AsyncIterable<Buffer> | Iterable<Buffer>,
+  opts: {
+    frameBytes: number
+    modelSize: number
+    detector: FrameDetector
+    startTime: number
+    sampleFps: number
+    signal?: AbortSignal
+  }
+): Promise<SampleFrame[]> {
+  const samples: SampleFrame[] = []
+  let frameIndex = 0
+  let carry: Buffer = Buffer.alloc(0)
+  for await (const chunk of chunks as AsyncIterable<Buffer>) {
+    if (opts.signal?.aborted) throw new Error('reframe detection aborted')
+    carry = carry.length === 0 ? chunk : Buffer.concat([carry, chunk])
+    let offset = 0
+    while (carry.length - offset >= opts.frameBytes) {
+      const frame = carry.subarray(offset, offset + opts.frameBytes)
+      const faces = await opts.detector(frame, opts.modelSize, opts.modelSize)
+      samples.push({ timeMs: (opts.startTime + frameIndex / opts.sampleFps) * 1000, faces })
+      frameIndex += 1
+      offset += opts.frameBytes
+    }
+    // Keep only the partial-frame remainder, COPIED so the big chunk can be GC'd.
+    carry = offset > 0 ? Buffer.from(carry.subarray(offset)) : carry
+  }
+  return samples
+}
+
+/**
+ * Spawn ffmpeg and yield its stdout (the raw-frame pipe) as chunks ARRIVE, instead of
+ * accumulating the whole stream (audit fix openclip-l41). Paired with
+ * `detectFromFrameChunks` so decode overlaps inference and memory stays ~1 frame. stderr
+ * is captured for the error tail; rejects on a non-zero exit / spawn error / abort. The
+ * unit spec injects `run` (the buffered path), so this streaming spawn is exercised only
+ * by the @serial reframe smoke.
+ */
+async function* streamFfmpegStdout(opts: {
+  args: string[]
+  binPath?: string
+  signal?: AbortSignal
+}): AsyncGenerator<Buffer> {
+  const bin = opts.binPath ?? ffmpegPath()
+  const child = spawn(bin, opts.args, { stdio: ['ignore', 'pipe', 'pipe'] })
+  let stderr = ''
+  child.stderr?.on('data', (b: Buffer) => {
+    stderr += b.toString()
+  })
+  const onAbort = (): void => {
+    child.kill('SIGKILL')
+  }
+  if (opts.signal) {
+    if (opts.signal.aborted) onAbort()
+    else opts.signal.addEventListener('abort', onAbort, { once: true })
+  }
+  const exit = new Promise<number | null>((resolve, reject) => {
+    child.on('error', reject)
+    child.on('close', (code) => resolve(code))
+  })
+  // Mark `exit` observed so a spawn-failure rejection can't surface as an UNHANDLED
+  // rejection (review follow-up to openclip-l41): if `child.stdout` errors, the for-await
+  // below throws and propagates out before `await exit` is reached, leaving the original
+  // promise's rejection unawaited. `await exit` (happy path only) is unaffected.
+  void exit.catch(() => {})
+  try {
+    if (child.stdout) {
+      for await (const chunk of child.stdout as AsyncIterable<Buffer>) {
+        yield chunk
+      }
+    }
+    const code = await exit
+    if (opts.signal?.aborted) throw new Error('ffmpeg aborted')
+    if (code !== 0) throw new Error(`ffmpeg exited with code ${code}\n${stderr.slice(-2000)}`)
+  } finally {
+    opts.signal?.removeEventListener('abort', onAbort)
+    // Tear the child down on ANY early exit — not just abort (review follow-up to
+    // openclip-l41): if the consumer (detectFromFrameChunks → YuNet) throws mid-stream, the
+    // generator's return() runs this finally; without a kill the ffmpeg child is orphaned
+    // (the reframe spawns aren't PID-tracked). kill() on an already-exited child is a no-op.
+    if (!child.killed) child.kill('SIGKILL')
+  }
+}
+
+/**
  * Build the real (async) YuNet detector backed by a single lazily-created
  * `onnxruntime-web` InferenceSession (WASM, single-thread, `wasmPaths` =
  * `reframeWasmDir()`). The session is created on the first frame and reused for
@@ -571,7 +706,7 @@ function defaultYuNetDetector(
     return sessionP
   }
 
-  return async (rgb: Uint8Array | Buffer): Promise<FaceBox[]> => {
+  const detect = async (rgb: Uint8Array | Buffer): Promise<FaceBox[]> => {
     const session = await ensureSession()
     const ort = ortMod as typeof OrtModule
 
@@ -601,6 +736,15 @@ function defaultYuNetDetector(
       { source, modelSize }
     )
   }
+  // Deterministic teardown of the lazily-created WASM session (audit fix openclip-y3h):
+  // detectReframe calls this in a `finally` so the session memory is freed at the end
+  // of a detection pass rather than waiting for GC of this closure.
+  ;(detect as FrameDetector & { dispose?: () => Promise<void> }).dispose = async () => {
+    const s = await sessionP?.catch(() => null)
+    sessionP = null
+    await s?.release?.()
+  }
+  return detect
 }
 
 /**
@@ -653,6 +797,38 @@ function roiOf(r: { cropX: number; cropY: number; cropW: number; cropH: number }
   return { x: r.cropX, y: r.cropY, w: r.cropW, h: r.cropH }
 }
 
+/**
+ * Clip two split-render tiles into MUTUALLY-EXCLUSIVE motion ROIs (audit fix
+ * openclip-sx0). The split tiles are 2.8x face-width and overlap when the two speakers
+ * are only ~15% of the width apart, so each side's motion energy would contain the
+ * OTHER speaker and the active-speaker comparison gets contaminated. Partition at the
+ * midpoint between the two cluster centers: trim the left tile's right edge and the
+ * right tile's left edge to that boundary, so `left.x + left.w <= right.x`. The tiles'
+ * vertical extent is unchanged; only the horizontal overlap is removed. (The wide tiles
+ * are still used for the split-screen RENDER — this only tightens the motion ROIs.)
+ */
+export function trimMotionRois(
+  tileA: MotionRoi,
+  tileB: MotionRoi,
+  centerA: number,
+  centerB: number
+): { left: MotionRoi; right: MotionRoi } {
+  // Order by center so 'left' is genuinely the smaller-x speaker.
+  let lt = tileA
+  let rt = tileB
+  if (centerA > centerB) {
+    lt = tileB
+    rt = tileA
+  }
+  const boundary = Math.round((Math.min(centerA, centerB) + Math.max(centerA, centerB)) / 2)
+  const lRight = Math.min(lt.x + lt.w, boundary)
+  const rLeft = Math.max(rt.x, boundary)
+  return {
+    left: { x: lt.x, y: lt.y, w: Math.max(1, lRight - lt.x), h: lt.h },
+    right: { x: rLeft, y: rt.y, w: Math.max(1, rt.x + rt.w - rLeft), h: rt.h }
+  }
+}
+
 export interface PlanReframeOptions {
   sourcePath: string
   startTime: number
@@ -695,12 +871,20 @@ export async function planReframe(opts: PlanReframeOptions): Promise<ReframePlan
   const clusters = clusterTwoFaceRegions(filtered, opts.source)
   if (opts.mode === 'auto' && clusters) {
     try {
+      // Tighten the wide split tiles into non-overlapping motion ROIs (openclip-sx0) so
+      // each side's motion energy contains only its own speaker.
+      const rois = trimMotionRois(
+        roiOf(clusterTileRegion(clusters[0], opts.source)),
+        roiOf(clusterTileRegion(clusters[1], opts.source)),
+        clusters[0].centerX,
+        clusters[1].centerX
+      )
       motion = await motionFn({
         sourcePath: opts.sourcePath,
         startTime: opts.startTime,
         endTime: opts.endTime,
-        left: roiOf(clusterTileRegion(clusters[0], opts.source)),
-        right: roiOf(clusterTileRegion(clusters[1], opts.source)),
+        left: rois.left,
+        right: rois.right,
         signal: opts.signal,
         binPath: opts.binPath
       })

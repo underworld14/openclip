@@ -49,7 +49,11 @@ export function detectedToClip(d: DetectedClip, index: number): Clip {
       shareability: d.virality.shareability_score,
       total: d.virality.total_score
     },
-    hookType: d.virality.hook_type
+    hookType: d.virality.hook_type,
+    // Carry the AI-suggested social caption + hashtags instead of discarding them
+    // (audit fix openclip-5cd).
+    suggestedCaption: d.suggested_caption,
+    hashtags: d.hashtags
   }
 }
 

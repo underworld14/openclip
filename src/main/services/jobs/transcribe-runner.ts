@@ -19,11 +19,12 @@
  * terminal JSON parse in `runWhisper` (the `done` result).
  */
 
+import { rmSync } from 'node:fs'
 import type { TranscriptSegment, WordTimestamp } from '@shared/schema'
 import type { JobResult, JobParams, WhisperModelSize } from '@shared/jobs'
 import type { JobRunner, JobEmitter, JobRunnerContext } from '@main/services/sidecar-manager'
 import { runWhisper, type RunWhisperOptions } from '@main/services/whisper-spawn'
-import { groupSegments } from '@main/services/whisper-parse'
+import { groupSegments, endsSentence } from '@main/services/whisper-parse'
 import type { ParsedTranscript } from '@main/services/whisper-parse'
 import { modelFilePath } from '@main/utils/paths'
 import { isModelInstalled as defaultIsModelInstalled } from '@main/services/model-manager'
@@ -39,6 +40,23 @@ export interface TranscribeRunnerDeps {
   isModelInstalled?: (model: WhisperModelSize) => boolean
   /** The whisper spawn driver (injected for tests). */
   runWhisper?: (opts: RunWhisperOptions) => Promise<ParsedTranscript>
+  /**
+   * Reclaim the whisper `<outBase>.json` scratch file (audit fix openclip-5ji/qgr
+   * — injected for tests). Default: best-effort `rmSync(${outBase}.json, {force})`.
+   * The JSON is written next to the content-addressed WAV under `<projectId>/cache/`,
+   * which the launch-time temp sweep deliberately PRESERVES — so without this finally
+   * the per-transcribe JSON would accumulate unbounded. Never throws.
+   */
+  removeOutput?: (outBase: string) => void
+}
+
+/** Best-effort removal of whisper's `<outBase>.json` scratch — never throws (audit fix openclip-5ji/qgr). */
+function defaultRemoveOutput(outBase: string): void {
+  try {
+    rmSync(`${outBase}.json`, { force: true })
+  } catch {
+    /* never let scratch cleanup fail the job */
+  }
 }
 
 // ============================================================================
@@ -54,6 +72,7 @@ export function createTranscribeRunner(deps: TranscribeRunnerDeps = {}): JobRunn
   const resolveModelPath = deps.resolveModelPath ?? modelFilePath
   const isModelInstalled = deps.isModelInstalled ?? defaultIsModelInstalled
   const whisper = deps.runWhisper ?? runWhisper
+  const removeOutput = deps.removeOutput ?? defaultRemoveOutput
 
   return async (
     params: JobParams['transcribe'],
@@ -75,39 +94,62 @@ export function createTranscribeRunner(deps: TranscribeRunnerDeps = {}): JobRunn
     let liveSegSeq = 0
     const closeSentenceIfDone = (word: WordTimestamp): TranscriptSegment[] => {
       openSentence.push(word)
-      if (!isSentenceClosed(word.word)) return []
+      if (!endsSentence(word.word)) return []
       const [closed] = groupSegments(openSentence) // exactly one (it just closed)
       openSentence = []
       return closed ? [{ ...closed, id: `seg-live-${liveSegSeq++}` }] : []
     }
 
-    const parsed = await whisper({
-      model: resolveModelPath(params.model),
-      wavPath: params.wavPath,
-      outBase: tempOutBase(ctx.jobId, params.wavPath),
-      language: params.language,
-      signal: ctx.signal,
-      onSpawn: (pid) => ctx.trackPid(pid),
-      onProgress: (pct) => emit.progress(pct, 'transcribing'),
-      onWord: (word) => {
-        const segments = closeSentenceIfDone(word)
-        emit.partial({ words: [word], segments })
-      }
-    })
+    // Coalesce per-word partials (audit fix openclip-1zf): whisper emits one word per
+    // stdout line, so a 60-min talk is ~10k words. Emitting one `partial` per word was
+    // ~10k IPC messages and ~10k Zustand notifications, each appending to the renderer's
+    // growing word/segment arrays via spread — quadratic. Buffer words and flush as ONE
+    // partial when a sentence closes (so segments stream promptly) OR the buffer reaches
+    // WORD_BATCH (so a long unpunctuated stretch still streams). Any tail left when the
+    // run ends is superseded by the authoritative `done` transcript, so it needn't flush.
+    const WORD_BATCH = 25
+    let wordBuf: WordTimestamp[] = []
+    const flushWords = (segments: TranscriptSegment[]): void => {
+      if (wordBuf.length === 0 && segments.length === 0) return
+      emit.partial({ words: wordBuf, segments })
+      wordBuf = []
+    }
 
-    emit.progress(100, 'transcribing')
-    // An explicitly requested language is authoritative over whisper's detected/
-    // omitted label (Part I): the user chose it AND it was passed as `-l`, so the
-    // transcript is in that language regardless of what the JSON reports.
-    const requested = params.language?.trim()
-    const language = requested ? requested : parsed.language
-    return { language, segments: parsed.segments, words: parsed.words }
+    // Whisper writes `<outBase>.json` next to the WAV (inside the content-addressed
+    // `<projectId>/cache/`). That dir is intentionally preserved by the launch-time
+    // temp sweep, so the JSON has no backstop — reclaim it in a `finally` whether the
+    // run succeeds, throws, or is cancelled (audit fix openclip-5ji/qgr).
+    const outBase = tempOutBase(ctx.jobId, params.wavPath)
+    try {
+      const parsed = await whisper({
+        model: resolveModelPath(params.model),
+        wavPath: params.wavPath,
+        outBase,
+        language: params.language,
+        signal: ctx.signal,
+        onSpawn: (pid) => ctx.trackPid(pid),
+        onExit: (pid) => ctx.untrackPid?.(pid),
+        onProgress: (pct) => emit.progress(pct, 'transcribing'),
+        onWord: (word) => {
+          wordBuf.push(word)
+          const segments = closeSentenceIfDone(word)
+          // Flush on a closed sentence (segment ready) or a full word batch; otherwise
+          // keep buffering so we don't emit a partial per word (openclip-1zf).
+          if (segments.length > 0 || wordBuf.length >= WORD_BATCH) flushWords(segments)
+        }
+      })
+
+      emit.progress(100, 'transcribing')
+      // An explicitly requested language is authoritative over whisper's detected/
+      // omitted label (Part I): the user chose it AND it was passed as `-l`, so the
+      // transcript is in that language regardless of what the JSON reports.
+      const requested = params.language?.trim()
+      const language = requested ? requested : parsed.language
+      return { language, segments: parsed.segments, words: parsed.words }
+    } finally {
+      removeOutput(outBase)
+    }
   }
-}
-
-/** Whether a word's trimmed text ends a sentence (mirrors whisper-parse). */
-function isSentenceClosed(word: string): boolean {
-  return /[.!?…]["')\]]?$/.test(word.trim())
 }
 
 /**

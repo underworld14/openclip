@@ -121,6 +121,16 @@ describe('filterFaceOutliers', () => {
     expect(filterFaceOutliers([{ timeMs: 0, faces: [huge] }], SRC)).toEqual([])
   })
 
+  it('keeps a small-but-real face on a low-res source (dim floor is resolution-scaled, openclip-mnw)', () => {
+    // On a 320x180 source the old fixed 30px floor rejected a 28px face that is ~16%
+    // of width — a real, prominent subject. Normalized to source height the floor is
+    // tiny here, so the area band (0.5%–30%) does the real work and the face survives.
+    const small = { width: 320, height: 180 }
+    // 28x28 = 784 px² ; minArea = 320*180*0.005 = 288 → passes the area gate.
+    const face: FaceBox = { x: 146, y: 60, w: 28, h: 28, confidence: 0.9 }
+    expect(filterFaceOutliers([{ timeMs: 0, faces: [face] }], small)).toHaveLength(1)
+  })
+
   it('keeps a normal face and preserves timestamps', () => {
     const samples = [sampleAt(100, [960])]
     const out = filterFaceOutliers(samples, SRC)
@@ -292,6 +302,78 @@ describe('buildStepPanExpr', () => {
 })
 
 // ===========================================================================
+// pan-expr VALUE checks (openclip-niq): the shape tests above prove the xExpr
+// is structurally well-formed, but a sign error in the lerp or an off-by-one in
+// the step boundary would still emit a valid-looking string. ffmpeg evaluates
+// the expression at render time (only hit by the self-skipping @serial smoke), so
+// here we evaluate the SAME documented subset in JS and assert the numeric crop-x.
+// ===========================================================================
+
+/**
+ * Evaluate the ffmpeg crop-x expression at time `t`. Handles the exact subset the
+ * builders emit: `max`/`min`, `if(cond,then,else)`, `between(t,a,b)`, `lt(a,b)`,
+ * arithmetic, parens, `t`. Commas are un-escaped; `if(` → `iff(` so it isn't a JS
+ * keyword. (Eager arg eval is fine — every sub-expr is pure arithmetic.)
+ */
+function evalPanExpr(xExpr: string, t: number): number {
+  const js = xExpr.replace(/\\,/g, ',').replace(/\bif\(/g, 'iff(')
+  const between = (tt: number, a: number, b: number): number => (tt >= a && tt <= b ? 1 : 0)
+  const lt = (a: number, b: number): number => (a < b ? 1 : 0)
+  const iff = (c: number, a: number, b: number): number => (c ? a : b)
+  const fn = new Function('t', 'iff', 'between', 'lt', 'min', 'max', `return ${js}`) as (
+    ...a: unknown[]
+  ) => number
+  return fn(t, iff, between, lt, Math.min, Math.max)
+}
+
+describe('pan expr value-checks (openclip-niq)', () => {
+  it('linear pan interpolates to the exact clamped crop-x at keyframes and a midpoint', () => {
+    const e = buildLinearPanExpr(
+      [
+        { t: 0, x: 100 },
+        { t: 10, x: 500 }
+      ],
+      1920,
+      608
+    )
+    expect(evalPanExpr(e, 0)).toBeCloseTo(100) // at KF0
+    expect(evalPanExpr(e, 10)).toBeCloseTo(500) // at KF1
+    expect(evalPanExpr(e, 5)).toBeCloseTo(300) // midpoint lerp: 100 + 400*0.5
+    expect(evalPanExpr(e, 2.5)).toBeCloseTo(200) // quarter: 100 + 400*0.25
+    expect(evalPanExpr(e, 20)).toBeCloseTo(500) // holds the last KF past the end
+  })
+
+  it('linear pan CLAMPS a keyframe beyond the [0, width-cropW] range', () => {
+    // ceiling = 1920 - 608 = 1312; a 2000 keyframe must clamp to 1312, a negative to 0.
+    const e = buildLinearPanExpr(
+      [
+        { t: 0, x: -50 },
+        { t: 10, x: 2000 }
+      ],
+      1920,
+      608
+    )
+    expect(evalPanExpr(e, 0)).toBe(0) // -50 clamped up to 0
+    expect(evalPanExpr(e, 10)).toBe(1312) // 2000 clamped down to width-cropW
+  })
+
+  it('step pan holds each value until its boundary, then switches (no off-by-one)', () => {
+    const e = buildStepPanExpr(
+      [
+        { end: 5, x: 200 },
+        { end: 10, x: 800 }
+      ],
+      1920,
+      608
+    )
+    expect(evalPanExpr(e, 3)).toBe(200) // before the first boundary
+    expect(evalPanExpr(e, 4.999)).toBe(200) // just before
+    expect(evalPanExpr(e, 5)).toBe(800) // AT the boundary → next step (lt is strict)
+    expect(evalPanExpr(e, 9)).toBe(800) // past it, holds
+  })
+})
+
+// ===========================================================================
 // clusterTwoFaceRegions / clusterTileRegion
 // ===========================================================================
 
@@ -407,6 +489,37 @@ describe('buildReframePlan: single-speaker STATIC vs PAN (deadzone)', () => {
       expect(plan.cropX).toBeGreaterThanOrEqual(0)
       expect(plan.cropX + plan.cropW).toBeLessThanOrEqual(SRC.width)
     }
+  })
+
+  it('PAN when a real sweep exceeds the deadzone even though EMA-smoothing would hide it (openclip-eli)', () => {
+    // Raw centers sweep 900→950 = 50px, well above the 28.8px deadzone — a genuine pan.
+    // The old code decided from the EMA-smoothed path (alpha 0.2, seeded at the first
+    // sample), which lags so heavily the smoothed range (~17px) fell UNDER the deadzone
+    // and wrongly rendered it static. The static/pan decision must come from raw travel.
+    const samples = [
+      sampleAt(0, [900]),
+      sampleAt(200, [916]),
+      sampleAt(400, [933]),
+      sampleAt(600, [950])
+    ]
+    const plan = buildReframePlan({ samples, source: SRC, aspect: NINE_SIXTEEN, mode: 'auto' })
+    expect(plan?.mode).toBe('pan')
+  })
+
+  it('STATIC despite one outlier frame the σ-gate let through (eli review follow-up)', () => {
+    // 4 frames dead-center at 960 + 1 spike at 1010. The σ-gate band is inflated by the
+    // spike itself (mean 970, 2σ ≈ ±40 → [930,1010]) so 1010 survives, and raw min/max
+    // would read travel = 50px > 28.8 deadzone → a false pan. A robust range (drop the
+    // single most-extreme sample) collapses the lone spike → correctly static.
+    const samples = [
+      sampleAt(0, [960]),
+      sampleAt(200, [960]),
+      sampleAt(400, [960]),
+      sampleAt(600, [960]),
+      sampleAt(800, [1010])
+    ]
+    const plan = buildReframePlan({ samples, source: SRC, aspect: NINE_SIXTEEN, mode: 'auto' })
+    expect(plan?.mode).toBe('static')
   })
 
   it('PAN when the face sweeps across the frame; xExpr lerps + clamps', () => {

@@ -50,8 +50,18 @@ test('ping IPC round-trips and the openclip bridge is exposed', async () => {
     'video'
   ])
   expect(bridge.videoMethods).toEqual(['export', 'import'])
-  // F.3: the native file picker auto-derives `system.openDialog` from ChannelMap.
-  expect(bridge.systemMethods).toEqual(['checkUpdate', 'openDialog', 'openFolder', 'saveDialog'])
+  // F.3 / Part K: the system namespace auto-derives from ChannelMap; Part K added
+  // SHOW_DIRECTORY_DIALOG + SHOW_IMAGE_DIALOG, so the surface is now SIX methods
+  // (audit fix openclip-0bl — this drift assertion was not updated with the contract;
+  // it must match preload-parity.spec's derived list).
+  expect(bridge.systemMethods).toEqual([
+    'checkUpdate',
+    'directoryDialog',
+    'imageDialog',
+    'openDialog',
+    'openFolder',
+    'saveDialog'
+  ])
   expect(bridge.hasJobs).toBe(true)
 
   // 3) security baseline: nodeIntegration off ⇒ no Node `process` in renderer.

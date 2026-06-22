@@ -90,6 +90,8 @@ mac:
 dmg:
   artifactName: ${name}-${version}-${arch}.${ext}
 npmRebuild: false
-publish:
-  provider: generic
-  url: https://example.com/auto-updates
+# No `publish:` block (audit fix openclip-e5w): electron-updater is not a dependency,
+# so nothing reads an update feed yet, and the old `provider: generic` /
+# `https://example.com/auto-updates` placeholder only shipped a misleading
+# app-update.yml pointing at example.com. When auto-update is wired (electron-updater +
+# a real generic/GitHub feed), add the publish block back with the real URL.

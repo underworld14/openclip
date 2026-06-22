@@ -13,7 +13,8 @@
  *     streaming `JobEventFor<K>` over the other port. Always terminates with a
  *     `done|error` event (cancel → `{t:'error',code:'CANCELLED'}`).
  *   - PID tracking + kill-on-quit: SIGTERM then SIGKILL after a 3s grace on
- *     before-quit/will-quit/SIGINT/SIGTERM/child-process-gone/port-close.
+ *     before-quit/will-quit/SIGINT/SIGTERM/port-close (NOT child-process-gone —
+ *     openclip-032; that fires for recoverable Electron GPU/utility crashes).
  *   - p-queue concurrency: 1 transcribe; `min(2, ceil(cores/4))` exports;
  *     model-download unthrottled. Queue position surfaced as stage `"queued"`.
  *
@@ -27,6 +28,7 @@
  */
 
 import { cpus } from 'node:os'
+import { JobError } from '@shared/jobs'
 import type { JobKind, JobParams, JobResult, JobPartial, JobErrorCode } from '@shared/jobs'
 
 // ============================================================================
@@ -51,6 +53,14 @@ export interface JobRunnerContext {
   readonly signal: AbortSignal
   /** Runners call this for each native child they spawn so it's killed on quit. */
   trackPid(pid: number): void
+  /**
+   * Runners call this when a tracked child EXITS normally, so its PID is removed from
+   * the kill set (audit fix openclip-yul). Otherwise an exited PID lingers and a later
+   * cancel/quit SIGKILLs it — but the OS may have RECYCLED it to an unrelated process,
+   * killing an innocent bystander. Safe no-op for an untracked pid. Optional so the
+   * many test-constructed contexts need not supply it; production always does.
+   */
+  untrackPid?(pid: number): void
   /** The id of this job (for temp-dir scoping, logs). */
   readonly jobId: string
 }
@@ -143,6 +153,10 @@ interface ActiveJob {
   controller: AbortController
   pids: Set<number>
   settled: boolean
+  /** True once the limiter has ADMITTED this job's runner (vs. still queued). */
+  started: boolean
+  /** Settle a still-QUEUED job with the terminal CANCELLED (audit fix openclip-yyi/sf0). */
+  cancelQueued: () => void
 }
 
 export interface SidecarManagerOptions {
@@ -237,7 +251,14 @@ export class SidecarManager {
   startJob<K extends JobKind>(kind: K, params: JobParams[K], port: EventPort): string {
     const jobId = this.nextJobId(kind)
     const controller = new AbortController()
-    const job: ActiveJob = { kind, controller, pids: new Set(), settled: false }
+    const job: ActiveJob = {
+      kind,
+      controller,
+      pids: new Set(),
+      settled: false,
+      started: false,
+      cancelQueued: () => {}
+    }
     this.active.set(jobId, job)
 
     const settle = (
@@ -247,10 +268,35 @@ export class SidecarManager {
     ): void => {
       if (job.settled) return
       job.settled = true
-      port.postMessage(terminal)
-      port.close?.()
+      // Remove from `active` FIRST and guard the port calls (audit fix openclip-asx):
+      // if `port.postMessage`/`close` throws (e.g. the renderer was torn down so the
+      // MessagePort is dead), the job — and its tracked PIDs — would otherwise leak in
+      // `active` forever because the delete below never ran. The terminal event is moot
+      // once the peer is gone, so a throw is swallowed; the job is always reclaimed.
       this.active.delete(jobId)
+      try {
+        port.postMessage(terminal)
+      } catch {
+        /* peer port already gone — terminal is moot, don't leak the job */
+      }
+      try {
+        port.close?.()
+      } catch {
+        /* peer port already gone */
+      }
     }
+    // Settle a job that is cancelled while still QUEUED (not yet admitted by the
+    // limiter), so cancel()/killAll() deliver the terminal CANCELLED deterministically
+    // instead of waiting for the limiter to drain (audit fix openclip-yyi/sf0). settle
+    // is idempotent (the `settled` guard), so the queued task's later admission — which
+    // hits the aborted check and returns — is a harmless no-op.
+    job.cancelQueued = (): void =>
+      settle({
+        t: 'error',
+        code: 'CANCELLED',
+        message: 'job cancelled before start',
+        retriable: false
+      })
 
     const emit: JobEmitter<K> = {
       progress: (pct, stage, etaMs) => {
@@ -278,6 +324,7 @@ export class SidecarManager {
     const ctx: JobRunnerContext = {
       signal: controller.signal,
       trackPid: (pid: number) => job.pids.add(pid),
+      untrackPid: (pid: number) => job.pids.delete(pid),
       jobId
     }
 
@@ -287,6 +334,9 @@ export class SidecarManager {
 
     limiter
       .add(async () => {
+        // Admitted by the limiter — mark started so cancel()/killAll() use the runner's
+        // abort path (not the queued short-circuit) from here on (openclip-yyi/sf0).
+        job.started = true
         if (controller.signal.aborted) {
           emit.error('CANCELLED', 'job cancelled before start', false)
           return
@@ -297,6 +347,14 @@ export class SidecarManager {
       .catch((err: unknown) => {
         if (controller.signal.aborted) {
           emit.error('CANCELLED', 'job cancelled', false)
+          return
+        }
+        // A runner can CLASSIFY a failure by throwing a JobError (e.g. a permanent,
+        // non-retriable INPUT_INVALID for an invalid URL or an unverifiable model);
+        // otherwise an unexpected throw is a retriable SIDECAR_CRASH (audit fix
+        // openclip-1ly).
+        if (err instanceof JobError) {
+          emit.error(err.code, err.message, err.retriable)
           return
         }
         const message = err instanceof Error ? err.message : String(err)
@@ -316,6 +374,10 @@ export class SidecarManager {
     if (!job) return
     job.controller.abort()
     this.escalateKill(job)
+    // A still-QUEUED job has no running runner to emit its terminal on abort, so settle
+    // it synchronously rather than waiting for the limiter to admit + reject it
+    // (audit fix openclip-yyi). A started job's runner emits CANCELLED via its abort.
+    if (!job.started) job.cancelQueued()
   }
 
   /** SIGTERM all tracked PIDs, then SIGKILL after the grace period (PRD §17). */
@@ -332,14 +394,27 @@ export class SidecarManager {
     for (const [jobId, job] of this.active) {
       job.controller.abort()
       this.escalateKill(job)
+      // Deliver the terminal CANCELLED for a still-QUEUED job NOW instead of letting
+      // its limiter task fire later on a torn-down port (audit fix openclip-sf0).
+      // cancelQueued is idempotent + already deletes from `active`, so guard the loop's
+      // own delete below for the started/already-settled case.
+      if (!job.started && !job.settled) job.cancelQueued()
       this.active.delete(jobId)
     }
   }
 
   /**
    * Bind process-lifecycle kill hooks. Call once at main-process init with the
-   * Electron `app`. Registers before-quit/will-quit/SIGINT/SIGTERM/
-   * child-process-gone → killAll (PRD §17 orphan prevention).
+   * Electron `app`. Registers before-quit/will-quit/SIGINT/SIGTERM → killAll (PRD §17
+   * orphan prevention).
+   *
+   * NOTE (audit fix openclip-032): `child-process-gone` is deliberately NOT a kill
+   * trigger. It fires for Electron's OWN child processes (GPU / Utility / renderer),
+   * NOT for our ffmpeg/whisper/yt-dlp children — those are plain `child_process.spawn`
+   * and are torn down by each runner's close/error handlers (+ the per-job port-close
+   * → cancel). A transient GPU-process crash (common on macOS under memory pressure,
+   * exactly during a big export) used to trip killAll() and SIGKILL every running
+   * job, surfacing CANCELLED mid-encode even though the app kept running.
    */
   installLifecycleHooks(app: {
     on(event: string, listener: (...args: unknown[]) => void): void
@@ -347,7 +422,6 @@ export class SidecarManager {
     const kill = (): void => this.killAll()
     app.on('before-quit', kill)
     app.on('will-quit', kill)
-    app.on('child-process-gone', kill)
     process.once('SIGINT', kill)
     process.once('SIGTERM', kill)
   }
@@ -358,7 +432,7 @@ export class SidecarManager {
 // Production should pass `createPQueueLimiterFactory()` (below) for fairness.
 // ============================================================================
 
-function defaultArrayLimiterFactory(concurrency: number): Limiter {
+export function defaultArrayLimiterFactory(concurrency: number): Limiter {
   let activeCount = 0
   const queue: Array<() => void> = []
   const pump = (): void => {
@@ -375,7 +449,13 @@ function defaultArrayLimiterFactory(concurrency: number): Limiter {
     add<T>(task: () => Promise<T>): Promise<T> {
       return new Promise<T>((resolve, reject) => {
         const run = (): void => {
-          task()
+          // `Promise.resolve().then(task)` so a SYNCHRONOUS throw from `task()` becomes
+          // a rejected promise (audit fix openclip-40a): otherwise the throw escapes
+          // `run()` before `.finally` attaches, `activeCount` is never decremented, and
+          // that kind's slot is permanently consumed — starving every later job of the
+          // kind. The wrapper guarantees the `.finally` (decrement + pump) always runs.
+          Promise.resolve()
+            .then(task)
             .then(resolve, reject)
             .finally(() => {
               activeCount -= 1

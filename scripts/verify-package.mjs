@@ -39,6 +39,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import {
   existsSync,
   statSync,
+  lstatSync,
   openSync,
   readSync,
   closeSync,
@@ -185,6 +186,42 @@ if (!/h264_videotoolbox/.test(encoders)) {
   fail(`bundled ffmpeg lacks 'h264_videotoolbox' — HW export would fail`)
 }
 log(`bundled ffmpeg OK: libass 'subtitles' filter + h264_videotoolbox present`)
+
+// 3b) Supply-chain guardrail (audit fix openclip-79x, follow-up to openclip-fh2):
+// NO bundled binary may report a `--enable-nonfree` build. fh2 moved ffmpeg-static/
+// ffmpeg-ffprobe-static to devDependencies and hard-fails on a nonfree STAGED
+// binary, but nothing scanned INSIDE app.asar — a future dependency that pulls a
+// nonfree ffmpeg into node_modules would be packed into the asar and ship silently.
+// ffmpeg embeds its configure flags as a readable string, so a byte scan finds it.
+const NONFREE_MARKER = Buffer.from('--enable-nonfree')
+const scanNonfree = (label, path) => {
+  if (!existsSync(path)) return
+  if (readFileSync(path).includes(NONFREE_MARKER)) {
+    fail(
+      `${label} reports a --enable-nonfree build (${path}). OpenClip ships LGPL ffmpeg only; ` +
+        `a nonfree binary in the bundle is a redistribution/supply-chain regression.`
+    )
+  }
+}
+scanNonfree('bundled ffmpeg', bins.ffmpeg)
+scanNonfree('bundled ffprobe', bins.ffprobe)
+const asarPath = join(resourcesDir, 'app.asar')
+scanNonfree('packaged app.asar', asarPath)
+const asarUnpacked = join(resourcesDir, 'app.asar.unpacked')
+if (existsSync(asarUnpacked)) {
+  // Native binaries are commonly asarUnpack'd; scan each file in the unpacked tree.
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name)
+      // lstat (don't follow symlinks) so a directory-symlink loop can't infinite-recurse;
+      // a symlinked file is still byte-scanned (readFileSync follows the link).
+      if (lstatSync(p).isDirectory()) walk(p)
+      else scanNonfree(`app.asar.unpacked/${name}`, p)
+    }
+  }
+  walk(asarUnpacked)
+}
+log('nonfree scan OK: no --enable-nonfree marker in ffmpeg/ffprobe, app.asar, or unpacked binaries')
 
 // 4) bundled libass font present (fontsdir for deterministic caption burns)
 const font = join(resourcesDir, 'fonts', 'DejaVuSans.ttf')

@@ -9,10 +9,15 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, writeFileSync, readdirSync, existsSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   exportClipArgs,
   exportClipArgsMultiRange,
   exportClipArgsSplit,
+  exportClip,
+  codecArgs,
   thumbnailArgs,
   buildVf,
   cropExpr,
@@ -153,6 +158,8 @@ describe('exportClipArgs (the verified command)', () => {
       'h264_videotoolbox',
       '-b:v',
       '8M',
+      '-pix_fmt',
+      'yuv420p',
       '-c:a',
       'aac',
       '-b:a',
@@ -382,6 +389,8 @@ describe('logo overlay (Part K — brand kit)', () => {
       'h264_videotoolbox',
       '-b:v',
       '8M',
+      '-pix_fmt',
+      'yuv420p',
       '-c:a',
       'aac',
       '-b:a',
@@ -509,6 +518,142 @@ describe('thumbnailArgs', () => {
   })
 })
 
+describe('codecArgs: pix_fmt + quality-aware CPU CRF (audit fixes openclip-ucs/ixa/6fz)', () => {
+  it('pins -pix_fmt yuv420p on BOTH the videotoolbox and the libx264 branch (openclip-ucs)', () => {
+    const gpu = codecArgs({ quality: '1080p' })
+    expect(gpu).toContain('h264_videotoolbox')
+    expect(gpu.slice(gpu.indexOf('-pix_fmt'))).toEqual(['-pix_fmt', 'yuv420p'])
+    const cpu = codecArgs({ quality: '1080p', forceCpu: true })
+    expect(cpu).toContain('libx264')
+    expect(cpu.slice(cpu.indexOf('-pix_fmt'))).toEqual(['-pix_fmt', 'yuv420p'])
+  })
+
+  it('forceCpu maps quality to a CRF so 720p is not encoded near-1080p (openclip-ixa)', () => {
+    const cpu720 = exportClipArgs({ ...base, quality: '720p', forceCpu: true })
+    expect(cpu720[cpu720.indexOf('-crf') + 1]).toBe('23')
+    const cpu1080 = exportClipArgs({ ...base, quality: '1080p', forceCpu: true })
+    expect(cpu1080[cpu1080.indexOf('-crf') + 1]).toBe('18')
+  })
+
+  it('every export argv carries -pix_fmt yuv420p across all three builders', () => {
+    expect(exportClipArgs(base)).toContain('yuv420p')
+    expect(
+      exportClipArgsMultiRange({
+        ...base,
+        keepRanges: [
+          [30, 40],
+          [44, 58.5]
+        ]
+      })
+    ).toContain('yuv420p')
+    expect(
+      exportClipArgsSplit({
+        ...base,
+        reframePlan: {
+          mode: 'split',
+          regions: [
+            { cropX: 0, cropY: 0, cropW: 960, cropH: 540 },
+            { cropX: 960, cropY: 0, cropW: 960, cropH: 540 }
+          ]
+        }
+      })
+    ).toContain('yuv420p')
+  })
+})
+
+describe('option-injection guard on path args (audit fix openclip-6l6)', () => {
+  it('exportClipArgs refuses an outputPath that begins with a dash', () => {
+    expect(() => exportClipArgs({ ...base, outputPath: '-y' })).toThrow(/outputPath/)
+  })
+})
+
+describe('escapeFilterPath: full filtergraph special-char set (audit fix openclip-5ir/uas)', () => {
+  it('backslash-escapes : , ; [ ] and the quote so a bracketed/comma path cannot split the graph', () => {
+    // A perfectly ordinary macOS path with brackets, a comma and a colon.
+    const p = '/Users/x/My [Clips]/a, b/clip:1.ass'
+    const esc = escapeFilterPath(p)
+    expect(esc).toBe('/Users/x/My \\[Clips\\]/a\\, b/clip\\:1.ass')
+    // Embedded in a -vf, none of the filtergraph separators survive UN-escaped: every
+    // [ ] , ; : in the value is preceded by a backslash.
+    const vf = buildVf({ aspectRatio: '9:16', assPath: p })
+    const valueStart = vf.indexOf('subtitles=') + 'subtitles='.length
+    const value = vf.slice(valueStart)
+    for (const i in [...value]) {
+      const ch = value[i]
+      if (',;[]:'.includes(ch)) {
+        expect(value[Number(i) - 1]).toBe('\\')
+      }
+    }
+  })
+
+  it('escapes the backslash FIRST so added escapes are not double-escaped', () => {
+    expect(escapeFilterPath('a\\b')).toBe('a\\\\b')
+  })
+})
+
+describe('exportClipArgsSplit honours the chosen aspect ratio (audit fix openclip-omd)', () => {
+  const splitPlan: ReframePlan = {
+    mode: 'split',
+    regions: [
+      { cropX: 0, cropY: 0, cropW: 960, cropH: 540 },
+      { cropX: 960, cropY: 0, cropW: 960, cropH: 540 }
+    ]
+  }
+
+  it('derives the tile size from outputDimensions(aspect) for 4:5 (1080×675 tiles → 1080×1350)', () => {
+    const args = exportClipArgsSplit({ ...base, aspectRatio: '4:5', reframePlan: splitPlan })
+    const fc = args[args.indexOf('-filter_complex') + 1]
+    // 4:5 → 1080×1350 output ⇒ each tile is 1080×675.
+    expect(fc).toContain('scale=1080:675:force_original_aspect_ratio=increase,crop=1080:675')
+    expect(fc).not.toContain('scale=1080:960') // no longer the hard-coded 9:16 tile
+  })
+
+  it('keeps the 9:16 tiles (1080×960) when the aspect is 9:16 (golden unchanged)', () => {
+    const args = exportClipArgsSplit({ ...base, aspectRatio: '9:16', reframePlan: splitPlan })
+    const fc = args[args.indexOf('-filter_complex') + 1]
+    expect(fc).toContain('scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960')
+  })
+})
+
+describe('exportClip writes the output atomically (audit fix openclip-8dg)', () => {
+  it('encodes to a sibling temp and renames onto outputPath only on success (no leftover)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oc-export-'))
+    const out = join(dir, 'clip.mp4')
+    try {
+      const fakeRun = async (o: { args: string[] }): Promise<{ code: number; stderr: string }> => {
+        const target = o.args[o.args.length - 1]
+        expect(target).not.toBe(out) // ffmpeg writes to a temp, NOT the user's path
+        writeFileSync(target, 'MP4')
+        return { code: 0, stderr: '' }
+      }
+      const res = await exportClip({ ...base, outputPath: out, runFfmpeg: fakeRun })
+      expect(res.outputPath).toBe(out)
+      expect(existsSync(out)).toBe(true)
+      expect(readdirSync(dir)).toEqual(['clip.mp4']) // no leftover .part temp
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('leaves NO truncated file at outputPath when the encode fails/cancels', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oc-export-'))
+    const out = join(dir, 'clip.mp4')
+    try {
+      const fakeRun = async (o: { args: string[] }): Promise<never> => {
+        writeFileSync(o.args[o.args.length - 1], 'PARTIAL') // killed mid-encode
+        throw new Error('ffmpeg aborted')
+      }
+      await expect(exportClip({ ...base, outputPath: out, runFfmpeg: fakeRun })).rejects.toThrow(
+        /aborted/
+      )
+      expect(existsSync(out)).toBe(false) // user's folder never shows a broken clip
+      expect(readdirSync(dir)).toEqual([]) // the temp partial is cleaned too
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 // ============================================================================
 // export-runner glue (injected fake export service — no real ffmpeg)
 // ============================================================================
@@ -540,6 +685,22 @@ const params: JobParams['export'] = {
 }
 
 describe('createExportRunner', () => {
+  it('registers the encode child PID via ctx.trackPid (audit fix openclip-a00)', async () => {
+    const tracked: number[] = []
+    const exportClip = vi.fn(async (o: { onSpawn?: (pid: number) => void }) => {
+      o.onSpawn?.(4242) // the real exportClip forwards ffmpeg's child.pid here
+      return { outputPath: '/out/clip.mp4', width: 1080, height: 1920, durationMs: 1000 }
+    })
+    const runner = createExportRunner({ exportClip })
+    const ctx: JobRunnerContext = {
+      signal: new AbortController().signal,
+      trackPid: (pid) => tracked.push(pid),
+      jobId: 'export-test-pid'
+    }
+    await runner(params, fakeEmitter().emit, ctx)
+    expect(tracked).toContain(4242) // kill-on-quit now has an OS-level backstop for export
+  })
+
   it('streams 0→100 progress and returns the export result', async () => {
     const exportClip = vi.fn(async (o: { onProgress?: (p: number) => void }) => {
       o.onProgress?.(50)

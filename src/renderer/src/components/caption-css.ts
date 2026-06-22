@@ -74,7 +74,12 @@ export function captionWordStyle(
   if (opts.keyword) {
     if (style.keywordColor) css.color = style.keywordColor
     if (style.keywordBold) css.fontWeight = 900
-    if (typeof style.keywordScale === 'number' && style.keywordScale !== 100) {
+    // Skip the static keyword scale when a per-word animation is active (audit fix
+    // openclip-yuk): the burn does the same (ass-captions) because both drive the font
+    // scale, and a constant keywordScale would fight the animation's target. Keeps the
+    // preview consistent with what gets burned.
+    const perWordActive = !!style.perWordAnimation && style.perWordAnimation !== 'none'
+    if (typeof style.keywordScale === 'number' && style.keywordScale !== 100 && !perWordActive) {
       css.display = 'inline-block'
       css.transform = `scale(${style.keywordScale / 100})`
     }
@@ -85,4 +90,23 @@ export function captionWordStyle(
     css.borderRadius = '0.1em'
   }
   return css
+}
+
+/**
+ * The CSS class for the per-word reveal animation (openclip-4v1), applied to the
+ * CURRENT word only (the one the playhead just reached) so the preview shows the
+ * same bounce/pop the libass burn applies via `\t`. The keyframes live in
+ * `assets/index.css` (`.oc-cap-bounce` grows 100%→115%, `.oc-cap-pop` 70%→100%,
+ * mirroring ass-captions). Returns undefined when no animation applies — the
+ * caller re-keys the word so React replays the animation as each word becomes
+ * current.
+ */
+export function captionWordAnimationClass(
+  style: CaptionStyle,
+  current: boolean
+): string | undefined {
+  if (!current) return undefined
+  if (style.perWordAnimation === 'bounce') return 'oc-cap-bounce'
+  if (style.perWordAnimation === 'pop') return 'oc-cap-pop'
+  return undefined
 }

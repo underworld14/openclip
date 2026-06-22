@@ -8,7 +8,7 @@
  *   - a SHA mismatch rejects and removes the partial file (no corrupt model).
  */
 
-import { describe, expect, it, beforeEach, afterEach } from 'vitest'
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
@@ -97,6 +97,34 @@ describe('model-manager: downloadModel (injected network)', () => {
     expect(sha256File(dest)).toBe(etag)
   })
 
+  it('reports an INDETERMINATE total (0) when no size header is present (openclip-flg)', async () => {
+    // xet/LFS-backed model served via a redirect: no x-linked-size AND no
+    // content-length. The total must stay 0 (indeterminate), NOT be faked to
+    // `received` (which made the runner show a stuck near-100% bar from chunk 1).
+    const bytes = Buffer.from('xet-lfs-model-bytes')
+    const etag = sha256(bytes)
+    const dest = join(dir, 'ggml-base.bin')
+    const totals: number[] = []
+    const fetchImpl = (async () => ({
+      ok: true,
+      status: 200,
+      headers: {
+        get: (k: string): string | null =>
+          k.toLowerCase() === 'x-linked-etag' ? `"${etag}"` : null
+      },
+      body: Readable.toWeb(Readable.from([bytes]))
+    })) as unknown as typeof fetch
+
+    await downloadModel({
+      model: 'base',
+      destPath: dest,
+      fetchImpl,
+      onProgress: (_received, total) => totals.push(total)
+    })
+    expect(totals.length).toBeGreaterThan(0)
+    expect(totals.every((t) => t === 0)).toBe(true)
+  })
+
   it('rejects + removes the partial file on a SHA mismatch (no corrupt model)', async () => {
     const bytes = Buffer.from('corrupt-ish payload')
     const dest = join(dir, 'ggml-tiny.bin')
@@ -109,6 +137,67 @@ describe('model-manager: downloadModel (injected network)', () => {
       })
     ).rejects.toThrow(/sha|checksum|mismatch/i)
     expect(existsSync(dest)).toBe(false)
+  })
+
+  it('refuses to keep an UNVERIFIABLE model: no expected SHA, no etag, not in KNOWN_SHA256 (openclip-t1b)', async () => {
+    const bytes = Buffer.from('unverifiable multi-GB-ish model bytes')
+    const dest = join(dir, 'ggml-base.bin')
+    await expect(
+      downloadModel({
+        model: 'base', // NOT in KNOWN_SHA256 (only `tiny` is pinned)
+        destPath: dest,
+        // no expectedSha256, and fakeFetch with no etag ⇒ nothing to verify against
+        fetchImpl: fakeFetch(bytes, undefined)
+      })
+    ).rejects.toThrow(/unable to verify|cannot verify|integrity/i)
+    // The unverified download must NOT be left on disk.
+    expect(existsSync(dest)).toBe(false)
+  })
+
+  it('still rejects a WRONG payload for a pinned model via mismatch, not the unverifiable path', async () => {
+    // `tiny` is pinned in KNOWN_SHA256; a wrong payload fails by mismatch (proving
+    // the t1b fix does not over-reject the pinned-hash verification path).
+    const dest = join(dir, 'ggml-tiny.bin')
+    await expect(
+      downloadModel({
+        model: 'tiny',
+        destPath: dest,
+        fetchImpl: fakeFetch(Buffer.from('not the real tiny model'), undefined)
+      })
+    ).rejects.toThrow(/mismatch/i)
+    expect(existsSync(dest)).toBe(false)
+  })
+
+  it('cancels the body reader and tears down on abort (audit fix openclip-0wn)', async () => {
+    const ac = new AbortController()
+    const cancel = vi.fn(async () => {})
+    let reads = 0
+    // First read yields a chunk; the second never resolves, so the pump sits waiting
+    // until the abort fires — at which point the reader MUST be cancelled.
+    const reader = {
+      read: (): Promise<{ done: boolean; value?: Uint8Array }> =>
+        new Promise((res) => {
+          reads += 1
+          if (reads === 1) res({ done: false, value: new Uint8Array([1, 2, 3]) })
+          // reads >= 2: intentionally never resolves
+        }),
+      cancel,
+      releaseLock: () => {}
+    }
+    const fetchImpl = (async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      body: { getReader: () => reader }
+    })) as unknown as typeof fetch
+
+    const dest = join(dir, 'ggml-base.bin')
+    const p = downloadModel({ model: 'base', destPath: dest, fetchImpl, signal: ac.signal })
+    await new Promise((r) => setTimeout(r, 15)) // let the pump consume the first chunk
+    ac.abort()
+    await expect(p).rejects.toThrow(/cancel/i)
+    expect(cancel).toHaveBeenCalled() // reader torn down, not left pinned until GC
+    expect(existsSync(dest)).toBe(false) // partial cleaned up
   })
 
   it('rejects when the HTTP status is not ok (e.g. ggml-org 401)', async () => {

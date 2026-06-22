@@ -21,7 +21,19 @@ import {
   type OpenClipBridge
 } from '@renderer/components/import-pipeline'
 
-/** localStorage key gating the one-time yt-dlp/TOS consent (PRD §20.4). */
+/**
+ * localStorage key gating the one-time yt-dlp/TOS consent (PRD §20.4).
+ *
+ * SCOPE (audit note openclip-1o1): this is a RENDERER-SIDE UX / legal-acknowledgement
+ * gate, NOT a main-process-enforced security boundary. It exists so the user
+ * affirmatively accepts the yt-dlp/site-TOS terms once before their first URL
+ * download; a buggy/compromised renderer (or a direct `jobs.start('url-download')`)
+ * could reach the main runner without it. That is acceptable because bypassing
+ * consent has no security impact — it only skips a legal acknowledgement, not an
+ * attack-surface check. The real security boundary for URL imports is `assertSafeUrl`
+ * in the MAIN process (validated regardless of the renderer). Do not mistake this
+ * flag for an enforced gate; if it must become one, persist + check it in main.
+ */
 export const CONSENT_KEY = 'openclip:url-consent'
 const DEFAULT_MODEL: WhisperModelSize = 'base'
 
@@ -82,6 +94,13 @@ export interface ImportControllerDeps {
    */
   adoptSource?(projectId: string, filePath: string): Promise<{ path: string }>
   /**
+   * Reclaim (delete) a project's adopted media dir. Defaults to
+   * `bridge.media.reclaim`. Called best-effort when an APP-OWNED import fails after
+   * the download was already adopted into persistent media but before any .ocproj was
+   * saved, so the orphan isn't left until the next-launch sweep (audit fix openclip-e5s).
+   */
+  reclaimMedia?(projectId: string): Promise<void>
+  /**
    * Source transcription language (PRD §6.2 / Part I cross-language). Read LAZILY
    * at import time so the latest Settings value is used without rebuilding the
    * controller (mirrors the `onNeedModel` ref pattern in `useImportController`).
@@ -101,6 +120,8 @@ export interface ImportController {
   importUrl(url: string): Promise<void>
   /** Smart entry: routes to importUrl/importFile by detecting an http(s) URL. */
   importAny(value: string): Promise<void>
+  /** Cancel the in-flight import's streaming job (download/transcribe) — openclip-2bm. */
+  cancel(): Promise<void>
   acceptConsent(): void
   declineConsent(): void
 }
@@ -120,6 +141,10 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
   const adoptSource =
     deps.adoptSource ??
     ((pid, fp) => deps.bridge.media.adoptSource({ projectId: pid, filePath: fp }))
+  const reclaimMedia =
+    deps.reclaimMedia ??
+    ((pid: string): Promise<void> =>
+      deps.bridge.media.reclaim({ projectId: pid }).then(() => undefined))
   const storage: StorageLike | null =
     deps.storage !== undefined
       ? deps.storage
@@ -135,6 +160,9 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     needsConsent: false
   }
   let pendingUrl: string | null = null
+  // The in-flight streaming job's id (download or transcribe), tracked so cancel() can
+  // abort it (openclip-2bm). Set on each job's onStart, cleared when the import settles.
+  let activeJobId: string | null = null
   const listeners = new Set<() => void>()
   const set = (patch: Partial<ImportControllerState>): void => {
     state = { ...state, ...patch }
@@ -158,7 +186,8 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     name: string,
     base: number,
     span: number,
-    appOwned: boolean
+    appOwned: boolean,
+    taskId: string
   ): Promise<void> {
     const projectId = genId()
     // For an app-owned (URL/YouTube) download, ADOPT the file into the persistent
@@ -172,6 +201,33 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
       const adopted = await adoptSource(projectId, filePath)
       sourcePath = adopted.path
     }
+    let committed = false
+    try {
+      await runPipelineAfterAdopt(projectId, sourcePath, name, base, span, appOwned, taskId, () => {
+        committed = true
+      })
+    } catch (err) {
+      // The app-owned download was adopted into persistent media BEFORE any .ocproj was
+      // saved; on a failed/cancelled import reclaim the orphan dir now rather than
+      // leaving it for the next-launch sweep (audit fix openclip-e5s). Best-effort —
+      // never mask the original error. Skip reclaim once the project is COMMITTED (live
+      // via setCurrentProject): a later failure must not delete media out from under a
+      // project the user can already see (review follow-up).
+      if (appOwned && !committed) await reclaimMedia(projectId).catch(() => {})
+      throw err
+    }
+  }
+
+  async function runPipelineAfterAdopt(
+    projectId: string,
+    sourcePath: string,
+    name: string,
+    base: number,
+    span: number,
+    appOwned: boolean,
+    taskId: string,
+    markCommitted: () => void
+  ): Promise<void> {
     const result = await runImport({
       bridge: deps.bridge,
       filePath: sourcePath,
@@ -183,10 +239,13 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
       onProgress: (p, s) => {
         const scaled = base + Math.round((p / 100) * span)
         set({ pct: scaled, stage: s })
-        deps.ui?.upsertTask?.({ jobId: 'import', progress: scaled, status: 'running' })
+        deps.ui?.upsertTask?.({ jobId: taskId, progress: scaled, status: 'running' })
       },
       onPartial: (partial) => deps.store.appendTranscriptPartial(partial),
-      onTranscript: (t: JobResult['transcribe']) => deps.store.hydrateTranscript(t)
+      onTranscript: (t: JobResult['transcribe']) => deps.store.hydrateTranscript(t),
+      onStart: (jobId) => {
+        activeJobId = jobId
+      }
     })
 
     const current = deps.store.getCurrentProject()
@@ -207,24 +266,31 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     const sourceVideo = { ...result.sourceVideo, path: sourcePath, appOwned }
     const blank = deps.createBlankProject(name, sourceVideo)
     deps.store.setCurrentProject({ ...blank, id: projectId, transcript: result.transcript })
+    // The project is now LIVE/visible — past here a failure must not reclaim its media.
+    markCommitted()
     deps.ui?.setView?.('editor')
   }
 
   async function importFile(path: string): Promise<void> {
     if (!path) return
+    // Per-import task key (audit fix openclip-ce3): a hardcoded 'import' key meant two
+    // concurrent imports would share one tasks entry and the first to finish would
+    // clearTask the other's progress. genId() makes each import's task key unique.
+    const taskId = genId()
     set({ busy: true, error: null, pct: 0 })
     try {
       if (!(await ensureModel())) {
         set({ busy: false })
         return
       }
-      await runPipeline(path, basename(path), 0, 100, false) // file import: user's original, not app-owned
+      await runPipeline(path, basename(path), 0, 100, false, taskId) // file import: user's original, not app-owned
       set({ stage: 'done' })
     } catch (e) {
       set({ error: asMessage(e) })
     } finally {
+      activeJobId = null
       set({ busy: false })
-      deps.ui?.clearTask?.('import')
+      deps.ui?.clearTask?.(taskId)
     }
   }
 
@@ -238,6 +304,7 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
       set({ needsConsent: true, error: null })
       return
     }
+    const taskId = genId() // per-import task key (audit fix openclip-ce3)
     set({ busy: true, error: null, pct: 0, stage: 'downloading' })
     try {
       if (!(await ensureModel())) {
@@ -247,15 +314,19 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
       const dl = await runUrl({
         bridge: deps.bridge,
         url: u,
-        onProgress: (p) => set({ pct: Math.round(p * 0.2), stage: 'downloading' }) // 0..20% band
+        onProgress: (p) => set({ pct: Math.round(p * 0.2), stage: 'downloading' }), // 0..20% band
+        onStart: (jobId) => {
+          activeJobId = jobId
+        }
       })
-      await runPipeline(dl.filePath, dl.title ?? 'Imported video', 20, 80, true) // URL import: app-owned download
+      await runPipeline(dl.filePath, dl.title ?? 'Imported video', 20, 80, true, taskId) // URL import: app-owned download
       set({ stage: 'done' })
     } catch (e) {
       set({ error: asMessage(e) })
     } finally {
+      activeJobId = null
       set({ busy: false })
-      deps.ui?.clearTask?.('import')
+      deps.ui?.clearTask?.(taskId)
     }
   }
 
@@ -276,6 +347,23 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     return isUrl(value) ? importUrl(value) : importFile(value)
   }
 
+  /**
+   * Cancel the in-flight import (openclip-2bm): abort the active streaming job (download
+   * or transcribe) via the bridge. The job emits a terminal CANCELLED error, so the
+   * importUrl/importFile promise rejects and its finally clears busy + reclaims any
+   * adopted media. No-op when nothing is running. Best-effort — a cancel IPC failure is
+   * swallowed so the UI can't get wedged.
+   */
+  async function cancel(): Promise<void> {
+    const jobId = activeJobId
+    if (!jobId) return
+    try {
+      await deps.bridge.jobs.cancel(jobId)
+    } catch {
+      /* best-effort — the job may have already settled */
+    }
+  }
+
   return {
     getState: () => state,
     subscribe: (listener) => {
@@ -287,6 +375,7 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     importFile,
     importUrl,
     importAny,
+    cancel,
     acceptConsent,
     declineConsent
   }

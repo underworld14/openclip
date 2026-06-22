@@ -4,13 +4,10 @@
  * (react-refresh boundary).
  */
 
-/** seconds → `m:ss` (or `h:mm:ss`) for a segment timestamp label (PRD §6.2). */
+import { formatSeconds } from '@renderer/components/format-time'
+
+/** seconds → `m:ss` (or `h:mm:ss`) for a segment timestamp label (PRD §6.2). Thin
+ * wrapper over the single `formatSeconds` formatter (audit fix openclip-64e). */
 export function formatTimestamp(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds))
-  const h = Math.floor(s / 3600)
-  const m = Math.floor((s % 3600) / 60)
-  const sec = s % 60
-  const mm = h > 0 ? String(m).padStart(2, '0') : String(m)
-  const ss = String(sec).padStart(2, '0')
-  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`
+  return formatSeconds(seconds, { hours: 'auto' })
 }

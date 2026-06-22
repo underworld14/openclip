@@ -26,7 +26,21 @@ import type {
   ClipSchema,
   SourceVideo,
   Transcript,
-  BrandTemplate
+  TargetPlatform,
+  BrandTemplate,
+  // AI title/caption outputs — inferred from their z.strictObject schemas (openclip-xgk).
+  GenerateTitlesResult,
+  EnhanceCaptionsResult
+} from './schema'
+
+// Re-export the AI title/caption output types (openclip-xgk) so existing consumers that
+// import them from '@shared/channels' keep working now that they're defined (with their
+// Zod schemas) in schema.ts.
+export type {
+  TitleOption,
+  GenerateTitlesResult,
+  EnhancedCaption,
+  EnhanceCaptionsResult
 } from './schema'
 import type { WhisperModelSize, JobKind, JobParams } from './jobs'
 
@@ -49,6 +63,10 @@ export enum IPCChannels {
   // Media: adopt a downloaded source file into <userData>/media/<projectId>/ so it
   // persists with the project + is deleted with it (Part H) → `media.adoptSource`.
   MEDIA_ADOPT_SOURCE = 'media:adopt-source',
+  // Reclaim (delete) a project's adopted media dir immediately — used when an app-owned
+  // import fails after adopt but before any .ocproj was saved (openclip-e5s) →
+  // `media.reclaim`.
+  MEDIA_RECLAIM = 'media:reclaim',
   // Brand kit (Part K) — the APP-LEVEL brand library persisted main-side under
   // <userData>/brands/<id>/ (mirrors media-store). list/save/delete + adopt a PNG
   // logo into the brand dir → `brand.list|save|delete|setLogo`.
@@ -84,7 +102,16 @@ export enum IPCChannels {
   // directory picker / single-PNG picker; the renderer cannot widen them.
   SHOW_DIRECTORY_DIALOG = 'system:directory-dialog',
   SHOW_IMAGE_DIALOG = 'system:image-dialog',
-  CHECK_UPDATE = 'system:check-update'
+  CHECK_UPDATE = 'system:check-update',
+  // Quit-time autosave durability (openclip-49y). FLUSH_BEFORE_QUIT is a ONE-WAY
+  // main→renderer signal (forwarded as a window message like JOB_PORT, NOT in ChannelMap)
+  // sent from `before-quit`. It uses the `lifecycle:` prefix DELIBERATELY (not `system:`)
+  // so `buildNamespace('system')` — which derives a bridge method per matching enum value —
+  // does NOT auto-expose it as an invoke (it isn't one). The renderer flushes its pending
+  // debounced save and then calls `system.autosaveFlushed()` (the AUTOSAVE_FLUSHED invoke
+  // below) so main can quit as soon as the save lands instead of racing renderer teardown.
+  FLUSH_BEFORE_QUIT = 'lifecycle:flush-before-quit',
+  AUTOSAVE_FLUSHED = 'system:autosave-flushed'
 }
 
 // ============================================================================
@@ -106,7 +133,17 @@ export interface GenerateClipsRequest {
   durationSeconds: number
   clipStyle: ClipStyle
   numClips: number
-  targetPlatform: 'tiktok' | 'youtube' | 'instagram' | 'all'
+  // Derived from the schema enum, not a hand-typed duplicate (audit fix openclip-z2q):
+  // if TargetPlatform gains/renames a member the two can no longer silently drift.
+  targetPlatform: TargetPlatform
+  /**
+   * Clip-length bounds in seconds (audit fix openclip-t0v). When present they drive
+   * the prompt's "each clip must be between X and Y seconds" line AND the in-code
+   * clamp; the renderer populates them from project settings so a user's min/max
+   * duration is honoured instead of the handler's old hard-coded 15/90.
+   */
+  minDuration?: number
+  maxDuration?: number
 }
 
 /** AI title/hook generation (PRD §7.4). */
@@ -115,14 +152,8 @@ export interface GenerateTitlesRequest {
   model: string
   clipTranscript: string
 }
-export interface TitleOption {
-  title: string
-  hook: string
-  psychology: string
-}
-export interface GenerateTitlesResult {
-  options: TitleOption[]
-}
+// TitleOption + GenerateTitlesResult are inferred from their z.strictObject schemas in
+// schema.ts (openclip-xgk) and imported above.
 
 /** AI caption enhancement (PRD §7.5). */
 export interface EnhanceCaptionsRequest {
@@ -137,19 +168,9 @@ export interface EnhanceCaptionsRequest {
   /** Part K (emoji) — distinct caption words to suggest emoji for (mode:'emoji'). */
   words?: string[]
 }
-export interface EnhancedCaption {
-  start_time: number
-  end_time: number
-  text: string
-}
-export interface EnhanceCaptionsResult {
-  enhanced_captions: EnhancedCaption[]
-  /**
-   * Part K (emoji) — normalized word → emoji (mode:'emoji'). Additive: absent on
-   * the original rewrite path. Threaded into the export job as `captions.aiEmojiMap`.
-   */
-  emoji_map?: Record<string, string>
-}
+// EnhancedCaption + EnhanceCaptionsResult are inferred from their z.strictObject schemas
+// in schema.ts (openclip-xgk; emoji_map is the Part K word→emoji dictionary) and imported
+// above.
 
 /** Per-provider key status — value never crosses IPC (plan Part B / PRD §12.2). */
 export interface ApiKeyStatus {
@@ -243,6 +264,7 @@ export interface ChannelMap {
     { projectId: string; filePath: string },
     { path: string }
   >
+  [IPCChannels.MEDIA_RECLAIM]: ChannelPayload<{ projectId: string }, { reclaimed: boolean }>
 
   // --- Brand kit (Part K) — app-level brand library, persisted main-side ---
   [IPCChannels.BRAND_LIST]: ChannelPayload<void, BrandTemplate[]>
@@ -308,6 +330,9 @@ export interface ChannelMap {
     { canceled: boolean; filePaths: string[] }
   >
   [IPCChannels.CHECK_UPDATE]: ChannelPayload<void, UpdateStatus>
+  // Renderer→main ACK that the pending autosave was flushed at quit (openclip-49y) →
+  // `system.autosaveFlushed()`. main resolves its before-quit wait and proceeds.
+  [IPCChannels.AUTOSAVE_FLUSHED]: ChannelPayload<void, { ok: boolean }>
 }
 
 // ============================================================================

@@ -52,6 +52,12 @@ describe('whisper-spawn: argument construction (Gate-A exact invocation)', () =>
     expect(fixed).toContain('-l')
     expect(fixed[fixed.indexOf('-l') + 1]).toBe('es')
   })
+
+  it('rejects a path arg that begins with a dash — option injection guard (openclip-6l6)', () => {
+    expect(() => whisperArgs({ model: '-x', wavPath: 'w', outBase: 'o' })).toThrow(/model/)
+    expect(() => whisperArgs({ model: 'm', wavPath: '-f', outBase: 'o' })).toThrow(/wavPath/)
+    expect(() => whisperArgs({ model: 'm', wavPath: 'w', outBase: '-of' })).toThrow(/outBase/)
+  })
 })
 
 describe('whisper-spawn: stderr progress parsing (-pp stream)', () => {

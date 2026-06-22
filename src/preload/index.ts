@@ -27,6 +27,7 @@ import { buildSettingsApi } from './api/settings'
 import { buildModelApi } from './api/model'
 import { buildSystemApi } from './api/system'
 import { buildJobsApi, installJobPortForwarder } from './api/jobs'
+import { installQuitFlushForwarder } from './quit-flush'
 
 // ============================================================================
 // OpenClipBridge — the public, derived `window.openclip` type (E.4 namespaces)
@@ -80,6 +81,8 @@ const openclip: OpenClipBridge = {
 // renderer's MAIN world (the only contextIsolation-safe way to hand the renderer
 // a LIVE port — see api/jobs.ts). Installed once, in BOTH isolation modes.
 installJobPortForwarder()
+// Forward the quit-time flush signal into the renderer (openclip-49y).
+installQuitFlushForwarder()
 
 if (process.contextIsolated) {
   try {

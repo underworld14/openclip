@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same branch supersedes the previous run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast feedback: the pure gates, no binaries, no GUI.
+  gates:
+    name: typecheck · lint · unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # electron-builder install-app-deps runs in postinstall and needs no display.
+      - run: npm run typecheck
+      - run: npm run lint
+      # NOTE: do NOT pipe these commands. `npm run test:e2e | tail` swallows the
+      # exit code — that is precisely how 8 red E2E specs went unnoticed.
+      - run: npm test
+
+  # The real thing: bundled binaries, the packaged main process, and Electron.
+  macos:
+    name: smokes · E2E (macos arm64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # A broken/partial Electron download makes every E2E spec die inside
+      # electron.launch with a message that reads like an environment quirk. Fail
+      # here, loudly, instead of 40 confusing lines later.
+      - name: Verify the Electron binary actually unpacked
+        run: |
+          APP="node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
+          if [ ! -x "$APP" ]; then
+            echo "::error::Electron did not unpack — $APP is missing."
+            echo "node_modules/electron/dist contains:"
+            ls -la node_modules/electron/dist || true
+            exit 1
+          fi
+          npx electron --version
+
+      - name: Install ffmpeg
+        run: brew install ffmpeg
+
+      - name: Install whisper.cpp (whisper-cli on PATH)
+        run: brew install whisper-cpp
+
+      - run: npm run build
+
+      # OPENCLIP_REQUIRE_SMOKES=1 turns a silently-skipped real-binary layer into a
+      # failure. Without it the ~10 @serial ffmpeg/libass/reframe/whisper specs
+      # self-skip on a runner with no binaries and the suite still reports green.
+      - name: Real-binary smokes (strict — a skip is a failure)
+        run: npm run test:smoke
+
+      - name: Playwright E2E
+        run: npm run test:e2e
+
+      - name: Upload E2E artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore

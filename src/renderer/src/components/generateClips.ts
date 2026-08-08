@@ -47,6 +47,13 @@ export interface GenerateClipsHandlerDeps {
   getProject: () => Project | null
   getSettings: () => Settings
   generateClips: (req: GenerateClipsRequest) => Promise<void>
+  /**
+   * Surface for the "nothing to generate from" precondition. The button's enabled
+   * state (`hasTranscript`) and this handler's precondition (a composable project)
+   * are computed from different things and CAN disagree; when they do the click
+   * must say something rather than dead-end (audit fix BUG-19bt2k).
+   */
+  onError?: (message: string) => void
 }
 
 /**
@@ -57,7 +64,10 @@ export interface GenerateClipsHandlerDeps {
 export function createGenerateClipsHandler(deps: GenerateClipsHandlerDeps): () => Promise<void> {
   return async () => {
     const project = deps.getProject()
-    if (!project) return
+    if (!project) {
+      deps.onError?.('No project is open — import a video before generating clips.')
+      return
+    }
     await deps.generateClips(buildGenerateClipsRequest(project, deps.getSettings()))
   }
 }

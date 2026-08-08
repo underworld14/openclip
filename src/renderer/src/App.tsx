@@ -37,6 +37,7 @@ import { ExportPanel } from '@renderer/components/ExportPanel'
 import { SettingsPanel } from '@renderer/components/SettingsPanel'
 import { ModelDownloadDialog } from '@renderer/components/ModelDownloadDialog'
 import { Toaster } from '@renderer/components/ui/sonner'
+import { toast } from 'sonner'
 import { createGenerateClipsHandler } from '@renderer/components/generateClips'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
@@ -66,7 +67,10 @@ function App(): React.JSX.Element {
     // currentProject.transcript.
     getProject: () => useProjectStore.getState().composeProject(),
     getSettings: () => useSettingsStore.getState().settings,
-    generateClips: (req) => useProjectStore.getState().generateClips(req)
+    generateClips: (req) => useProjectStore.getState().generateClips(req),
+    // The button enables on `hasTranscript` while the handler needs a composable
+    // project; if those ever disagree the click must not dead-end (BUG-19bt2k).
+    onError: (message) => toast.error('Cannot generate clips', { description: message })
   })
 
   // Wire the debounced autosave subscriber (Wave-1 integration) once for the app

@@ -39,6 +39,36 @@ test('the Auto Generate Clips header button is wired: click → clips render (op
         onPartial: (partial) => store.getState().appendTranscriptPartial(partial),
         onTranscript: (t) => store.getState().hydrateTranscript(t)
       })
+      // The pipeline alone does NOT make a project current — in the app that is the
+      // import controller's `hydrateProject` step. Without it `composeProject()`
+      // returns null, the handler bails, and this spec asserted nothing while
+      // looking green-able (audit fix BUG-19bt2k). Commit the project like the
+      // controller does.
+      const now = Date.now()
+      store.getState().setCurrentProject({
+        id: 'p1',
+        name: 'Generate Clips E2E',
+        createdAt: now,
+        updatedAt: now,
+        sourceVideo: {
+          path: '/tmp/sample.mp4',
+          duration: 60,
+          resolution: { width: 1920, height: 1080 },
+          fps: 30,
+          format: 'mp4'
+        },
+        transcript: result.transcript,
+        clips: [],
+        settings: {
+          targetPlatform: 'tiktok',
+          aspectRatio: '9:16',
+          clipStyle: 'all',
+          maxClips: 3,
+          minDuration: 5,
+          maxDuration: 60
+        },
+        exportHistory: []
+      })
       return result.transcript.segments.length
     })
     await expect(win.getByTestId('transcript-panel')).toBeVisible()

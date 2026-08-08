@@ -100,3 +100,26 @@ describe('createGenerateClipsHandler', () => {
     expect(generateClips).not.toHaveBeenCalled()
   })
 })
+
+describe('createGenerateClipsHandler: no silent no-ops (BUG-19bt2k)', () => {
+  it('reports an actionable error instead of returning silently when no project can be composed', async () => {
+    // The button is enabled on `hasTranscript` alone (App.tsx) while the handler
+    // requires a composable project, so the two conditions can disagree. The old
+    // handler just `return`ed: no error, no toast, no spinner — the clip rail kept
+    // telling the user to press the button they had just pressed.
+    const generateClips = vi.fn(async () => {})
+    const onError = vi.fn()
+    const handler = createGenerateClipsHandler({
+      getProject: () => null,
+      getSettings: () => settingsFixture,
+      generateClips,
+      onError
+    })
+
+    await handler()
+
+    expect(generateClips).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(onError.mock.calls[0][0]).toMatch(/import a video/i)
+  })
+})

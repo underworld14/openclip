@@ -11,7 +11,7 @@
  */
 
 import { useState } from 'react'
-import { FolderOpen, Loader2 } from 'lucide-react'
+import { FolderOpen, Loader2, Upload } from 'lucide-react'
 import type { WhisperModelSize } from '@shared/jobs'
 import { useImportController } from '@renderer/hooks/useImportController'
 import { isUrl } from '@renderer/components/import-pipeline'
@@ -35,6 +35,8 @@ export interface ImportPanelProps {
 export function ImportPanel({ onNeedModel }: ImportPanelProps = {}): React.JSX.Element {
   const ctl = useImportController({ onNeedModel })
   const [value, setValue] = useState('')
+  const [dragging, setDragging] = useState(false)
+  const [dropError, setDropError] = useState<string | null>(null)
 
   const chooseFile = async (): Promise<void> => {
     // The picker is scoped server-side to a single video file (G.7); no inputs.
@@ -49,13 +51,73 @@ export function ImportPanel({ onNeedModel }: ImportPanelProps = {}): React.JSX.E
 
   const looksUrl = isUrl(value)
 
+  /**
+   * Drag-and-drop import (FEAT-hmsg5h). The Welcome copy has always told the user
+   * to "drop a file", and it is the first acceptance criterion of PRD §6.1, but
+   * no drop target existed anywhere in the renderer.
+   *
+   * Electron removed `File.path`, so the absolute path comes from
+   * `webUtils.getPathForFile` via the preload `files` namespace.
+   */
+  const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v']
+
+  const onDrop = (e: React.DragEvent): void => {
+    e.preventDefault()
+    setDragging(false)
+    setDropError(null)
+    if (ctl.busy) return
+    const file = e.dataTransfer.files?.[0]
+    if (!file) return
+    const path = window.openclip.files.getPathForFile(file)
+    if (!path) {
+      setDropError('That item has no file on disk — try the file picker instead.')
+      return
+    }
+    const lower = path.toLowerCase()
+    if (!VIDEO_EXTENSIONS.some((ext) => lower.endsWith(ext))) {
+      // A soft warning, not a hard block: ffprobe is the real authority on what
+      // is decodable, and this list can only ever be an approximation.
+      setDropError(`“${file.name}” doesn't look like a video file. Importing anyway…`)
+    }
+    void ctl.importFile(path)
+  }
+
   return (
-    <div data-testid="import-panel" className="app-no-drag flex flex-col gap-3">
+    <div
+      data-testid="import-panel"
+      className={
+        'app-no-drag flex flex-col gap-3 rounded-lg transition-colors ' +
+        (dragging ? 'outline-2 outline-dashed outline-offset-4 outline-primary' : '')
+      }
+      onDragOver={(e) => {
+        e.preventDefault()
+        if (!ctl.busy) setDragging(true)
+      }}
+      onDragLeave={(e) => {
+        // Only clear when the pointer actually leaves the panel, not when it
+        // crosses between children (dragleave fires on every child boundary).
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false)
+      }}
+      onDrop={onDrop}
+    >
+      {dragging && (
+        <div
+          data-testid="import-dropzone"
+          className="flex items-center justify-center gap-2 rounded-md border-2 border-dashed border-primary bg-primary/5 px-3 py-6 text-sm text-primary"
+        >
+          <Upload className="size-4" /> Drop a video here
+        </div>
+      )}
+      {dropError && (
+        <span className="text-xs text-amber-500" data-testid="import-drop-warning">
+          {dropError}
+        </span>
+      )}
       <div className="flex gap-2">
         <Input
           data-testid="import-file-input"
           aria-label="Video URL or file path"
-          placeholder="Paste a YouTube or video URL…"
+          placeholder="Paste a YouTube URL, or drop a video file…"
           value={value}
           disabled={ctl.busy}
           onChange={(e) => setValue(e.target.value)}

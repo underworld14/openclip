@@ -19,11 +19,18 @@ import { IPCChannels } from '../../src/shared/channels'
  * rotted once already (it missed `brand`, audit fix BUG-j8pbj9). Every request/
  * response channel is `<namespace>:<verb>`; `job:*` is exposed as the `jobs`
  * namespace (JobsAPI), and `lifecycle:*` is a main→renderer push, not a method.
+ *
+ * Two namespaces are deliberately NOT channel-backed and are listed explicitly:
+ * `jobs` (a MessagePort cannot ride `invoke`) and `files` (renderer-side
+ * `webUtils` path resolution for drag-and-drop). Keeping them named here rather
+ * than loosening the equality keeps the assertion exact.
  */
+const NON_CHANNEL_NAMESPACES = ['files']
+
 function expectedNamespaces(): string[] {
   const prefixes = Object.values(IPCChannels).map((c) => c.split(':')[0])
   const named = prefixes.map((p) => (p === 'job' ? 'jobs' : p)).filter((p) => p !== 'lifecycle')
-  return [...new Set(named)].sort()
+  return [...new Set([...named, ...NON_CHANNEL_NAMESPACES])].sort()
 }
 
 test('ping IPC round-trips and the openclip bridge is exposed', async () => {
@@ -66,7 +73,7 @@ test('ping IPC round-trips and the openclip bridge is exposed', async () => {
   // truncated list couldn't turn the assertion below into a no-op. `brand` is the
   // sentinel: it is the namespace the old hand-written literal missed.
   expect(expectedNamespaces()).toContain('brand')
-  expect(expectedNamespaces().length).toBeGreaterThanOrEqual(10)
+  expect(expectedNamespaces().length).toBeGreaterThanOrEqual(11)
 
   expect(bridge.namespaces).toEqual(expectedNamespaces())
   // Exact per-namespace METHOD surfaces are asserted type-derived in

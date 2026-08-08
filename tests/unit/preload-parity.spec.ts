@@ -53,6 +53,7 @@ beforeAll(async () => {
   const { buildModelApi } = await import('@preload/api/model')
   const { buildSystemApi } = await import('@preload/api/system')
   const { buildJobsApi } = await import('@preload/api/jobs')
+  const { buildFilesApi } = await import('@preload/api/files')
   realBridge = {
     video: buildVideoApi(),
     audio: buildAudioApi(),
@@ -63,7 +64,8 @@ beforeAll(async () => {
     settings: buildSettingsApi(),
     model: buildModelApi(),
     system: buildSystemApi(),
-    jobs: buildJobsApi()
+    jobs: buildJobsApi(),
+    files: buildFilesApi()
   }
 })
 

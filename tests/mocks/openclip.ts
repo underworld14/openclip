@@ -229,6 +229,8 @@ export function createMockOpenclip(opts: MockOptions = {}): OpenClipBridge {
     settings: buildMockNamespace('settings') as OpenClipBridge['settings'],
     model: buildMockNamespace('model') as OpenClipBridge['model'],
     system: buildMockNamespace('system') as OpenClipBridge['system'],
-    jobs: buildMockJobs(opts)
+    jobs: buildMockJobs(opts),
+    // Not channel-derived (renderer-side webUtils) — mocked explicitly.
+    files: { getPathForFile: () => '/tmp/dropped.mp4' }
   }
 }

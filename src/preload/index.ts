@@ -27,6 +27,8 @@ import { buildSettingsApi } from './api/settings'
 import { buildModelApi } from './api/model'
 import { buildSystemApi } from './api/system'
 import { buildJobsApi, installJobPortForwarder } from './api/jobs'
+import { buildFilesApi } from './api/files'
+import type { FilesAPI } from './api/files'
 import { installQuitFlushForwarder } from './quit-flush'
 
 // ============================================================================
@@ -54,6 +56,8 @@ export interface OpenClipBridge {
   system: NamespaceMethods<'system'>
   /** streaming jobs — modeled by JobsAPI (start→{jobId}; port out-of-band) */
   jobs: JobsAPI
+  /** NOT channel-derived: renderer-side `webUtils` path resolution for drag-and-drop. */
+  files: FilesAPI
 }
 
 // ============================================================================
@@ -70,7 +74,8 @@ const openclip: OpenClipBridge = {
   settings: buildSettingsApi(),
   model: buildModelApi(),
   system: buildSystemApi(),
-  jobs: buildJobsApi()
+  jobs: buildJobsApi(),
+  files: buildFilesApi()
 }
 
 // ============================================================================

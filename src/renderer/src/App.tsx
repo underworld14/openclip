@@ -231,7 +231,12 @@ function App(): React.JSX.Element {
           <DialogHeader>
             <DialogTitle>Settings</DialogTitle>
           </DialogHeader>
-          <SettingsPanel />
+          <SettingsPanel
+            onDownloadModel={(m) => {
+              setNeededModel(m)
+              setModelDialogOpen(true)
+            }}
+          />
         </DialogContent>
       </Dialog>
 

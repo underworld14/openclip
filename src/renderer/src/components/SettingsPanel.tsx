@@ -12,6 +12,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import type { AIProvider } from '@shared/schema'
+import type { WhisperModelSize } from '@shared/jobs'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { Button } from '@renderer/components/ui/button'
 import { Input } from '@renderer/components/ui/input'
@@ -36,6 +37,7 @@ import {
   resolveDefaultModel
 } from '@renderer/components/settingsView'
 import { BrandKitEditor } from '@renderer/components/BrandKitEditor'
+import { TranscriptionSettings } from '@renderer/components/TranscriptionSettings'
 import type { ModelInfo } from '@shared/channels'
 
 /** Sentinel: the emoji-provider option meaning "same as clip detection". */
@@ -78,7 +80,12 @@ function ModelGroup(props: {
   )
 }
 
-export function SettingsPanel(): React.JSX.Element {
+export interface SettingsPanelProps {
+  /** Open the model-download dialog pre-selected on a size (wired by App). */
+  onDownloadModel?: (model: WhisperModelSize) => void
+}
+
+export function SettingsPanel({ onDownloadModel }: SettingsPanelProps = {}): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
   const keyStatus = useSettingsStore((s) => s.keyStatus)
   const load = useSettingsStore((s) => s.load)
@@ -422,6 +429,12 @@ export function SettingsPanel(): React.JSX.Element {
 
       {/* Brand kit (Part K) — logo + brand colors/font applied to exports. */}
       <BrandKitEditor />
+
+      <TranscriptionSettings
+        active={settings.whisperModel}
+        onSelect={(m) => void save({ whisperModel: m })}
+        onDownload={(m) => onDownloadModel?.(m)}
+      />
 
       <div className="flex flex-col gap-1.5" data-testid="language-picker">
         <Label htmlFor="transcribe-language">Transcription language</Label>

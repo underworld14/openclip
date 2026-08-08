@@ -119,6 +119,9 @@ export function useImportController(opts: ImportControllerOptions = {}): ImportC
         // Read the transcription language lazily at import time (Part I) so the
         // latest Settings value applies without rebuilding the controller.
         getLanguage: () => useSettingsStore.getState().settings.language,
+        // Lazily read so a change in Settings applies to the next import
+        // (FEAT-1k76hk) — the controller is a singleton and is never rebuilt.
+        getWhisperModel: () => useSettingsStore.getState().settings.whisperModel,
         onNeedModel: (m) => onNeedModelRef.current?.(m)
       })),
     // Built once for the whole app; all referenced actions are stable zustand refs.

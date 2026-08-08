@@ -496,3 +496,48 @@ describe('resuming the import a model download interrupted (FEAT-kncqxf)', () =>
     expect(runImportPipeline).not.toHaveBeenCalled()
   })
 })
+
+describe('the transcription model actually comes from Settings (FEAT-1k76hk)', () => {
+  it('gates and transcribes with the user-selected model, not a hardcoded base', async () => {
+    // `whisperModel` existed in the schema and the store, but import-controller
+    // hardcoded 'base' — so a user who downloaded large-v3 still got base.
+    const statusFor: string[] = []
+    const { ctl, runImportPipeline } = build({
+      bridge: {
+        model: {
+          status: async (req: { model: string }) => {
+            statusFor.push(req.model)
+            return [{ model: req.model, installed: true }]
+          }
+        },
+        jobs: { cancel: vi.fn(async () => {}) }
+      } as unknown as ImportControllerDeps['bridge'],
+      getWhisperModel: () => 'large-v3'
+    })
+
+    await ctl.importFile('/movies/talk.mp4')
+
+    expect(statusFor).toContain('large-v3')
+    expect(runImportPipeline).toHaveBeenCalledWith(expect.objectContaining({ model: 'large-v3' }))
+  })
+
+  it('is read LAZILY, so changing it in Settings applies without rebuilding the controller', async () => {
+    let selected = 'base'
+    const { ctl, runImportPipeline } = build({
+      bridge: {
+        model: {
+          status: async (req: { model: string }) => [{ model: req.model, installed: true }]
+        },
+        jobs: { cancel: vi.fn(async () => {}) }
+      } as unknown as ImportControllerDeps['bridge'],
+      getWhisperModel: () => selected as never
+    })
+
+    await ctl.importFile('/a.mp4')
+    selected = 'turbo'
+    await ctl.importFile('/b.mp4')
+
+    expect(runImportPipeline.mock.calls[0][0]).toMatchObject({ model: 'base' })
+    expect(runImportPipeline.mock.calls[1][0]).toMatchObject({ model: 'turbo' })
+  })
+})

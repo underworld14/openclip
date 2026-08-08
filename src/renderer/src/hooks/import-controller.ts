@@ -104,7 +104,18 @@ export interface ImportControllerDeps {
   bridge: OpenClipBridge
   store: ImportControllerStore
   createBlankProject(name: string, sourceVideo: SourceVideo): Project
+  /** @deprecated Fixed override for tests. Real callers pass `getWhisperModel`. */
   model?: WhisperModelSize
+  /**
+   * The user's transcription model, read LAZILY at import time (FEAT-1k76hk).
+   *
+   * `Settings.whisperModel` existed in the schema and the store from the start,
+   * but this controller hardcoded 'base' — so a user who downloaded `large-v3`
+   * got `base` transcription anyway, silently. Lazy (like `getLanguage`) so a
+   * change in Settings applies to the next import without rebuilding the
+   * controller — which now matters more, since it is a singleton.
+   */
+  getWhisperModel?(): WhisperModelSize
   ui?: ImportControllerUi
   /** Consent storage; defaults to the real `localStorage`, or `null` to disable the gate. */
   storage?: StorageLike | null
@@ -162,7 +173,8 @@ function asMessage(e: unknown): string {
 }
 
 export function createImportController(deps: ImportControllerDeps): ImportController {
-  const model = deps.model ?? DEFAULT_MODEL
+  const currentModel = (): WhisperModelSize =>
+    deps.model ?? deps.getWhisperModel?.() ?? DEFAULT_MODEL
   const runImport = deps.runImportPipeline ?? defaultRunImportPipeline
   const runUrl = deps.runUrlDownload ?? defaultRunUrlDownload
   const genId = deps.genId ?? ((): string => crypto.randomUUID())
@@ -199,6 +211,7 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
   }
 
   async function ensureModel(): Promise<boolean> {
+    const model = currentModel()
     const statuses = await deps.bridge.model.status({ model })
     if (!statuses.some((s) => s.model === model && s.installed)) {
       deps.onNeedModel?.(model)
@@ -261,7 +274,7 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
       bridge: deps.bridge,
       filePath: sourcePath,
       projectId,
-      model,
+      model: currentModel(),
       // Source language for whisper (undefined/'' ⇒ auto-detect). Read lazily so
       // the latest Settings value applies without rebuilding the controller.
       language: deps.getLanguage?.(),

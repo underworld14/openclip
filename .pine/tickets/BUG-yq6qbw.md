@@ -185,3 +185,28 @@ it('extends a below-min clip to the next sentence end instead of dropping it', (
   expect(out[0].end_time).toBe(26.5)
 })
 ```
+
+## Empirical evidence — real OpenRouter run (2026-08-09)
+
+Ran the app's own `ai-client` (real `createTransport` → OpenRouter, real
+`mapReduceGenerate` → `clampDetectedClips`) against a 406s Bahasa Indonesia podcast
+transcript with three deliberately planted viral moments.
+
+**Moment recall was not the problem — both small models found 3/3.** The boundary
+claim is what reproduced:
+
+| model | clips | landed exactly on a segment boundary |
+|---|---|---|
+| `google/gemma-4-31b-it` | 4 | **4/4** |
+| `google/gemini-3.5-flash-lite` | 3 | **0/3** — 71/105, 182/236, 294/353 |
+
+The segment grid has boundaries at 72, 103, 184, 233, 294, 349… `gemini-3.5-flash-lite`
+returned 71 and 105 — one second either side of the real sentence edges. Those clips
+start a beat before the speaker opens their mouth and end a beat after, i.e. exactly
+the mid-word cut this ticket is about. `gemma-4-31b-it` happened to align, so the
+defect is **model-dependent and silent** — which is the worst shape for it, because
+whether a user's clips cut cleanly depends on which model they typed into Settings.
+
+Snapping to the word/segment grid in code (the data is already local) removes the
+variance regardless of model. See `.pine/memory/competitor-precedent.md` for
+SupoClip's sentence-boundary extension approach.

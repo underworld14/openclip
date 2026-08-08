@@ -35,3 +35,23 @@ Impact: **critical** · Effort: **medium**
 ## Provenance
 
 Found by a multi-agent sweep of the codebase cross-referenced against OpusClip, Kapwing AI Clip Maker, LokaClip, yt-short-clipper and SupoClip. Every `file:line` above was read directly from the source tree.
+
+## Reproduced accidentally, with a real provider (2026-08-09)
+
+While probing small models through OpenRouter with the app's own `ai-client`:
+
+- `google/gemini-3.5-flash-lite` — 4.2–4.8s, consistent.
+- `google/gemma-4-31b-it` — 35.7s on one run for the SAME 406s transcript, and on a
+  later run it **never returned at all**; the harness killed it at a 600s timeout.
+
+That second case is exactly this ticket in the wild. In the app there is no
+timeout, no cancel and no progress on `GENERATE_CLIPS`, so a user on that model
+gets a permanently frozen "Generating clips…" with the only escape being force-quit
+— and because generate is a plain `invoke`, the main process keeps the request
+alive behind it.
+
+Concrete asks this evidence adds:
+- A hard request deadline (the SDK clients are constructed with no `timeout`).
+- A cancel path — ideally by moving GENERATE_CLIPS onto the streaming-job plane,
+  which already guarantees `done` xor `error`, rather than leaving it an invoke.
+- Per-chunk progress, since map-reduce already knows the chunk count.

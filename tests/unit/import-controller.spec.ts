@@ -62,6 +62,7 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
   onNeedModel: ReturnType<typeof vi.fn>
   pcts: number[]
   storage: ReturnType<typeof fakeStorage>
+  slices: { clips: unknown[]; exportHistory: unknown[]; selectedClipId: string | null }
 } {
   const setCurrentProject = vi.fn()
   const saveProject = vi.fn(async () => {})
@@ -69,10 +70,16 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
   const storage = (overrides.storage as ReturnType<typeof fakeStorage>) ?? fakeStorage()
 
   let current: Project | null = null
+  // Mirrors the real store: the clips / exportHistory / selection slices are
+  // SINGLETONS that survive a project switch unless something clears them.
+  const slices = { clips: [{ id: 'stale-clip' }], exportHistory: [{ id: 'stale-rec' }], selectedClipId: 'stale-clip' }
   const store: ImportControllerStore = {
     getCurrentProject: () => current,
-    setCurrentProject: (p) => {
+    hydrateProject: (p) => {
       current = p
+      slices.clips = p.clips as never[]
+      slices.exportHistory = p.exportHistory as never[]
+      slices.selectedClipId = null as never
       setCurrentProject(p)
     },
     appendTranscriptPartial: vi.fn(),
@@ -131,6 +138,7 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
 
   return {
     ctl,
+    slices,
     setCurrentProject,
     saveProject,
     runImportPipeline,
@@ -240,7 +248,7 @@ describe('import-controller: re-import data integrity (G.3)', () => {
     const store: ImportControllerStore = {
       getCurrentProject: () => current,
       composeProject: () => (current ? composed : null),
-      setCurrentProject: (p) => {
+      hydrateProject: (p) => {
         current = p
         setCurrentProject(p)
       },
@@ -256,6 +264,19 @@ describe('import-controller: re-import data integrity (G.3)', () => {
     expect(order).toEqual(['save:OLD-ID', 'set:PID'])
     expect(saved[0].id).toBe('OLD-ID')
     expect(saved[0].clips).toHaveLength(1) // composed live clips, not the raw []
+  })
+
+  it('resets the clips / exportHistory / selection slices so the previous project does not leak in (BUG-2hjt1x)', async () => {
+    // The slices are store singletons. Committing a newly imported project with
+    // setCurrentProject alone left the PREVIOUS project's clip cards on screen
+    // attached to the new project — and the 800ms autosave then wrote them into
+    // the new .ocproj. Importing must hydrate every slice, exactly like opening a
+    // saved project does.
+    const { ctl, slices } = build()
+    await ctl.importFile('/v.mp4')
+    expect(slices.clips).toEqual([])
+    expect(slices.exportHistory).toEqual([])
+    expect(slices.selectedClipId).toBeNull()
   })
 
   it('does not flush-save when there is no open project', async () => {

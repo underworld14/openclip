@@ -8,9 +8,10 @@
  * re-import flush-save) lives in the core; this file only does the wiring.
  */
 
-import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import type { WhisperModelSize } from '@shared/jobs'
-import { createBlankProject } from '@renderer/hooks/useProject'
+import type { Project } from '@shared/schema'
+import { createBlankProject, hydrateFromProject } from '@renderer/hooks/useProject'
 import { createImportController } from '@renderer/hooks/import-controller'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useUiStore } from '@renderer/stores/uiStore'
@@ -50,7 +51,11 @@ export function useImportController(opts: ImportControllerOptions = {}): ImportC
   // zustand action refs are stable across renders.
   const appendPartial = useProjectStore((s) => s.appendTranscriptPartial)
   const hydrate = useProjectStore((s) => s.hydrateTranscript)
-  const setCurrentProject = useProjectStore((s) => s.setCurrentProject)
+  // NOT setCurrentProject: an import must replace every slice, or the outgoing
+  // project's clips/exportHistory/selection leak into the new one (BUG-2hjt1x).
+  const hydrateProject = useCallback((project: Project): void => {
+    hydrateFromProject(useProjectStore, project)
+  }, [])
   const setView = useUiStore((s) => s.setView)
   const upsertTask = useUiStore((s) => s.upsertTask)
   const clearTask = useUiStore((s) => s.clearTask)
@@ -63,7 +68,7 @@ export function useImportController(opts: ImportControllerOptions = {}): ImportC
         store: {
           getCurrentProject: () => useProjectStore.getState().currentProject,
           composeProject: () => useProjectStore.getState().composeProject(),
-          setCurrentProject,
+          hydrateProject,
           appendTranscriptPartial: appendPartial,
           hydrateTranscript: hydrate,
           saveProject: async (project) => {

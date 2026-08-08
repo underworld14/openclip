@@ -162,4 +162,16 @@ describe('hydrateFromProject (Wave-1 full cross-slice hydration)', () => {
     hydrateFromProject(useProjectStore, { ...projectFixture, id: 'p2', exportHistory: [] })
     expect(useProjectStore.getState().composeProject()?.exportHistory).toEqual([])
   })
+
+  it('clears a stale clip selection so it cannot point at the previous project (BUG-2hjt1x)', () => {
+    // selectedClipId is a store singleton and was never reset anywhere. Opening a
+    // different project left the selection pointing at a clip id that no longer
+    // exists, which drives PreviewPlayer/Timeline off a dangling reference.
+    useProjectStore.setState({ selectedClipId: 'clip-from-the-previous-project' })
+
+    hydrateFromProject(useProjectStore, { ...projectFixture, id: 'p2' })
+
+    expect(useProjectStore.getState().selectedClipId).toBeNull()
+  })
+
 })

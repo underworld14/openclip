@@ -62,7 +62,17 @@ export interface ImportControllerStore {
    * truth), so saving the raw doc would discard the user's clip edits (G.3).
    */
   composeProject?(): Project | null
-  setCurrentProject(project: Project): void
+  /**
+   * Make `project` the open one, REPLACING every slice — clips, exportHistory and
+   * the clip selection included.
+   *
+   * This must not be a bare `setCurrentProject`. Those slices are store singletons
+   * (see `hydrateFromProject` in `useProject.ts`), so committing an import without
+   * clearing them left the PREVIOUS project's clip cards on screen attached to the
+   * new project, and the debounced autosave then persisted them into the new
+   * `.ocproj` — cross-project data corruption (audit fix BUG-2hjt1x).
+   */
+  hydrateProject(project: Project): void
   appendTranscriptPartial(partial: JobPartial['transcribe']): void
   hydrateTranscript(transcript: JobResult['transcribe']): void
   /** Persist a project — used to flush-save the open project before a re-import (G.3). */
@@ -265,7 +275,9 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     // project-delete reclaims it; file imports keep their original path, not owned.
     const sourceVideo = { ...result.sourceVideo, path: sourcePath, appOwned }
     const blank = deps.createBlankProject(name, sourceVideo)
-    deps.store.setCurrentProject({ ...blank, id: projectId, transcript: result.transcript })
+    // hydrateProject (NOT setCurrentProject): `blank` carries clips: [] and
+    // exportHistory: [], so this is what clears the outgoing project's slices.
+    deps.store.hydrateProject({ ...blank, id: projectId, transcript: result.transcript })
     // The project is now LIVE/visible — past here a failure must not reclaim its media.
     markCommitted()
     deps.ui?.setView?.('editor')

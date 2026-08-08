@@ -51,6 +51,7 @@ export interface CoreStoreApi {
     | 'setTranscript'
     | 'setClips'
     | 'setExportHistory'
+    | 'selectClip'
     | 'composeProject'
   >
 }
@@ -108,6 +109,10 @@ export function hydrateFromProject(store: CoreStoreApi, project: Project): void 
   state.setTranscript(project.transcript)
   state.setClips(project.clips)
   state.setExportHistory(project.exportHistory)
+  // The selection is a singleton too: without this it keeps pointing at a clip id
+  // from the OUTGOING project, which no longer exists in `clips` (audit fix
+  // BUG-2hjt1x). Every slice this function touches must be replaced, not merged.
+  state.selectClip(null)
 }
 
 /**

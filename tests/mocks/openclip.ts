@@ -56,6 +56,11 @@ const CANNED: Partial<Record<string, unknown>> = {
   [IPCChannels.AUDIO_EXTRACT]: { wavPath: '/tmp/openclip/p1/j1/audio.16k.wav' },
   [IPCChannels.EXPORT_CLIP]: { outputPath: '/Users/me/Movies/clip-1.mp4' },
   [IPCChannels.GENERATE_CLIPS]: clipSchemaFixture,
+  // NOTE: main REJECTS GENERATE_TITLES, and ENHANCE_CAPTIONS unless mode:'emoji'
+  // (FEAT-et1gxc) — a successful empty payload is indistinguishable from "the
+  // model had nothing to say". These canned values model a shape the app can no
+  // longer produce; they exist only so the derived mock namespace stays complete.
+  // Any test that actually exercises these channels must not trust them.
   [IPCChannels.GENERATE_TITLES]: { options: [] },
   [IPCChannels.ENHANCE_CAPTIONS]: { enhanced_captions: [] },
   [IPCChannels.AI_LIST_MODELS]: {

@@ -25,15 +25,23 @@ export interface TranscriptionSettingsProps {
   onSelect: (model: WhisperModelSize) => void
   /** Open the download dialog pre-selected on this model. */
   onDownload: (model: WhisperModelSize) => void
+  /**
+   * Called after the installed set changes, so the readiness chip re-probes.
+   * Without it, deleting the ACTIVE model left a green "Transcription ✓" chip
+   * over a model that is gone.
+   */
+  onChanged?: () => void
 }
 
 export function TranscriptionSettings({
   active,
   onSelect,
-  onDownload
+  onDownload,
+  onChanged
 }: TranscriptionSettingsProps): React.JSX.Element {
   const [statuses, setStatuses] = useState<ModelStatus[]>([])
   const [busy, setBusy] = useState<WhisperModelSize | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -59,15 +67,30 @@ export function TranscriptionSettings({
     return () => {
       alive = false
     }
+    // `refresh` is the same read, used for the post-delete re-probe.
   }, [])
 
   const installedBytes = statuses.reduce((sum, s) => sum + (s.installed ? (s.bytes ?? 0) : 0), 0)
 
   const remove = async (model: WhisperModelSize): Promise<void> => {
+    // Multi-gigabyte downloads: confirm before discarding one.
+    const row = statuses.find((s) => s.model === model)
+    const size = formatBytes(row?.bytes)
+    if (
+      !window.confirm(
+        `Delete the ${model} model${size ? ` (${size})` : ''}? You can re-download it later.`
+      )
+    )
+      return
     setBusy(model)
+    setError(null)
     try {
       await window.openclip.model.delete({ model })
       await refresh()
+      onChanged?.()
+    } catch (e) {
+      // A silent failure left the row looking installed with no explanation.
+      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(null)
     }
@@ -86,6 +109,11 @@ export function TranscriptionSettings({
       <p className="text-xs text-muted-foreground">
         Transcription runs on this Mac. Larger models are more accurate and slower.
       </p>
+      {error && (
+        <span className="text-xs text-destructive" data-testid="whisper-error">
+          {error}
+        </span>
+      )}
       <ul className="flex flex-col rounded-md border">
         {WHISPER_MODEL_TABLE.map((row) => {
           const status = statuses.find((s) => s.model === row.model)

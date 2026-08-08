@@ -13,6 +13,7 @@ import type { WhisperModelSize } from '@shared/jobs'
 import type { Project } from '@shared/schema'
 import { createBlankProject, hydrateFromProject } from '@renderer/hooks/useProject'
 import { createImportController } from '@renderer/hooks/import-controller'
+import { notifyNeedModel, setNeedModelHandler } from '@renderer/hooks/importControllerHost'
 import type {
   ImportController as CoreImportController,
   PendingImport
@@ -64,18 +65,19 @@ export interface ImportController {
  * `window.openclip`, so there is nothing per-component to capture.
  */
 let sharedController: CoreImportController | null = null
-/** TEST-ONLY: drop the singleton so specs start from a clean controller. */
-export function __resetImportControllerForTests(): void {
-  sharedController = null
-}
 
 export function useImportController(opts: ImportControllerOptions = {}): ImportController {
   // Keep onNeedModel current without rebuilding the controller (which would drop
   // its in-flight state). Synced in an effect (refs must not be written during
   // render); the controller only invokes it asynchronously, after effects run.
+  // Registered in a MODULE-level slot, not captured in the controller's closure.
+  // The controller is a singleton built by whichever component's hook runs first
+  // — which is always the parent, App — so a closed-over ref meant a child's
+  // callback was never seen and the model dialog stopped opening entirely.
   const onNeedModelRef = useRef(opts.onNeedModel)
   useEffect(() => {
     onNeedModelRef.current = opts.onNeedModel
+    setNeedModelHandler(opts.onNeedModel)
   }, [opts.onNeedModel])
 
   // zustand action refs are stable across renders.
@@ -122,7 +124,7 @@ export function useImportController(opts: ImportControllerOptions = {}): ImportC
         // Lazily read so a change in Settings applies to the next import
         // (FEAT-1k76hk) — the controller is a singleton and is never rebuilt.
         getWhisperModel: () => useSettingsStore.getState().settings.whisperModel,
-        onNeedModel: (m) => onNeedModelRef.current?.(m)
+        onNeedModel: (m) => notifyNeedModel(m)
       })),
     // Built once for the whole app; all referenced actions are stable zustand refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -30,21 +30,15 @@ export function registerModelHandlers(ctx: IpcContext): void {
 
   // MODEL_STATUS — presence/path/bytes for one or all models (PRD §13).
   //
-  // Under OPENCLIP_FAKE_TRANSCRIBE the whisper sidecar is replaced wholesale by
-  // a fixed-transcript runner (see transcribe-runner.ts), so no GGML file is
-  // needed and reporting "installed" is accurate for that mode rather than a
-  // convenience lie — the transcription capability really is available. Without
-  // this the readiness gate (FEAT-c5a15c) would correctly refuse to run in an
-  // E2E whose whole point is that transcription works.
+  // Reports the truth in every mode. An earlier revision special-cased
+  // OPENCLIP_FAKE_TRANSCRIBE to report "installed", but that was only needed
+  // because `canGenerate` wrongly required a transcriber to be present in order
+  // to analyse an EXISTING transcript. Decoupling those in `readinessView`
+  // removed the need for the workaround — one fewer place where an env var can
+  // make the app misreport a capability.
   ctx.ipcMain.handle(
     IPCChannels.MODEL_STATUS,
-    (_e, req: { model?: WhisperModelSize }): ModelStatus[] => {
-      if (process.env.OPENCLIP_FAKE_TRANSCRIBE) {
-        const list = req?.model ? [req.model] : ALL_MODELS
-        return list.map((m) => ({ model: m, installed: true }))
-      }
-      return modelStatus(req?.model)
-    }
+    (_e, req: { model?: WhisperModelSize }): ModelStatus[] => modelStatus(req?.model)
   )
 
   // MODEL_DELETE — reclaim the 75MB–2.9GB a model occupies (FEAT-1k76hk).

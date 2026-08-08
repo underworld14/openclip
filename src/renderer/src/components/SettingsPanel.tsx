@@ -29,6 +29,7 @@ import {
   providerLabel,
   keyStatusLabel,
   PROVIDERS,
+  providerOptions,
   filterModels,
   partitionRecommended,
   formatModelPrice,
@@ -83,9 +84,14 @@ function ModelGroup(props: {
 export interface SettingsPanelProps {
   /** Open the model-download dialog pre-selected on a size (wired by App). */
   onDownloadModel?: (model: WhisperModelSize) => void
+  /** Re-probe readiness after the installed model set changes. */
+  onModelsChanged?: () => void
 }
 
-export function SettingsPanel({ onDownloadModel }: SettingsPanelProps = {}): React.JSX.Element {
+export function SettingsPanel({
+  onDownloadModel,
+  onModelsChanged
+}: SettingsPanelProps = {}): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
   const keyStatus = useSettingsStore((s) => s.keyStatus)
   const load = useSettingsStore((s) => s.load)
@@ -151,11 +157,15 @@ export function SettingsPanel({ onDownloadModel }: SettingsPanelProps = {}): Rea
   // legitimately returns zero models (review H: infinite-refetch loop).
   useEffect(() => {
     // Every offered provider has a catalogue now (FEAT-6v92dk), so the picker
-    // loads for all of them rather than only OpenRouter.
-    if (modelsFetchedAt === null && !modelsLoading && !modelsError) {
+    // loads for all of them rather than only OpenRouter. But do NOT auto-fetch
+    // before a key exists: the handler rejects without one, and the first thing a
+    // brand-new user would see in Settings is a raw IPC error string. They can
+    // still press "Load models" explicitly.
+    const keyed = provider === 'ollama' || (status?.hasKey ?? false)
+    if (keyed && modelsFetchedAt === null && !modelsLoading && !modelsError) {
       void loadModels(false)
     }
-  }, [provider, modelsFetchedAt, modelsLoading, modelsError, loadModels])
+  }, [provider, status?.hasKey, modelsFetchedAt, modelsLoading, modelsError, loadModels])
 
   // Never leave the model field empty (FEAT-6v92dk): as soon as we know what the
   // provider offers, seed it. Only fills a BLANK field — it never overwrites a
@@ -175,7 +185,10 @@ export function SettingsPanel({ onDownloadModel }: SettingsPanelProps = {}): Rea
   const onProviderChange = async (value: string): Promise<void> => {
     const p = value as AIProvider
     setTestResult(null)
-    await save({ aiProvider: p })
+    // Clear the model too: an id from the previous provider (e.g. `gpt-5` after
+    // switching to Anthropic) is a guaranteed 404 on the next generate. The seed
+    // effect refills it once the new provider's catalogue arrives.
+    await save({ aiProvider: p, model: '' })
     await refreshKeyStatus(p)
   }
 
@@ -231,9 +244,10 @@ export function SettingsPanel({ onDownloadModel }: SettingsPanelProps = {}): Rea
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {PROVIDERS.map((p) => (
-              <SelectItem key={p} value={p}>
+            {providerOptions().map(({ provider: p, disabled }) => (
+              <SelectItem key={p} value={p} disabled={disabled}>
                 {providerLabel(p)}
+                {disabled ? ' — not available yet' : ''}
               </SelectItem>
             ))}
           </SelectContent>
@@ -332,8 +346,9 @@ export function SettingsPanel({ onDownloadModel }: SettingsPanelProps = {}): Rea
             )}
           </ScrollArea>
           <p className="text-xs text-muted-foreground">
-            Only models that support strict JSON are listed (clip detection needs it). Type any
-            model id above to use one that isn’t listed.
+            Clip detection needs a model that supports strict JSON output. Not every listed model
+            does — press Test to check one before relying on it. You can also type a model id that
+            isn’t listed.
           </p>
         </div>
       </div>
@@ -434,6 +449,7 @@ export function SettingsPanel({ onDownloadModel }: SettingsPanelProps = {}): Rea
         active={settings.whisperModel}
         onSelect={(m) => void save({ whisperModel: m })}
         onDownload={(m) => onDownloadModel?.(m)}
+        onChanged={onModelsChanged}
       />
 
       <div className="flex flex-col gap-1.5" data-testid="language-picker">

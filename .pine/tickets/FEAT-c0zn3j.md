@@ -8,6 +8,8 @@ labels:
     - jobs
     - ai
 parent: EPIC-zpa1nd
+deps:
+    - FEAT-vh2bwz
 created: "2026-08-08T15:56:46Z"
 updated: "2026-08-08T15:56:46Z"
 ---

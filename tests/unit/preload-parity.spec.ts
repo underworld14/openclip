@@ -35,7 +35,8 @@ const NAMESPACES: Array<keyof OpenClipBridge> = [
   'project',
   'settings',
   'model',
-  'system'
+  'system',
+  'files'
 ]
 
 // The real bridge, assembled from the per-domain builders (no contextBridge side
@@ -100,6 +101,10 @@ describe('preload parity: real bridge method-set === mock method-set', () => {
     expect(methodKeys(realBridge.brand)).toEqual(['delete', 'list', 'save', 'setLogo'])
     expect(methodKeys(realBridge.settings)).toEqual(['apiKeyStatus', 'get', 'set', 'setApiKey'])
     expect(methodKeys(realBridge.model)).toEqual(['delete', 'download', 'status'])
+    // Not channel-derived, so it gets the same explicit spot-check `jobs` has.
+    expect(methodKeys(realBridge.files as unknown as Record<string, unknown>)).toEqual([
+      'getPathForFile'
+    ])
     expect(methodKeys(realBridge.system)).toEqual([
       'autosaveFlushed',
       'checkUpdate',

@@ -22,7 +22,8 @@ export interface ReadinessInput {
   hasKey: boolean
   model: string
   whisperModel: WhisperModelSize
-  whisperInstalled: boolean
+  /** null while the on-disk check is still in flight — distinct from "checked and absent". */
+  whisperInstalled: boolean | null
 }
 
 /** What clicking a chip should open. */
@@ -58,6 +59,14 @@ export function readinessView(input: ReadinessInput): ReadinessView {
   // out of their own app for the moment before the probe resolves.
   const engineProbed = input.preflight !== null
   const engineOk = !engineProbed || (input.preflight!.ffmpeg.ok && input.preflight!.ffprobe.ok)
+  // whisper-cli belongs to TRANSCRIPTION, not the generic engine chip: without it
+  // an installed GGML model is useless, and the probe reporting it was previously
+  // collected and then thrown away.
+  const whisperCliOk = !engineProbed || input.preflight!.whisperCli.ok
+  // `null` = not probed yet. Conflating that with "absent" made every render
+  // before the IPC resolved show a red chip, and pinned it there on failure.
+  const whisperProbed = input.whisperInstalled !== null
+  const whisperReady = !whisperProbed || (input.whisperInstalled === true && whisperCliOk)
 
   const keyOk = !needsKey(input.provider) || input.hasKey
   const modelOk = input.model.trim().length > 0
@@ -67,12 +76,17 @@ export function readinessView(input: ReadinessInput): ReadinessView {
     {
       id: 'transcription',
       label: `Transcription: ${input.whisperModel}`,
-      detail: input.whisperInstalled
-        ? 'Model installed — transcription runs on this Mac.'
-        : `The ${input.whisperModel} model is not installed yet.`,
-      ok: input.whisperInstalled,
-      state: input.whisperInstalled ? 'ok' : 'missing',
-      action: input.whisperInstalled ? 'none' : 'download-model'
+      detail: !whisperProbed
+        ? 'Checking…'
+        : !whisperCliOk
+          ? 'whisper-cli could not be found — transcription will fail.'
+          : input.whisperInstalled
+            ? 'Model installed — transcription runs on this Mac.'
+            : `The ${input.whisperModel} model is not installed yet.`,
+      ok: whisperReady,
+      state: !whisperProbed ? 'unknown' : whisperReady ? 'ok' : 'missing',
+      // A missing BINARY is not something the download dialog can fix.
+      action: whisperProbed && !input.whisperInstalled && whisperCliOk ? 'download-model' : 'none'
     },
     {
       id: 'ai',
@@ -100,15 +114,17 @@ export function readinessView(input: ReadinessInput): ReadinessView {
     }
   ]
 
-  const canTranscribe = engineOk && input.whisperInstalled
-  const canGenerate = canTranscribe && aiOk
+  const canTranscribe = engineOk && whisperReady
+  // Clip detection consumes a TRANSCRIPT, not a transcriber: a user who opens a
+  // project that already has one and then deletes the model to reclaim disk must
+  // still be able to generate. Coupling these was also the only reason
+  // MODEL_STATUS needed an OPENCLIP_FAKE_TRANSCRIBE special case.
+  const canGenerate = engineOk && aiOk
 
   // One reason, chosen by what the user has to fix FIRST — a list of everything
   // wrong is harder to act on than the next step.
   let blockingReason: string | null = null
   if (!engineOk) blockingReason = 'ffmpeg could not be found — video processing will fail.'
-  else if (!input.whisperInstalled)
-    blockingReason = `Download the ${input.whisperModel} transcription model first.`
   else if (!keyOk) blockingReason = `Add an API key for ${input.provider} in Settings.`
   else if (!modelOk) blockingReason = 'Choose a model in Settings.'
 

@@ -181,15 +181,29 @@ describe('resolveDefaultModel (FEAT-6v92dk)', () => {
     expect(resolveDefaultModel('anthropic', models)).toBe('claude-opus-5')
   })
 
+  it('IGNORES a seed the live catalogue does not list — the seed is a fallback, not an override', () => {
+    // Otherwise a stale hardcoded id outlives the provider's own catalogue,
+    // which is exactly the failure this module exists to avoid (BUG-2smqpv).
+    const withoutSeed: ModelInfo[] = [
+      { id: 'claude-haiku-4-5', name: 'Haiku', supportsStructured: true, recommended: true }
+    ]
+    expect(resolveDefaultModel('anthropic', withoutSeed)).toBe('claude-haiku-4-5')
+  })
+
   it('falls back to the first RECOMMENDED entry when there is no curated seed', () => {
     expect(resolveDefaultModel('openrouter', models)).toBe('rec-1')
   })
 
-  it('falls back to the first entry when nothing is recommended', () => {
+  it('auto-picks NOTHING from an unranked catalogue rather than guessing', () => {
+    // Picking `models[0]` off an alphabetically-sorted OpenAI catalogue selected
+    // gpt-3.5-turbo, which cannot do strict json_schema — so readiness turned
+    // GREEN in front of a guaranteed 400. An empty field is honest: the picker
+    // is right there and readiness says "Choose a model in Settings."
     const plain: ModelInfo[] = [
-      { id: 'only', name: 'O', supportsStructured: true, recommended: false }
+      { id: 'gpt-3.5-turbo', name: 'a', supportsStructured: true, recommended: false },
+      { id: 'gpt-5', name: 'b', supportsStructured: true, recommended: false }
     ]
-    expect(resolveDefaultModel('openai', plain)).toBe('only')
+    expect(resolveDefaultModel('openai', plain)).toBe('')
   })
 
   it('still returns the curated seed when the catalogue could not be fetched', () => {

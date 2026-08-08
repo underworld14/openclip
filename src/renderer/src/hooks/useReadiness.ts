@@ -24,7 +24,9 @@ export function useReadiness(): UseReadiness {
   const settings = useSettingsStore((s) => s.settings)
   const keyStatus = useSettingsStore((s) => s.keyStatus)
   const [preflight, setPreflight] = useState<PreflightResult | null>(null)
-  const [whisperInstalled, setWhisperInstalled] = useState(false)
+  // null until probed: `false` would render a red chip on every first paint and
+  // stay red forever if the IPC failed.
+  const [whisperInstalled, setWhisperInstalled] = useState<boolean | null>(null)
   const [nonce, setNonce] = useState(0)
 
   // Binaries can't change while the app runs — probe once.

@@ -54,6 +54,7 @@ export function ModelDownloadDialog({
   const [err, setErr] = useState<string | null>(null)
   const [done, setDone] = useState(false)
   const [prevInitial, setPrevInitial] = useState(initialModel)
+  const [prevOpen, setPrevOpen] = useState(open)
   // Held so Cancel can abort an in-flight download instead of only hiding the UI.
   const [jobId, setJobId] = useState<string | null>(null)
 
@@ -63,6 +64,17 @@ export function ModelDownloadDialog({
   // size (audit fix openclip-2x7). React's "adjust state during render when a prop
   // changes" pattern (no effect) re-syncs `selected` — never clobbering a selection
   // mid-download.
+  // The component stays mounted and only its content unmounts, so without this a
+  // reopened dialog still showed last time's "base ready." or cancellation error.
+  if (open !== prevOpen) {
+    setPrevOpen(open)
+    if (open && !busy) {
+      setDone(false)
+      setErr(null)
+      setPct(0)
+    }
+  }
+
   if (initialModel !== prevInitial) {
     setPrevInitial(initialModel)
     if (initialModel && !busy) setSelected(initialModel)

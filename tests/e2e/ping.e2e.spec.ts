@@ -20,10 +20,11 @@ import { IPCChannels } from '../../src/shared/channels'
  * response channel is `<namespace>:<verb>`; `job:*` is exposed as the `jobs`
  * namespace (JobsAPI), and `lifecycle:*` is a main→renderer push, not a method.
  *
- * Two namespaces are deliberately NOT channel-backed and are listed explicitly:
- * `jobs` (a MessagePort cannot ride `invoke`) and `files` (renderer-side
- * `webUtils` path resolution for drag-and-drop). Keeping them named here rather
- * than loosening the equality keeps the assertion exact.
+ * `files` is the one namespace with no channel behind it at all (renderer-side
+ * `webUtils` path resolution for drag-and-drop), so it is named below. `jobs` is
+ * NOT in that list — it is derived from `job:*` by the mapping a few lines down.
+ * Naming the exception rather than loosening the equality keeps the assertion
+ * exact in both directions: an unlisted new namespace still fails loudly.
  */
 const NON_CHANNEL_NAMESPACES = ['files']
 

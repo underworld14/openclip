@@ -42,6 +42,22 @@ export function keyStatusLabel(status: ApiKeyStatus | undefined): string {
 export const PROVIDERS: AIProvider[] = ['openai', 'anthropic', 'ollama', 'openrouter']
 
 /**
+ * Providers shown but not selectable. `google` is still in the schema enum, so a
+ * settings file saved while it WAS selectable must still render something —
+ * dropping it from the list entirely left an affected user staring at a blank
+ * provider dropdown with no explanation of why nothing worked.
+ */
+export const UNAVAILABLE_PROVIDERS: AIProvider[] = ['google']
+
+/** Every provider to render, selectable ones first. */
+export function providerOptions(): Array<{ provider: AIProvider; disabled: boolean }> {
+  return [
+    ...PROVIDERS.map((provider) => ({ provider, disabled: false })),
+    ...UNAVAILABLE_PROVIDERS.map((provider) => ({ provider, disabled: true }))
+  ]
+}
+
+/**
  * Curated seed model per provider, used only until the live catalogue loads.
  *
  * Deliberately SPARSE. A hardcoded catalogue is what shipped a retired model as
@@ -64,10 +80,20 @@ export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<AIProvider, string>> = {
  */
 export function resolveDefaultModel(provider: AIProvider, models: ModelInfo[]): string {
   const seed = DEFAULT_MODEL_BY_PROVIDER[provider]
-  if (seed) return seed
+  // The seed is a FALLBACK, not an override. Returning it unconditionally would
+  // reinstate the very failure this module exists to avoid: a hardcoded id
+  // outliving the provider's catalogue. It is used only when the catalogue is
+  // unavailable, or when the catalogue confirms the id still exists.
+  if (seed && (models.length === 0 || models.some((m) => m.id === seed))) return seed
   const recommended = models.find((m) => m.recommended)
   if (recommended) return recommended.id
-  return models[0]?.id ?? ''
+  // Deliberately NOT `models[0]`. An unranked catalogue has no notion of which
+  // entry is a sensible default: on OpenAI the alphabetically-first chat model is
+  // gpt-3.5-turbo, which cannot satisfy the strict `json_schema` clip detection
+  // requires — so auto-filling it turned the readiness chip GREEN in front of a
+  // guaranteed 400. Returning '' leaves readiness saying "Choose a model in
+  // Settings" with the full picker one line below it.
+  return ''
 }
 
 // ── Transcription language (Part I — cross-language) ─────────────────────────

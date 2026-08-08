@@ -80,6 +80,35 @@ describe('readinessView', () => {
     expect(vm.canTranscribe).toBe(true)
   })
 
+  it('folds whisper-cli into transcription readiness — a model without its binary still fails', () => {
+    // The preflight probed whisperCli and then ignored it: a machine with the
+    // GGML model but no whisper-cli showed three green chips and died with a raw
+    // spawn error mid-import, which is what SYSTEM_PREFLIGHT exists to prevent.
+    const vm = readinessView({
+      ...READY,
+      preflight: { ...READY.preflight!, whisperCli: { ok: false } }
+    })
+    expect(vm.canTranscribe).toBe(false)
+    expect(vm.chips.find((c) => c.id === 'transcription')!.ok).toBe(false)
+  })
+
+  it('does NOT require a whisper model to generate clips — that needs a transcript, not a transcriber', () => {
+    // A user who opens a project that already has a transcript and deletes the
+    // model to reclaim 2.9 GB must still be able to generate clips.
+    const vm = readinessView({ ...READY, whisperInstalled: false })
+    expect(vm.canTranscribe).toBe(false)
+    expect(vm.canGenerate).toBe(true)
+  })
+
+  it('treats an unprobed whisper model as unknown, not as missing', () => {
+    // `false` conflated "not installed" with "not checked yet", so every render
+    // before the IPC resolved showed a red chip, and a failed probe pinned it.
+    const vm = readinessView({ ...READY, whisperInstalled: null })
+    const chip = vm.chips.find((c) => c.id === 'transcription')!
+    expect(chip.state).toBe('unknown')
+    expect(vm.canTranscribe).toBe(true)
+  })
+
   it('names the exact settings pane each chip fixes', () => {
     const vm = readinessView({ ...READY, hasKey: false, whisperInstalled: false })
     expect(vm.chips.find((c) => c.id === 'ai')!.action).toBe('settings')

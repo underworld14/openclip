@@ -186,6 +186,15 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  // Defence in depth against in-page navigation. The renderer already swallows
+  // drops window-wide, but a dropped file (or any stray link) must never be able
+  // to replace the app with a file:// page — that discards every unsaved edit and
+  // leaves no way back. The app itself never navigates after the initial load.
+  const win = mainWindow
+  win.webContents.on('will-navigate', (event, url) => {
+    if (url !== win.webContents.getURL()) event.preventDefault()
+  })
+
   if (is.dev && process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {

@@ -79,6 +79,28 @@ function App(): React.JSX.Element {
   // Wire the debounced autosave subscriber (Wave-1 integration) once for the app
   // lifetime; tears down on unmount.
   useEffect(() => installAutosave(), [])
+  // Hydrate Settings from disk at boot. `settingsStore.load()` previously had NO
+  // caller anywhere in the renderer — SettingsPanel called it, but it only mounts
+  // when the user opens the Settings dialog. So the store held DEFAULT_SETTINGS
+  // for the whole session: the readiness gate saw `model: ''` and no key and
+  // greyed out Generate for a correctly-configured user, and the import path read
+  // the default whisper model instead of the chosen one.
+  useEffect(() => {
+    void useSettingsStore.getState().load()
+  }, [])
+  // Chromium's DEFAULT drop behaviour is to navigate to file:///… — so a video
+  // dropped anywhere outside ImportPanel replaced the whole app with the raw
+  // file and lost all state. The Welcome copy invites dropping, so this has to
+  // be window-wide, not just on the panel that handles it.
+  useEffect(() => {
+    const swallow = (e: DragEvent): void => e.preventDefault()
+    window.addEventListener('dragover', swallow)
+    window.addEventListener('drop', swallow)
+    return () => {
+      window.removeEventListener('dragover', swallow)
+      window.removeEventListener('drop', swallow)
+    }
+  }, [])
   // Default to the dark editor aesthetic; the header toggle flips chrome theme.
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark)
@@ -92,7 +114,10 @@ function App(): React.JSX.Element {
   // The import controller is a shared singleton, so this is the SAME in-flight
   // import ImportPanel started — which is what lets the model dialog hand the
   // interrupted import back instead of silently abandoning it (FEAT-kncqxf).
-  const importCtl = useImportController()
+  // Pass the handler explicitly: App constructs the shared controller (parent
+  // hooks run before children's), so it must supply the callback rather than
+  // relying on ImportPanel to register one later.
+  const importCtl = useImportController({ onNeedModel: handleNeedModel })
 
   // First-run readiness: what the user still has to set up, and whether Generate
   // can run at all (FEAT-c5a15c).
@@ -111,7 +136,13 @@ function App(): React.JSX.Element {
           <ReadinessBar
             chips={readiness.chips}
             onOpenSettings={() => setModal('settings')}
-            onDownloadModel={() => setModelDialogOpen(true)}
+            onDownloadModel={() => {
+              // Pre-select the model the chip is complaining about. Without this
+              // a chip reading "Transcription: large-v3 — not installed" opened
+              // the dialog on `base`, so the download left the chip still red.
+              setNeededModel(useSettingsStore.getState().settings.whisperModel)
+              setModelDialogOpen(true)
+            }}
           />
           {showEditor && (
             <Button
@@ -236,6 +267,7 @@ function App(): React.JSX.Element {
               setNeededModel(m)
               setModelDialogOpen(true)
             }}
+            onModelsChanged={readiness.refresh}
           />
         </DialogContent>
       </Dialog>

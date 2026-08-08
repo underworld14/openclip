@@ -23,6 +23,7 @@ describe('silenceDetectArgs', () => {
       '/src/in.mp4',
       '-t',
       '20',
+      '-vn',
       '-af',
       'silencedetect=noise=-28dB:d=0.7',
       '-f',
@@ -34,6 +35,16 @@ describe('silenceDetectArgs', () => {
   it('defaults to -30dB / 0.5s', () => {
     const args = silenceDetectArgs('/s.mp4', 0, 5)
     expect(args).toContain('silencedetect=noise=-30dB:d=0.5')
+  })
+
+  it('disables the video stream — silencedetect is an audio-only measurement (BUG-88mac4)', () => {
+    // Without -vn ffmpeg still decodes the video into a wrapped_avframe null encode
+    // for a purely audio measurement. Measured cost: +1.1s per 60s 1080p clip,
+    // +3.2s per 120s clip — paid on every export that removes silences.
+    const args = silenceDetectArgs('/src/in.mp4', 12, 30)
+    expect(args).toContain('-vn')
+    // -vn is an OUTPUT option here: it must follow the input it disables.
+    expect(args.indexOf('-vn')).toBeGreaterThan(args.indexOf('-i'))
   })
 })
 

@@ -42,6 +42,10 @@ export function silenceDetectArgs(
     assertSafePathArg(sourcePath, 'sourcePath'),
     '-t',
     String(durationSec),
+    // Audio-only measurement: without `-vn` ffmpeg maps the video stream into a
+    // wrapped_avframe null encode and decodes every frame for nothing (audit fix
+    // BUG-88mac4 — measured +1.1s per 60s 1080p clip, +3.2s per 120s clip).
+    '-vn',
     '-af',
     `silencedetect=noise=${noiseDb}dB:d=${minSilence}`,
     '-f',

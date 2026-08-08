@@ -229,7 +229,9 @@ describe('exportClipArgsMultiRange (Part I.4 jump-cuts)', () => {
     // (30→0, 40→10, 44→14, 58.5→28.5). Crop (center here) runs BEFORE select.
     expect(args.indexOf('-ss')).toBeLessThan(args.indexOf('-i'))
     expect(args[args.indexOf('-ss') + 1]).toBe('30')
-    expect(args[args.indexOf('-t') + 1]).toBe('28.5') // duration = 58.5 - 30
+    // duration = 58.5 - 30 = 28.5, plus the 0.5s inclusive-boundary slack. `-t` is
+    // an INPUT option here so it bounds demuxing (BUG-ery7v7); see demuxWindow().
+    expect(args[args.indexOf('-t') + 1]).toBe('29')
     expect(fc).toContain(
       "[0:v]crop=ih*9/16:ih,select='between(t,0,10)+between(t,14,28.5)',setpts=N/FRAME_RATE/TB,scale=1080:1920[v]"
     )
@@ -297,7 +299,7 @@ describe('exportClipArgsSplit (Part J 2-up split-screen)', () => {
     // -ss/-t it re-encoded the ENTIRE source. base is [30, 58.5] → -ss 30 -t 28.5.
     expect(args.indexOf('-ss')).toBeLessThan(args.indexOf('-i'))
     expect(args[args.indexOf('-ss') + 1]).toBe('30')
-    expect(args[args.indexOf('-t') + 1]).toBe('28.5')
+    expect(args[args.indexOf('-t') + 1]).toBe('28.5') // no select chain ⇒ no slack
     expect(fc).toContain('[0:v]split=2[l][r]')
     // Cover-fit: scale up preserving aspect → center-crop to the tile (no stretch).
     expect(fc).toContain(
@@ -350,6 +352,56 @@ describe('exportClipArgsSplit (Part J 2-up split-screen)', () => {
       })
     ).toThrow(/split/)
     expect(() => exportClipArgsSplit({ ...base })).toThrow(/split/)
+  })
+})
+
+describe('`-t` is an INPUT option so a frame-dropping filtergraph cannot read to EOF (BUG-ery7v7)', () => {
+  // `select`/`aselect` DROP frames and `setpts` re-stamps the survivors, so the
+  // OUTPUT timeline never reaches `duration`. An output-side `-t` therefore never
+  // fires and ffmpeg demuxes the source to EOF: measured 17,880 video frames read
+  // for a 30s clip instead of 953, for a byte-identical file. `-t` must bind to the
+  // SOURCE input (i.e. sit before the first `-i`) so demuxing stops at the clip end.
+  const keepRanges: [number, number][] = [
+    [30, 40],
+    [44, 58.5]
+  ]
+
+  it('multi-range: -t precedes the source -i, with slack for the inclusive boundary', () => {
+    const args = exportClipArgsMultiRange({ ...base, keepRanges })
+    expect(args.indexOf('-t')).toBeLessThan(args.indexOf('-i'))
+    // duration 28.5 + 0.5s slack. The slack is REQUIRED: an input-side `-t` bounds
+    // demuxing EXCLUSIVELY, while `between(t,a,b)` is INCLUSIVE, so a bare `-t 28.5`
+    // drops the frame at exactly t=28.5. Verified against real ffmpeg: `-t 29`
+    // reproduces the pre-fix output byte-for-byte (same md5); `-t 28.5` is one frame
+    // short. The read stays bounded either way.
+    expect(args[args.indexOf('-t') + 1]).toBe('29')
+  })
+
+  it('split-screen: -t precedes the source -i', () => {
+    const splitPlan: ReframePlan = {
+      mode: 'split',
+      regions: [
+        { cropX: 0, cropY: 0, cropW: 960, cropH: 540 },
+        { cropX: 960, cropY: 0, cropW: 960, cropH: 540 }
+      ]
+    }
+    const args = exportClipArgsSplit({ ...base, keepRanges, reframePlan: splitPlan })
+    expect(args.indexOf('-t')).toBeLessThan(args.indexOf('-i'))
+    expect(args[args.indexOf('-t') + 1]).toBe('29')
+  })
+
+  it('multi-range with a logo: -t still binds to the SOURCE input, not the logo input', () => {
+    const args = exportClipArgsMultiRange({
+      ...base,
+      keepRanges,
+      logoPath: '/brand/logo.png',
+      logoPosition: 'top-right',
+      logoScale: 0.2,
+      logoMargin: 24
+    })
+    // Two `-i` in this argv. `-t` must precede BOTH, i.e. the first one.
+    expect(args.filter((a) => a === '-i')).toHaveLength(2)
+    expect(args.indexOf('-t')).toBeLessThan(args.indexOf('-i'))
   })
 })
 

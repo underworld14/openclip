@@ -230,4 +230,46 @@ describe('@serial ffmpeg-export — real cut + 9:16 reframe re-encode', () => {
       }
     }
   )
+  it.skipIf(!HAVE_FFMPEG)(
+    'a silence-removal export renders exactly the kept spans (real-binary jump-cut guard)',
+    async () => {
+      const { videoMp4 } = ensureFixtures() // 1280×720 25fps 4s
+      const tmp = mkdtempSync(join(tmpdir(), 'openclip-jumpcut-'))
+      try {
+        const out = join(tmp, 'cut.mp4')
+        // Cut [1.0, 3.0) = 2.0s and drop the middle 0.5s → 1.5s of kept content.
+        //
+        // SCOPE (verified, don't over-claim): this pins the multi-range path's OUTPUT
+        // duration. It does NOT guard the BUG-ery7v7 fix itself — the `select`
+        // predicates bound the output regardless of where `-t` sits, so this stays
+        // green even with `-t` back on the output side or with an inflated demux
+        // slack (checked: DEMUX_SLACK_SEC=2.0 still passes). The argv-position guard
+        // lives in ffmpeg-export.spec.ts; the slack-leak guard is the SPLIT case
+        // above, which has no `select` chain and so is bounded by `-t` directly.
+        const result = await exportClip({
+          sourcePath: videoMp4,
+          outputPath: out,
+          startTime: 1.0,
+          endTime: 3.0,
+          aspectRatio: '9:16',
+          quality: '1080p',
+          forceCpu: true,
+          binPath: resolveFfmpeg(),
+          keepRanges: [
+            [1.0, 2.0],
+            [2.5, 3.0]
+          ]
+        })
+        expect(result.width).toBe(1080)
+        const { stream, durationSec } = probe(out)
+        expect(stream.width).toBe(1080)
+        expect(stream.height).toBe(1920)
+        expect(stream.codec_name).toBe('h264')
+        // 1.0s + 0.5s kept. NOT 2.0s — that would mean the jump-cut did nothing.
+        expect(Math.abs(durationSec - 1.5)).toBeLessThanOrEqual(0.12)
+      } finally {
+        rmSync(tmp, { recursive: true, force: true })
+      }
+    }
+  )
 })

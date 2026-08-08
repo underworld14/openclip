@@ -174,6 +174,27 @@ export function videoBitrate(quality: '720p' | '1080p'): string {
 }
 
 /**
+ * Slack added to the INPUT-side `-t` of the frame-dropping filtergraph paths, in
+ * seconds. Half a second comfortably covers one frame at any sane frame rate.
+ */
+const DEMUX_SLACK_SEC = 0.5
+
+/**
+ * Demux window for the `select`-based paths: the clip span plus a small slack.
+ *
+ * `-t` before `-i` bounds DEMUXING, which is the whole point (audit fix
+ * BUG-ery7v7) — but it is EXCLUSIVE, while the `between(t,a,b)` predicates the
+ * filtergraph uses are INCLUSIVE. A bare `-t duration` therefore drops the frame at
+ * exactly `t = duration`. Verified against real ffmpeg on a 5-minute source: with
+ * the slack the output is byte-identical to the pre-fix command (same md5, 737
+ * frames); without it the clip is one frame short (736). The read stays bounded to
+ * the clip span either way, which is the 9x decode saving this exists for.
+ */
+export function demuxWindow(durationSec: number): number {
+  return Math.round((durationSec + DEMUX_SLACK_SEC) * 1000) / 1000
+}
+
+/**
  * libx264 CRF per quality preset (lower = higher quality). The CPU fallback path
  * must honour the chosen quality (audit fix openclip-ixa) — it previously pinned
  * CRF 18 for every export, so a 720p "force CPU" clip came out near-1080p sized.
@@ -468,9 +489,11 @@ export function exportClipArgs(opts: ExportArgsOptions): string[] {
  *     -map [v] -map [a] -c:v … -c:a aac -movflags +faststart out
  *
  * TRADE-OFFS (documented, acceptable for the opt-in feature):
- *   - No `-ss`: `between(t,…)` predicates reference absolute source `t`, so the
- *     source is decoded from 0 (the single-range path's fast keyframe seek isn't
- *     available here). Cost scales with the clip's distance into the source.
+ *   - `-ss` AND `-t` are both INPUT options (before `-i`), so the decode window is
+ *     the clip span and `between(t,…)` predicates are CLIP-RELATIVE. `-t` must stay
+ *     on the input side: `select` drops frames and `setpts` re-stamps the survivors,
+ *     so the OUTPUT timeline never reaches `duration` and an output-side `-t` would
+ *     never fire — ffmpeg would demux to source EOF (audit fix BUG-ery7v7).
  *   - `setpts=N/FRAME_RATE/TB` re-stamps to a continuous CFR timeline; video and
  *     audio are re-stamped independently from their own selected-frame counts, so
  *     a tiny per-cut A/V skew can accumulate over MANY cuts / on VFR input. Fine
@@ -514,11 +537,16 @@ export function exportClipArgsMultiRange(opts: ExportArgsOptions): string[] {
     '-y',
     '-ss',
     String(opts.startTime),
+    // INVARIANT (audit fix BUG-ery7v7 — do NOT move after `-i`): `-t` must bind to
+    // the SOURCE INPUT so it bounds DEMUXING. As an output option it bounds output
+    // time, which `select`+`setpts` compress below `duration` — the limit then never
+    // fires and ffmpeg reads the source to EOF (measured on a 5-min source: 9,000
+    // video frames read for a 28.5s clip instead of 1,009; 21.2s CPU vs 5.8s).
+    '-t',
+    String(demuxWindow(duration)),
     '-i',
     opts.sourcePath,
     ...extraInputs,
-    '-t',
-    String(duration),
     '-filter_complex',
     `${vchain};${achain}`,
     '-map',
@@ -615,13 +643,21 @@ export function exportClipArgsSplit(opts: ExportArgsOptions): string[] {
     '-hide_banner',
     '-y',
     // Bound the encode to the clip span (was MISSING → encoded the whole source).
+    // `-t` sits BEFORE `-i` so it bounds DEMUXING, not output time: when `removing`
+    // is true the select/setpts chain compresses the output timeline below
+    // `duration`, so an output-side `-t` would never fire and ffmpeg would read the
+    // source to EOF (audit fix BUG-ery7v7).
     '-ss',
     String(opts.startTime),
+    // Slack ONLY when a `select` chain is present. With no frame dropping the
+    // filtergraph does not bound the output, so the input `-t` IS the clip length
+    // and any slack would lengthen the exported clip (caught by the real-binary
+    // @serial guard: a 2.0s split came out 2.52s).
+    '-t',
+    String(removing ? demuxWindow(duration) : duration),
     '-i',
     opts.sourcePath,
     ...extraInputs,
-    '-t',
-    String(duration),
     '-filter_complex',
     fc,
     '-map',

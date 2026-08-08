@@ -26,6 +26,17 @@ test('the Auto Generate Clips header button is wired: click → clips render (op
     const win = await app.firstWindow()
     await win.waitForLoadState('domcontentloaded')
 
+    // Satisfy the first-run readiness gate the way a user does (FEAT-c5a15c):
+    // the header button is disabled until a provider key and a model id exist.
+    // Transcription readiness comes from the fake-transcribe mode itself.
+    await win.evaluate(async () => {
+      // Drive the STORE actions, not the raw bridge: the store is what keeps
+      // `keyStatus` in sync, and that is what the readiness chips read.
+      const s = window.__openclipTest!.settingsStore.getState()
+      await s.save({ aiProvider: 'openai', model: 'gpt-5' })
+      await s.setApiKey('openai', 'sk-e2e-test')
+    })
+
     // Import + transcribe through the real pipeline (fake transcribe) so the open project
     // has a transcript and the header button becomes enabled.
     await win.evaluate(async () => {

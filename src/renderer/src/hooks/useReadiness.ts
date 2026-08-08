@@ -1,0 +1,75 @@
+/**
+ * useReadiness — gathers the three first-run checks and feeds `readinessView`
+ * (FEAT-c5a15c).
+ *
+ * Every input already existed; nothing reported it. The binary probe is a single
+ * `system.preflight` call (paths.ts has always resolved these), the key/model
+ * come from the settings store, and whisper presence from `model.status`.
+ *
+ * Deliberately re-probes the whisper model whenever the selected size changes or
+ * a download finishes, so the chip flips to green without an app restart.
+ */
+
+import { useCallback, useEffect, useState } from 'react'
+import { useSettingsStore } from '@renderer/stores/settingsStore'
+import { readinessView, type ReadinessView } from '@renderer/components/readinessView'
+import type { PreflightResult } from '@shared/channels'
+
+export interface UseReadiness extends ReadinessView {
+  /** Re-run the whisper-presence check (call after a model download completes). */
+  refresh: () => void
+}
+
+export function useReadiness(): UseReadiness {
+  const settings = useSettingsStore((s) => s.settings)
+  const keyStatus = useSettingsStore((s) => s.keyStatus)
+  const [preflight, setPreflight] = useState<PreflightResult | null>(null)
+  const [whisperInstalled, setWhisperInstalled] = useState(false)
+  const [nonce, setNonce] = useState(0)
+
+  // Binaries can't change while the app runs — probe once.
+  useEffect(() => {
+    let alive = true
+    void window.openclip.system
+      .preflight()
+      .then((r) => {
+        if (alive) setPreflight(r)
+      })
+      .catch(() => {
+        // Leave it null (renders "Checking…") rather than claiming a failure we
+        // did not actually observe.
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let alive = true
+    void window.openclip.model
+      .status({ model: settings.whisperModel })
+      .then((rows) => {
+        if (alive) setWhisperInstalled(rows.some((r) => r.installed))
+      })
+      .catch(() => {
+        if (alive) setWhisperInstalled(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [settings.whisperModel, nonce])
+
+  const refresh = useCallback(() => setNonce((n) => n + 1), [])
+
+  return {
+    ...readinessView({
+      preflight,
+      provider: settings.aiProvider,
+      hasKey: keyStatus[settings.aiProvider]?.hasKey ?? false,
+      model: settings.model,
+      whisperModel: settings.whisperModel,
+      whisperInstalled
+    }),
+    refresh
+  }
+}

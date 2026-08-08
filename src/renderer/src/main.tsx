@@ -3,6 +3,7 @@ import './assets/index.css'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { useProjectStore } from './stores/projectStore'
 import { runImportPipeline, runUrlDownload } from './components/import-pipeline'
 import { acquireJobPort } from './hooks/jobPort'
@@ -21,6 +22,8 @@ declare global {
   interface Window {
     __openclipTest?: {
       store: typeof useProjectStore
+      /** Settings store — E2E needs it to satisfy the readiness gate (FEAT-c5a15c). */
+      settingsStore: typeof useSettingsStore
       runImportPipeline: typeof runImportPipeline
       runUrlDownload: typeof runUrlDownload
       acquireJobPort: typeof acquireJobPort
@@ -34,6 +37,7 @@ declare global {
 }
 window.__openclipTest = {
   store: useProjectStore,
+  settingsStore: useSettingsStore,
   runImportPipeline,
   runUrlDownload,
   acquireJobPort,

@@ -43,6 +43,8 @@ import { useProjectStore } from '@renderer/stores/projectStore'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { installAutosave } from '@renderer/stores/projectStore/autosave'
 import { useImportController } from '@renderer/hooks/useImportController'
+import { useReadiness } from '@renderer/hooks/useReadiness'
+import { ReadinessBar } from '@renderer/components/ReadinessBar'
 
 type Modal = 'none' | 'import' | 'export' | 'settings'
 
@@ -92,6 +94,10 @@ function App(): React.JSX.Element {
   // interrupted import back instead of silently abandoning it (FEAT-kncqxf).
   const importCtl = useImportController()
 
+  // First-run readiness: what the user still has to set up, and whether Generate
+  // can run at all (FEAT-c5a15c).
+  const readiness = useReadiness()
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-transparent text-foreground">
       {/* ── Native hidden-inset title bar (draggable). Left padding clears the
@@ -101,7 +107,12 @@ function App(): React.JSX.Element {
           <Clapperboard className="size-4 text-primary" />
           <span className="text-sm font-semibold tracking-tight">{APP_NAME}</span>
         </div>
-        <div className="app-no-drag flex items-center gap-1">
+        <div className="app-no-drag flex items-center gap-2">
+          <ReadinessBar
+            chips={readiness.chips}
+            onOpenSettings={() => setModal('settings')}
+            onDownloadModel={() => setModelDialogOpen(true)}
+          />
           {showEditor && (
             <Button
               variant="ghost"
@@ -160,7 +171,12 @@ function App(): React.JSX.Element {
                   size="sm"
                   className="gap-1.5"
                   data-testid="auto-generate-clips"
-                  disabled={!hasTranscript || generating}
+                  disabled={!hasTranscript || generating || !readiness.canGenerate}
+                  // Name the missing piece instead of a dead grey button.
+                  title={
+                    readiness.blockingReason ??
+                    (!hasTranscript ? 'Transcribe a video first.' : 'Generate clips with AI')
+                  }
                   onClick={handleGenerateClips}
                 >
                   <Sparkles className="size-4" /> Auto Generate Clips
@@ -224,6 +240,7 @@ function App(): React.JSX.Element {
         initialModel={neededModel}
         onDownloaded={() => {
           setModelDialogOpen(false)
+          readiness.refresh() // flip the chip green without a restart
           // Pick the import back up rather than dropping the user on the Welcome
           // screen wondering why nothing happened (FEAT-kncqxf).
           if (importCtl.pendingImport) {

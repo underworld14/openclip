@@ -32,7 +32,8 @@ import {
   partitionRecommended,
   formatModelPrice,
   LANGUAGES,
-  languageLabel
+  languageLabel,
+  resolveDefaultModel
 } from '@renderer/components/settingsView'
 import { BrandKitEditor } from '@renderer/components/BrandKitEditor'
 import type { ModelInfo } from '@shared/channels'
@@ -93,6 +94,10 @@ export function SettingsPanel(): React.JSX.Element {
   // Local-only key entry; cleared after submit (never persisted in renderer).
   const [keyDraft, setKeyDraft] = useState('')
   const [modelQuery, setModelQuery] = useState('')
+  // "Test connection" — one cheap real round-trip so a bad key or model id is
+  // caught HERE rather than after a full transcription (FEAT-6v92dk).
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
   // Part K — separate key entry for the (optional) independent emoji provider.
   const [emojiKeyDraft, setEmojiKeyDraft] = useState('')
 
@@ -138,10 +143,21 @@ export function SettingsPanel(): React.JSX.Element {
   // change) — NOT models.length, which would re-fire forever if a fetch
   // legitimately returns zero models (review H: infinite-refetch loop).
   useEffect(() => {
-    if (provider === 'openrouter' && modelsFetchedAt === null && !modelsLoading && !modelsError) {
+    // Every offered provider has a catalogue now (FEAT-6v92dk), so the picker
+    // loads for all of them rather than only OpenRouter.
+    if (modelsFetchedAt === null && !modelsLoading && !modelsError) {
       void loadModels(false)
     }
   }, [provider, modelsFetchedAt, modelsLoading, modelsError, loadModels])
+
+  // Never leave the model field empty (FEAT-6v92dk): as soon as we know what the
+  // provider offers, seed it. Only fills a BLANK field — it never overwrites a
+  // choice the user made.
+  useEffect(() => {
+    if (settings.model.trim()) return
+    const next = resolveDefaultModel(provider, models)
+    if (next) void save({ model: next })
+  }, [provider, models, settings.model, save])
 
   // Memoized so typing in the filter doesn't re-walk the full catalog + re-mount
   // unchanged rows each render.
@@ -151,8 +167,23 @@ export function SettingsPanel(): React.JSX.Element {
 
   const onProviderChange = async (value: string): Promise<void> => {
     const p = value as AIProvider
+    setTestResult(null)
     await save({ aiProvider: p })
     await refreshKeyStatus(p)
+  }
+
+  const onTestConnection = async (): Promise<void> => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const res = await window.openclip.ai.testConnection({ provider, model: modelDraft.trim() })
+      setTestResult({ ok: res.ok, message: res.message })
+    } catch (e) {
+      // The handler is designed never to throw, so this is a bridge-level fault.
+      setTestResult({ ok: false, message: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setTesting(false)
+    }
   }
 
   const onSaveKey = async (): Promise<void> => {
@@ -160,7 +191,9 @@ export function SettingsPanel(): React.JSX.Element {
     await setApiKey(provider, keyDraft.trim())
     setKeyDraft('') // never keep the raw key around in the renderer
     // A new key may unlock more models / personalized pricing — refresh the list.
-    if (provider === 'openrouter') void loadModels(true)
+    // A new key may unlock the catalogue (and, on OpenRouter, personalised
+    // pricing) — refresh for every provider, not just OpenRouter.
+    void loadModels(true)
   }
 
   // Part K — the (optional) independent emoji AI provider. Falls back to the clip
@@ -203,27 +236,34 @@ export function SettingsPanel(): React.JSX.Element {
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center justify-between">
           <Label htmlFor="ai-model">Model</Label>
-          {provider === 'openrouter' && (
+          <div className="flex items-center gap-1">
             <Button
               variant="ghost"
               size="sm"
               className="h-6 px-2 text-xs"
+              data-testid="load-models"
               onClick={() => void loadModels(true)}
               disabled={modelsLoading}
             >
-              {modelsLoading ? 'Loading…' : 'Refresh'}
+              {modelsLoading ? 'Loading…' : 'Load models'}
             </Button>
-          )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              data-testid="test-connection"
+              onClick={() => void onTestConnection()}
+              disabled={testing}
+            >
+              {testing ? 'Testing…' : 'Test'}
+            </Button>
+          </div>
         </div>
         {/* Free-text id is always available — the escape hatch for any model id. */}
         <Input
           id="ai-model"
           value={modelDraft}
-          placeholder={
-            provider === 'openrouter'
-              ? 'e.g. anthropic/claude-sonnet-4.5 — or pick below'
-              : 'e.g. gpt-4o-mini, claude-sonnet-4-5, llama3.1'
-          }
+          placeholder="Pick one below, or type a model id"
           onChange={(e) => setModelDraft(e.target.value)}
           onBlur={() => {
             if (modelDraft !== settings.model) void save({ model: modelDraft })
@@ -233,55 +273,62 @@ export function SettingsPanel(): React.JSX.Element {
           }}
         />
 
-        {provider === 'openrouter' && (
-          <div className="mt-1 flex flex-col gap-1.5" data-testid="model-picker">
-            <Input
-              aria-label="Filter models"
-              placeholder="Filter models…"
-              value={modelQuery}
-              onChange={(e) => setModelQuery(e.target.value)}
-            />
-            {modelsError && (
-              <span className="text-xs text-destructive" data-testid="models-error">
-                {modelsError} — you can still type a model id above.
-              </span>
-            )}
-            <ScrollArea className="h-56 rounded-md border">
-              {modelsLoading && models.length === 0 ? (
-                <div className="p-3 text-xs text-muted-foreground">Loading models…</div>
-              ) : recommended.length === 0 && others.length === 0 ? (
-                <div className="p-3 text-xs text-muted-foreground">
-                  {models.length === 0
-                    ? 'No models loaded — add your OpenRouter key, then Refresh.'
-                    : 'No models match your filter.'}
-                </div>
-              ) : (
-                <div className="flex flex-col py-1">
-                  {recommended.length > 0 && (
-                    <ModelGroup
-                      label="Recommended"
-                      models={recommended}
-                      selected={settings.model}
-                      onPick={(id) => void save({ model: id })}
-                    />
-                  )}
-                  {others.length > 0 && (
-                    <ModelGroup
-                      label={recommended.length > 0 ? 'More models' : 'Models'}
-                      models={others}
-                      selected={settings.model}
-                      onPick={(id) => void save({ model: id })}
-                    />
-                  )}
-                </div>
-              )}
-            </ScrollArea>
-            <p className="text-xs text-muted-foreground">
-              Only models that support strict JSON are listed (clip detection needs it). Type any
-              model id above to use one that isn’t listed.
-            </p>
-          </div>
+        {testResult && (
+          <span
+            data-testid="test-connection-result"
+            className={testResult.ok ? 'text-xs text-emerald-500' : 'text-xs text-destructive'}
+          >
+            {testResult.message}
+          </span>
         )}
+
+        <div className="mt-1 flex flex-col gap-1.5" data-testid="model-picker">
+          <Input
+            aria-label="Filter models"
+            placeholder="Filter models…"
+            value={modelQuery}
+            onChange={(e) => setModelQuery(e.target.value)}
+          />
+          {modelsError && (
+            <span className="text-xs text-destructive" data-testid="models-error">
+              {modelsError} — you can still type a model id above.
+            </span>
+          )}
+          <ScrollArea className="h-56 rounded-md border">
+            {modelsLoading && models.length === 0 ? (
+              <div className="p-3 text-xs text-muted-foreground">Loading models…</div>
+            ) : recommended.length === 0 && others.length === 0 ? (
+              <div className="p-3 text-xs text-muted-foreground">
+                {models.length === 0
+                  ? `No models loaded — add your ${providerLabel(provider)} key, then press Load models.`
+                  : 'No models match your filter.'}
+              </div>
+            ) : (
+              <div className="flex flex-col py-1">
+                {recommended.length > 0 && (
+                  <ModelGroup
+                    label="Recommended"
+                    models={recommended}
+                    selected={settings.model}
+                    onPick={(id) => void save({ model: id })}
+                  />
+                )}
+                {others.length > 0 && (
+                  <ModelGroup
+                    label={recommended.length > 0 ? 'More models' : 'Models'}
+                    models={others}
+                    selected={settings.model}
+                    onPick={(id) => void save({ model: id })}
+                  />
+                )}
+              </div>
+            )}
+          </ScrollArea>
+          <p className="text-xs text-muted-foreground">
+            Only models that support strict JSON are listed (clip detection needs it). Type any
+            model id above to use one that isn’t listed.
+          </p>
+        </div>
       </div>
 
       <div className="flex flex-col gap-1.5">

@@ -72,7 +72,11 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
   let current: Project | null = null
   // Mirrors the real store: the clips / exportHistory / selection slices are
   // SINGLETONS that survive a project switch unless something clears them.
-  const slices = { clips: [{ id: 'stale-clip' }], exportHistory: [{ id: 'stale-rec' }], selectedClipId: 'stale-clip' }
+  const slices = {
+    clips: [{ id: 'stale-clip' }],
+    exportHistory: [{ id: 'stale-rec' }],
+    selectedClipId: 'stale-clip'
+  }
   const store: ImportControllerStore = {
     getCurrentProject: () => current,
     hydrateProject: (p) => {

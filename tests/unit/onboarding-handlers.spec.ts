@@ -71,7 +71,10 @@ describe('SYSTEM_PREFLIGHT (FEAT-c5a15c)', () => {
 
     const { ctx, handlers } = makeCtx()
     registerSystemPreflightHandler(ctx)
-    const res = (await handlers.get(IPCChannels.SYSTEM_PREFLIGHT)!(null, undefined)) as PreflightResult
+    const res = (await handlers.get(IPCChannels.SYSTEM_PREFLIGHT)!(
+      null,
+      undefined
+    )) as PreflightResult
 
     expect(res.ffmpeg).toEqual({ ok: true, path: '/bin/ffmpeg' })
     expect(res.whisperCli).toEqual({ ok: true, path: '/bin/whisper-cli' })
@@ -90,7 +93,10 @@ describe('SYSTEM_PREFLIGHT (FEAT-c5a15c)', () => {
 
     const { ctx, handlers } = makeCtx()
     registerSystemPreflightHandler(ctx)
-    const res = (await handlers.get(IPCChannels.SYSTEM_PREFLIGHT)!(null, undefined)) as PreflightResult
+    const res = (await handlers.get(IPCChannels.SYSTEM_PREFLIGHT)!(
+      null,
+      undefined
+    )) as PreflightResult
 
     expect(res.whisperCli).toEqual({ ok: false })
     expect(res.ffmpeg.ok).toBe(true) // the rest still reported
@@ -104,7 +110,10 @@ describe('SYSTEM_PREFLIGHT (FEAT-c5a15c)', () => {
 
     const { ctx, handlers } = makeCtx()
     registerSystemPreflightHandler(ctx)
-    const res = (await handlers.get(IPCChannels.SYSTEM_PREFLIGHT)!(null, undefined)) as PreflightResult
+    const res = (await handlers.get(IPCChannels.SYSTEM_PREFLIGHT)!(
+      null,
+      undefined
+    )) as PreflightResult
     expect(res.ffmpeg.ok).toBe(false)
   })
 })
@@ -128,9 +137,9 @@ describe('MODEL_DELETE (FEAT-1k76hk)', () => {
     registerModelHandlers(ctx)
     // The handler is synchronous; `ipcMain.handle` converts a sync throw into a
     // rejected invoke for the renderer, so a sync throw is the correct shape here.
-    expect(() => handlers.get(IPCChannels.MODEL_DELETE)!(null, { model: '../../etc/passwd' })).toThrow(
-      /unknown whisper model/i
-    )
+    expect(() =>
+      handlers.get(IPCChannels.MODEL_DELETE)!(null, { model: '../../etc/passwd' })
+    ).toThrow(/unknown whisper model/i)
     expect(deleteModelMock).not.toHaveBeenCalled()
   })
 })

@@ -173,5 +173,4 @@ describe('hydrateFromProject (Wave-1 full cross-slice hydration)', () => {
 
     expect(useProjectStore.getState().selectedClipId).toBeNull()
   })
-
 })

@@ -4,3 +4,15 @@ pnpm-lock.yaml
 LICENSE.md
 tsconfig.json
 tsconfig.*.json
+
+# Issue tracker + per-harness agent skill installs: generated/curated markdown
+# that prettier reflows into a large, meaningless diff on every `format` run.
+.pine
+.agents
+.codex
+.cursor
+.claude
+# Recorded fixtures must stay byte-identical to what the real binary emitted.
+tests/fixtures
+# Provenance/attribution files kept verbatim from upstream.
+build/**/SOURCES.md

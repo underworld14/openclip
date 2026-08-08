@@ -186,7 +186,9 @@ describe('resolveDefaultModel (FEAT-6v92dk)', () => {
   })
 
   it('falls back to the first entry when nothing is recommended', () => {
-    const plain: ModelInfo[] = [{ id: 'only', name: 'O', supportsStructured: true, recommended: false }]
+    const plain: ModelInfo[] = [
+      { id: 'only', name: 'O', supportsStructured: true, recommended: false }
+    ]
     expect(resolveDefaultModel('openai', plain)).toBe('only')
   })
 

@@ -20,7 +20,8 @@ import {
   partitionRecommended,
   formatModelPrice,
   LANGUAGES,
-  languageLabel
+  languageLabel,
+  resolveDefaultModel
 } from '@renderer/components/settingsView'
 import { clipsFixture } from '../fixtures/contract'
 import type { Clip } from '@shared/schema'
@@ -158,5 +159,43 @@ describe('transcription language helpers (Part I — cross-language)', () => {
     expect(languageLabel('id')).toBe('Indonesian')
     expect(languageLabel('en')).toBe('English')
     expect(languageLabel('sw')).toBe('SW') // unknown ISO code rendered verbatim, uppercased
+  })
+})
+
+// ── Per-provider defaults + model resolution (FEAT-6v92dk) ──────────────────
+describe('PROVIDERS no longer offers a dead end (FEAT-et1gxc)', () => {
+  it('drops Google, which the transport hard-throws on', () => {
+    expect(PROVIDERS).not.toContain('google')
+    expect(PROVIDERS).toEqual(['openai', 'anthropic', 'ollama', 'openrouter'])
+  })
+})
+
+describe('resolveDefaultModel (FEAT-6v92dk)', () => {
+  const models: ModelInfo[] = [
+    { id: 'z-first', name: 'Z', supportsStructured: true, recommended: false },
+    { id: 'rec-1', name: 'R1', supportsStructured: true, recommended: true },
+    { id: 'claude-opus-5', name: 'Opus 5', supportsStructured: true, recommended: false }
+  ]
+
+  it('prefers the curated seed when the provider has one and the catalogue lists it', () => {
+    expect(resolveDefaultModel('anthropic', models)).toBe('claude-opus-5')
+  })
+
+  it('falls back to the first RECOMMENDED entry when there is no curated seed', () => {
+    expect(resolveDefaultModel('openrouter', models)).toBe('rec-1')
+  })
+
+  it('falls back to the first entry when nothing is recommended', () => {
+    const plain: ModelInfo[] = [{ id: 'only', name: 'O', supportsStructured: true, recommended: false }]
+    expect(resolveDefaultModel('openai', plain)).toBe('only')
+  })
+
+  it('still returns the curated seed when the catalogue could not be fetched', () => {
+    // A dead network must not leave the field empty — that is the whole bug.
+    expect(resolveDefaultModel('anthropic', [])).toBe('claude-opus-5')
+  })
+
+  it('returns empty for a provider with no seed and no catalogue, rather than inventing an id', () => {
+    expect(resolveDefaultModel('ollama', [])).toBe('')
   })
 })

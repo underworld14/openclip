@@ -17,7 +17,8 @@ import { registerSettingsHandlers } from '@main/ipc/settings'
 import {
   registerAiHandlers,
   __setTransportFactoryForTests,
-  __setModelsFetcherForTests
+  __setModelsFetcherForTests,
+  __setProviderCatalogueFetcherForTests
 } from '@main/ipc/ai'
 import { KeyVault, type SafeStorageLike, type SecretStoreBackend } from '@main/utils/security'
 import { IPCChannels } from '@shared/channels'
@@ -348,13 +349,18 @@ describe('ai handler: AI_LIST_MODELS (Part H — fetcher injected, no network)',
     expect(fetcher).toHaveBeenCalledTimes(2)
   })
 
-  it('returns an empty list for non-openrouter providers (no fetch)', async () => {
+  it('does not use the OpenRouter fetcher for other providers', async () => {
+    // Was "returns an empty list for non-openrouter providers". Those providers
+    // now get their own catalogue (FEAT-6v92dk); what still holds is that the
+    // OpenRouter-specific fetcher is not reused for them. Without a key the
+    // OpenAI path refuses before any HTTP, which is the behaviour we want.
     const { ctx, handlers } = makeCtx()
     const fetcher = vi.fn(async () => [])
     __setModelsFetcherForTests(fetcher)
     registerAiHandlers(ctx)
-    const res = await call(handlers, IPCChannels.AI_LIST_MODELS, { provider: 'openai' })
-    expect(res.models).toEqual([])
+    await expect(
+      call(handlers, IPCChannels.AI_LIST_MODELS, { provider: 'openai' })
+    ).rejects.toThrow(/api key/i)
     expect(fetcher).not.toHaveBeenCalled()
   })
 })
@@ -443,5 +449,33 @@ describe('stub AI channels answer honestly (FEAT-et1gxc)', () => {
         model: 'gpt-5'
       })
     ).rejects.toThrow(/NOT_IMPLEMENTED/)
+  })
+})
+
+describe('AI_LIST_MODELS covers every offered provider (FEAT-6v92dk)', () => {
+  afterEach(() => __setProviderCatalogueFetcherForTests(null))
+
+  it('returns a real catalogue for anthropic instead of short-circuiting to []', async () => {
+    const { ctx, handlers, vault } = makeCtx()
+    vault.setKey('anthropic', 'sk-ant-test')
+    __setProviderCatalogueFetcherForTests(async () => ({
+      data: [{ id: 'claude-opus-5', display_name: 'Claude Opus 5' }]
+    }))
+    registerAiHandlers(ctx)
+    const res = (await handlers.get(IPCChannels.AI_LIST_MODELS)!(null, {
+      provider: 'anthropic'
+    })) as ChannelRes<typeof IPCChannels.AI_LIST_MODELS>
+    expect(res.provider).toBe('anthropic')
+    expect(res.models.map((m) => m.id)).toEqual(['claude-opus-5'])
+  })
+
+  it('returns a real catalogue for ollama, which needs no key', async () => {
+    const { ctx, handlers } = makeCtx()
+    __setProviderCatalogueFetcherForTests(async () => ({ models: [{ name: 'llama3.1:8b' }] }))
+    registerAiHandlers(ctx)
+    const res = (await handlers.get(IPCChannels.AI_LIST_MODELS)!(null, {
+      provider: 'ollama'
+    })) as ChannelRes<typeof IPCChannels.AI_LIST_MODELS>
+    expect(res.models.map((m) => m.id)).toEqual(['llama3.1:8b'])
   })
 })

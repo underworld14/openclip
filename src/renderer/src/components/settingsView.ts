@@ -28,7 +28,47 @@ export function keyStatusLabel(status: ApiKeyStatus | undefined): string {
   return `Key set ••••${status.last4 ?? ''}`
 }
 
-export const PROVIDERS: AIProvider[] = ['openai', 'anthropic', 'google', 'ollama', 'openrouter']
+/**
+ * Providers offered in Settings.
+ *
+ * `google` is DELIBERATELY absent (audit fix FEAT-et1gxc). It stays in the
+ * `AIProvider` schema enum — projects saved while it was selectable must still
+ * load — but `ai-client.createTransport` hard-throws for it, and the throw only
+ * surfaced after the user had imported a video, waited through a full whisper
+ * transcription, and clicked Generate. Offering a choice that costs minutes to
+ * fail is worse than not offering it. Re-add this entry in the same commit that
+ * wires the transport, not before.
+ */
+export const PROVIDERS: AIProvider[] = ['openai', 'anthropic', 'ollama', 'openrouter']
+
+/**
+ * Curated seed model per provider, used only until the live catalogue loads.
+ *
+ * Deliberately SPARSE. A hardcoded catalogue is what shipped a retired model as
+ * the app's own top recommendation (BUG-2smqpv), so this holds an entry only
+ * where the id is known-current; every other provider resolves from its live
+ * `/models` response instead. An empty string is an honest "we don't know yet"
+ * — better than inventing an id the provider will reject.
+ */
+export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<AIProvider, string>> = {
+  anthropic: 'claude-opus-5'
+}
+
+/**
+ * Pick the model id to pre-fill for a provider (audit fix FEAT-6v92dk).
+ *
+ * Order: curated seed → first recommended → first listed → empty. The seed wins
+ * even when the catalogue is empty, so a failed `/models` fetch still leaves a
+ * usable value in the field rather than the empty string that made a correctly
+ * pasted API key fail with a raw provider error.
+ */
+export function resolveDefaultModel(provider: AIProvider, models: ModelInfo[]): string {
+  const seed = DEFAULT_MODEL_BY_PROVIDER[provider]
+  if (seed) return seed
+  const recommended = models.find((m) => m.recommended)
+  if (recommended) return recommended.id
+  return models[0]?.id ?? ''
+}
 
 // ── Transcription language (Part I — cross-language) ─────────────────────────
 

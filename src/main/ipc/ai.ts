@@ -29,6 +29,8 @@ import {
   type RawTransport
 } from '@main/services/ai-client'
 import { suggestEmoji } from '@main/services/ai-emoji'
+import { fetchProviderModels } from '@main/services/provider-models'
+import type { CatalogueFetcher } from '@main/services/provider-models'
 import {
   fetchOpenRouterModels,
   ModelListCache,
@@ -54,6 +56,14 @@ let transportFactoryOverride: TransportFactory | null = null
 /** TEST-ONLY: override (or clear with null) the provider transport factory. */
 export function __setTransportFactoryForTests(factory: TransportFactory | null): void {
   transportFactoryOverride = factory
+}
+
+// Test seam for the per-provider catalogue fetch (FEAT-6v92dk). Null = real HTTP.
+let providerCatalogueFetcherOverride: CatalogueFetcher | null = null
+
+/** TEST-ONLY: override (or clear with null) the provider catalogue fetcher. */
+export function __setProviderCatalogueFetcherForTests(f: CatalogueFetcher | null): void {
+  providerCatalogueFetcherOverride = f
 }
 
 // Test seam + cache for the OpenRouter model list (Part H).
@@ -261,8 +271,17 @@ export function registerAiHandlers(ctx: IpcContext): void {
   ctx.ipcMain.handle(
     IPCChannels.AI_LIST_MODELS,
     async (_e, req: ListModelsRequest): Promise<ListModelsResult> => {
+      // Every provider we OFFER gets a real catalogue. Returning [] here is what
+      // left OpenAI/Anthropic/Ollama users typing a model id from memory into a
+      // free-text box (audit fix FEAT-6v92dk). The OpenRouter path below stays
+      // separate because it carries pricing + curated ordering.
       if (req.provider !== 'openrouter') {
-        return { provider: req.provider, models: [], fetchedAt: Date.now(), fromCache: false }
+        const models = await fetchProviderModels({
+          provider: req.provider,
+          apiKey: ctx.keyVault.getKey(req.provider),
+          fetcher: providerCatalogueFetcherOverride ?? undefined
+        })
+        return { provider: req.provider, models, fetchedAt: Date.now(), fromCache: false }
       }
       if (!req.refresh) {
         const cached = modelListCache.get()

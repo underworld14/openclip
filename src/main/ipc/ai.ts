@@ -18,7 +18,9 @@ import type {
   EnhanceCaptionsResult,
   GenerateClipsRequest,
   ListModelsRequest,
-  ListModelsResult
+  ListModelsResult,
+  TestConnectionRequest,
+  TestConnectionResult
 } from '@shared/channels'
 import type { AIProvider } from '@shared/schema'
 import {
@@ -172,9 +174,16 @@ export function registerAiHandlers(ctx: IpcContext): void {
     return result.value
   })
 
-  // GENERATE_TITLES is PRD §7.4 (v1.0 polish) — minimal pass-through for now.
+  // GENERATE_TITLES is PRD §7.4 (v1.0 polish) and is NOT built yet. It answers
+  // with a typed rejection rather than `{options: []}` — a successful empty
+  // payload is indistinguishable from "the model had no suggestions", so a caller
+  // cannot branch on it and a UI built against it would silently render nothing
+  // forever (audit fix FEAT-et1gxc).
   ctx.ipcMain.handle(IPCChannels.GENERATE_TITLES, async () => {
-    return { options: [] }
+    throw new Error(
+      'NOT_IMPLEMENTED: AI title generation (PRD §7.4) is not built yet. ' +
+        'Titles currently come from the clip-detection pass.'
+    )
   })
 
   // ENHANCE_CAPTIONS (PRD §7.5). Part K (emoji): mode:'emoji' returns a per-word
@@ -185,7 +194,13 @@ export function registerAiHandlers(ctx: IpcContext): void {
   ctx.ipcMain.handle(
     IPCChannels.ENHANCE_CAPTIONS,
     async (_e, req: EnhanceCaptionsRequest): Promise<EnhanceCaptionsResult> => {
-      if (req.mode !== 'emoji') return { enhanced_captions: [] }
+      // Rewrite mode (PRD §7.5) is not built. Reject rather than answering with an
+      // empty success (audit fix FEAT-et1gxc) — emoji mode below is the real path.
+      if (req.mode !== 'emoji') {
+        throw new Error(
+          'NOT_IMPLEMENTED: caption rewrite (PRD §7.5) is not built yet; only mode:"emoji" is wired.'
+        )
+      }
       const apiKey = ctx.keyVault.getKey(req.provider)
       const factory =
         transportFactoryOverride ??
@@ -196,6 +211,46 @@ export function registerAiHandlers(ctx: IpcContext): void {
         return { enhanced_captions: [], emoji_map }
       } catch {
         return { enhanced_captions: [], emoji_map: {} }
+      }
+    }
+  )
+
+  // AI_TEST_CONNECTION — one cheap real round-trip so a misconfiguration is caught
+  // HERE, in Settings, instead of after the user has imported a video and sat
+  // through a full whisper transcription (audit fix FEAT-6v92dk). Never throws:
+  // the renderer renders `message` verbatim, so every failure mode has to already
+  // be human-readable.
+  ctx.ipcMain.handle(
+    IPCChannels.AI_TEST_CONNECTION,
+    async (_e, req: TestConnectionRequest): Promise<TestConnectionResult> => {
+      const model = (req.model ?? '').trim()
+      const apiKey = ctx.keyVault.getKey(req.provider)
+      // Ollama runs locally and needs no key; everything else does. Check BEFORE
+      // building a transport so a keyless test costs nothing and cannot 401.
+      if (req.provider !== 'ollama' && !apiKey) {
+        return {
+          ok: false,
+          message: `No API key saved for ${req.provider}. Paste one above, then test again.`
+        }
+      }
+      if (!model) {
+        return { ok: false, message: 'No model id set. Pick one from the list, then test again.' }
+      }
+      const factory =
+        transportFactoryOverride ??
+        (process.env.OPENCLIP_FAKE_TRANSCRIBE ? () => fakeTransport : createTransport)
+      const started = Date.now()
+      try {
+        const transport = await factory({ provider: req.provider, model, apiKey })
+        // Deliberately tiny: this proves auth + model id + reachability, and is the
+        // cheapest request the provider will accept. It is NOT a schema check.
+        await transport({
+          system: 'You are a connectivity probe. Answer with exactly one word.',
+          user: 'Reply with the single word: pong'
+        })
+        return { ok: true, message: `Connected to ${model}.`, latencyMs: Date.now() - started }
+      } catch (err) {
+        return { ok: false, message: humanTransportError(err, req.provider, model) }
       }
     }
   )
@@ -236,4 +291,35 @@ export function registerAiHandlers(ctx: IpcContext): void {
       }
     }
   )
+}
+
+/**
+ * Map a provider SDK failure to something a non-technical user can act on.
+ *
+ * Provider error bodies routinely echo the submitted API key back (OpenAI's 401
+ * says "Incorrect API key provided: sk-…"), so the raw message must NEVER be
+ * forwarded verbatim to the renderer — this function is also the redaction seam.
+ */
+function humanTransportError(err: unknown, provider: AIProvider, model: string): string {
+  const raw = err instanceof Error ? err.message : String(err)
+  if (/\b401\b|unauthor|invalid[_ -]?api[_ -]?key|incorrect api key/i.test(raw)) {
+    return `The ${provider} key was rejected. Check that it is correct and still active.`
+  }
+  if (/\b403\b|permission|forbidden/i.test(raw)) {
+    return `That key is valid but not allowed to use "${model}". Try a different model or plan.`
+  }
+  if (/\b404\b|model[_ ]?not[_ ]?found|does not exist|unknown model/i.test(raw)) {
+    return `${provider} does not recognise the model "${model}". Pick one from the list.`
+  }
+  if (/\b429\b|rate[_ ]?limit|quota|insufficient[_ ]?quota|billing/i.test(raw)) {
+    return `${provider} rejected the request for quota or rate-limit reasons. Check your billing.`
+  }
+  if (/ECONNREFUSED|ENOTFOUND|EAI_AGAIN|fetch failed|network|timeout|ETIMEDOUT/i.test(raw)) {
+    return provider === 'ollama'
+      ? 'Could not reach Ollama on this machine. Is `ollama serve` running?'
+      : `Could not reach ${provider}. Check your internet connection.`
+  }
+  // Unknown shape: say so plainly and keep it short rather than dumping a body
+  // that may contain the key.
+  return `${provider} rejected the test request. Double-check the provider, model id and key.`
 }

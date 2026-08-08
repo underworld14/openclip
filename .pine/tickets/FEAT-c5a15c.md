@@ -1,14 +1,14 @@
 ---
 id: FEAT-c5a15c
 title: 'No first-run preflight: nothing tells the user they need an API key, a model id, or a whisper model until it fails'
-status: todo
+status: doing
 priority: critical
 labels:
     - ux
     - onboarding
 parent: EPIC-xzzpty
 created: "2026-08-08T15:56:46Z"
-updated: "2026-08-08T15:56:46Z"
+updated: "2026-08-08T17:13:28Z"
 ---
 
 ## Current behavior

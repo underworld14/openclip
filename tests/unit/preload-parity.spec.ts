@@ -91,12 +91,13 @@ describe('preload parity: real bridge method-set === mock method-set', () => {
       'enhanceCaptions',
       'generateClips',
       'generateTitles',
-      'listModels'
+      'listModels',
+      'testConnection'
     ])
     expect(methodKeys(realBridge.media)).toEqual(['adoptSource', 'reclaim'])
     expect(methodKeys(realBridge.brand)).toEqual(['delete', 'list', 'save', 'setLogo'])
     expect(methodKeys(realBridge.settings)).toEqual(['apiKeyStatus', 'get', 'set', 'setApiKey'])
-    expect(methodKeys(realBridge.model)).toEqual(['download', 'status'])
+    expect(methodKeys(realBridge.model)).toEqual(['delete', 'download', 'status'])
     expect(methodKeys(realBridge.system)).toEqual([
       'autosaveFlushed',
       'checkUpdate',
@@ -104,6 +105,7 @@ describe('preload parity: real bridge method-set === mock method-set', () => {
       'imageDialog',
       'openDialog',
       'openFolder',
+      'preflight',
       'saveDialog'
     ])
   })

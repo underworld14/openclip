@@ -1,14 +1,14 @@
 ---
 id: FEAT-1k76hk
 title: Whisper model management is invisible, and the persisted whisperModel setting is ignored
-status: todo
+status: doing
 priority: medium
 labels:
     - ux
     - models
 parent: EPIC-xzzpty
 created: "2026-08-08T15:56:46Z"
-updated: "2026-08-08T15:56:46Z"
+updated: "2026-08-08T17:13:27Z"
 ---
 
 ## Current behavior

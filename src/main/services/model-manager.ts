@@ -25,7 +25,7 @@ import { dirname } from 'node:path'
 import { Writable } from 'node:stream'
 import { JobError } from '@shared/jobs'
 import type { WhisperModelSize } from '@shared/jobs'
-import type { ModelStatus } from '@shared/channels'
+import type { ModelStatus, ModelDeleteResult } from '@shared/channels'
 import { modelFilePath, modelsDir } from '@main/utils/paths'
 
 // ============================================================================
@@ -76,6 +76,31 @@ export function modelStatus(model?: WhisperModelSize): ModelStatus[] {
 /** Whether a model is present in `userData/models` (first-transcribe gate). */
 export function isModelInstalled(model: WhisperModelSize): boolean {
   return existsSync(modelFilePath(model))
+}
+
+/** Path seam so the delete path is testable without touching real userData. */
+export interface DeleteModelDeps {
+  filePath?: (model: WhisperModelSize) => string
+}
+
+/**
+ * Delete an installed GGML model and report the disk reclaimed (FEAT-1k76hk).
+ *
+ * Deliberately IDEMPOTENT: deleting a model that is not installed returns
+ * `{deleted: false, freedBytes: 0}` rather than throwing. The caller is a
+ * settings row whose whole job is "make this model not be on disk" — if it is
+ * already gone, that request has been satisfied, and an error would only produce
+ * a scary dialog for a state the user wanted anyway.
+ */
+export function deleteModel(
+  model: WhisperModelSize,
+  deps: DeleteModelDeps = {}
+): ModelDeleteResult {
+  const path = (deps.filePath ?? modelFilePath)(model)
+  if (!existsSync(path)) return { model, deleted: false, freedBytes: 0 }
+  const freedBytes = statSync(path).size
+  rmSync(path, { force: true })
+  return { model, deleted: true, freedBytes }
 }
 
 // ============================================================================

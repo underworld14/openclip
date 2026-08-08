@@ -1,7 +1,7 @@
 ---
 id: FEAT-6v92dk
 title: Default AI model is the empty string, so a user who correctly pastes a key still gets a raw provider 401/400
-status: todo
+status: doing
 priority: critical
 labels:
     - ux
@@ -9,7 +9,7 @@ labels:
     - ai
 parent: EPIC-xzzpty
 created: "2026-08-08T15:56:46Z"
-updated: "2026-08-08T15:56:46Z"
+updated: "2026-08-08T17:13:27Z"
 ---
 
 ## Current behavior

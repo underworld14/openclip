@@ -248,18 +248,21 @@ describe('ai handler: ENHANCE_CAPTIONS emoji map (Part K — transport injected)
     __setTransportFactoryForTests(null)
   })
 
-  it('a non-emoji request stays the stub and never builds a transport', async () => {
+  it('a non-emoji request rejects as unimplemented and never builds a transport', async () => {
+    // Was `{enhanced_captions: []}` — a successful empty payload a caller cannot
+    // distinguish from "no captions needed". Now a typed rejection (FEAT-et1gxc).
     const { ctx, handlers } = makeCtx()
     const factory = vi.fn(() => async () => ({ rawText: '{}' }))
     __setTransportFactoryForTests(factory)
     registerAiHandlers(ctx)
 
-    const res = await call(handlers, IPCChannels.ENHANCE_CAPTIONS, {
-      provider: 'openai',
-      model: 'gpt-4o-mini',
-      transcript: 'hello world'
-    })
-    expect(res).toEqual({ enhanced_captions: [] })
+    await expect(
+      call(handlers, IPCChannels.ENHANCE_CAPTIONS, {
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        transcript: 'hello world'
+      })
+    ).rejects.toThrow(/NOT_IMPLEMENTED/)
     expect(factory).not.toHaveBeenCalled()
 
     __setTransportFactoryForTests(null)
@@ -353,5 +356,92 @@ describe('ai handler: AI_LIST_MODELS (Part H — fetcher injected, no network)',
     const res = await call(handlers, IPCChannels.AI_LIST_MODELS, { provider: 'openai' })
     expect(res.models).toEqual([])
     expect(fetcher).not.toHaveBeenCalled()
+  })
+})
+
+// ── FEAT-6v92dk / FEAT-et1gxc: fail at configuration time, not mid-flow ──────
+describe('AI_TEST_CONNECTION (FEAT-6v92dk)', () => {
+  afterEach(() => __setTransportFactoryForTests(null))
+
+  it('refuses before any network call when the provider has no key', async () => {
+    const { ctx, handlers } = makeCtx()
+    let built = false
+    __setTransportFactoryForTests(() => {
+      built = true
+      return async () => ({ rawText: '{}' })
+    })
+    registerAiHandlers(ctx)
+
+    const res = (await handlers.get(IPCChannels.AI_TEST_CONNECTION)!(null, {
+      provider: 'openai',
+      model: 'gpt-5'
+    })) as ChannelRes<typeof IPCChannels.AI_TEST_CONNECTION>
+
+    expect(res.ok).toBe(false)
+    expect(res.message).toMatch(/api key/i)
+    expect(built).toBe(false) // no transport, no request, no spend
+  })
+
+  it('refuses when no model id is configured', async () => {
+    const { ctx, handlers, vault } = makeCtx()
+    vault.setKey('ollama', 'x')
+    registerAiHandlers(ctx)
+    const res = (await handlers.get(IPCChannels.AI_TEST_CONNECTION)!(null, {
+      provider: 'ollama',
+      model: '   '
+    })) as ChannelRes<typeof IPCChannels.AI_TEST_CONNECTION>
+    expect(res.ok).toBe(false)
+    expect(res.message).toMatch(/model/i)
+  })
+
+  it('reports success on a live round-trip', async () => {
+    const { ctx, handlers, vault } = makeCtx()
+    vault.setKey('openai', 'sk-test')
+    __setTransportFactoryForTests(() => async () => ({ rawText: 'pong' }))
+    registerAiHandlers(ctx)
+    const res = (await handlers.get(IPCChannels.AI_TEST_CONNECTION)!(null, {
+      provider: 'openai',
+      model: 'gpt-5'
+    })) as ChannelRes<typeof IPCChannels.AI_TEST_CONNECTION>
+    expect(res.ok).toBe(true)
+    expect(typeof res.latencyMs).toBe('number')
+  })
+
+  it('maps a provider failure to human copy instead of leaking the raw body', async () => {
+    const { ctx, handlers, vault } = makeCtx()
+    vault.setKey('openai', 'sk-bad')
+    __setTransportFactoryForTests(() => async () => {
+      throw new Error('401 {"error":{"message":"Incorrect API key provided: sk-bad"}}')
+    })
+    registerAiHandlers(ctx)
+    const res = (await handlers.get(IPCChannels.AI_TEST_CONNECTION)!(null, {
+      provider: 'openai',
+      model: 'gpt-5'
+    })) as ChannelRes<typeof IPCChannels.AI_TEST_CONNECTION>
+    expect(res.ok).toBe(false)
+    expect(res.message).toMatch(/key.*(rejected|invalid)/i)
+    expect(res.message).not.toContain('sk-bad')
+  })
+})
+
+describe('stub AI channels answer honestly (FEAT-et1gxc)', () => {
+  it('GENERATE_TITLES rejects as unimplemented rather than returning an empty success', async () => {
+    const { ctx, handlers } = makeCtx()
+    registerAiHandlers(ctx)
+    await expect(handlers.get(IPCChannels.GENERATE_TITLES)!(null, {})).rejects.toThrow(
+      /NOT_IMPLEMENTED/
+    )
+  })
+
+  it('ENHANCE_CAPTIONS rewrite mode rejects rather than returning an empty success', async () => {
+    const { ctx, handlers } = makeCtx()
+    registerAiHandlers(ctx)
+    await expect(
+      handlers.get(IPCChannels.ENHANCE_CAPTIONS)!(null, {
+        mode: 'rewrite',
+        provider: 'openai',
+        model: 'gpt-5'
+      })
+    ).rejects.toThrow(/NOT_IMPLEMENTED/)
   })
 })

@@ -1,14 +1,14 @@
 ---
 id: FEAT-hmsg5h
 title: Drag-and-drop is advertised in the UI copy but no drop target exists anywhere
-status: todo
+status: doing
 priority: high
 labels:
     - ux
     - import
 parent: EPIC-xzzpty
 created: "2026-08-08T15:56:46Z"
-updated: "2026-08-08T15:56:46Z"
+updated: "2026-08-08T17:13:27Z"
 ---
 
 ## Current behavior

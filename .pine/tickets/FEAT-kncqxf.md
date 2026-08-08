@@ -1,7 +1,7 @@
 ---
 id: FEAT-kncqxf
 title: The whisper-model dialog is an inescapable trap, and completing the download abandons the import that triggered it
-status: todo
+status: doing
 priority: critical
 labels:
     - ux
@@ -9,7 +9,7 @@ labels:
     - blocking
 parent: EPIC-xzzpty
 created: "2026-08-08T15:56:46Z"
-updated: "2026-08-08T15:56:46Z"
+updated: "2026-08-08T17:13:27Z"
 ---
 
 ## Current behavior

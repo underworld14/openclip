@@ -9,12 +9,12 @@
  */
 
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
-import { modelUrl, sha256File, downloadModel } from '@main/services/model-manager'
+import { modelUrl, sha256File, downloadModel, deleteModel } from '@main/services/model-manager'
 
 function sha256(buf: Buffer): string {
   return createHash('sha256').update(buf).digest('hex')
@@ -228,5 +228,31 @@ describe('model-manager: downloadModel (injected network)', () => {
       })
     ).rejects.toThrow(/abort|cancel/i)
     expect(existsSync(dest)).toBe(false)
+  })
+})
+
+// ── FEAT-1k76hk: reclaiming model disk ───────────────────────────────────────
+describe('deleteModel', () => {
+  it('removes an installed model and reports the bytes reclaimed', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'openclip-mm-del-'))
+    try {
+      const file = join(dir, 'ggml-base.bin')
+      writeFileSync(file, Buffer.alloc(2048))
+      const res = deleteModel('base', { filePath: () => file })
+      expect(res).toEqual({ model: 'base', deleted: true, freedBytes: 2048 })
+      expect(existsSync(file)).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('is idempotent — deleting a model that is not installed is not an error', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'openclip-mm-del2-'))
+    try {
+      const res = deleteModel('turbo', { filePath: () => join(dir, 'nope.bin') })
+      expect(res).toEqual({ model: 'turbo', deleted: false, freedBytes: 0 })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

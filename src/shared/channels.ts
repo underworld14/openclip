@@ -59,6 +59,12 @@ export enum IPCChannels {
   ENHANCE_CAPTIONS = 'ai:enhance-captions',
   /** List a provider's available models (OpenRouter, Part H) → `ai.listModels`. */
   AI_LIST_MODELS = 'ai:list-models',
+  /**
+   * One cheap real round-trip against the configured provider+model+key, so a
+   * misconfiguration is caught in Settings rather than after the user has waited
+   * through a full transcription (EPIC-xzzpty / FEAT-6v92dk).
+   */
+  AI_TEST_CONNECTION = 'ai:test-connection',
   EXPORT_CLIP = 'video:export',
   // Media: adopt a downloaded source file into <userData>/media/<projectId>/ so it
   // persists with the project + is deleted with it (Part H) → `media.adoptSource`.
@@ -87,6 +93,12 @@ export enum IPCChannels {
   // Models
   MODEL_STATUS = 'model:status',
   MODEL_DOWNLOAD = 'model:download',
+  /**
+   * Delete an installed GGML model to reclaim disk (EPIC-xzzpty / FEAT-1k76hk).
+   * Models are 75MB–2.9GB and were previously write-only: the app could download
+   * them but never remove them, and never showed what they cost.
+   */
+  MODEL_DELETE = 'model:delete',
   // Long jobs: start (invoke) returns { jobId }; the per-job MessagePort is
   // transferred out-of-band over JOB_PORT (main → renderer). Cancel by id.
   JOB_START = 'job:start',
@@ -103,6 +115,13 @@ export enum IPCChannels {
   SHOW_DIRECTORY_DIALOG = 'system:directory-dialog',
   SHOW_IMAGE_DIALOG = 'system:image-dialog',
   CHECK_UPDATE = 'system:check-update',
+  /**
+   * Report which sidecar binaries actually resolved (EPIC-xzzpty / FEAT-c5a15c).
+   * `utils/paths.ts` has always resolved ffmpeg/ffprobe/whisper-cli/yt-dlp — it
+   * just never told the renderer, so a missing binary surfaced as a raw spawn
+   * error mid-import instead of a red chip before the user started.
+   */
+  SYSTEM_PREFLIGHT = 'system:preflight',
   // Quit-time autosave durability (openclip-49y). FLUSH_BEFORE_QUIT is a ONE-WAY
   // main→renderer signal (forwarded as a window message like JOB_PORT, NOT in ChannelMap)
   // sent from `before-quit`. It uses the `lifecycle:` prefix DELIBERATELY (not `system:`)
@@ -209,6 +228,48 @@ export interface ListModelsResult {
   fromCache: boolean
 }
 
+/** Result of deleting an installed GGML model (FEAT-1k76hk). */
+export interface ModelDeleteResult {
+  model: WhisperModelSize
+  /** False when the model was not installed — deleting is idempotent, not an error. */
+  deleted: boolean
+  /** Bytes reclaimed (0 when it was not installed). */
+  freedBytes: number
+}
+
+/** One cheap live round-trip against the configured provider (FEAT-6v92dk). */
+export interface TestConnectionRequest {
+  provider: AIProvider
+  model: string
+}
+
+export interface TestConnectionResult {
+  ok: boolean
+  /** Human-readable, already mapped from the provider's raw error. */
+  message: string
+  latencyMs?: number
+}
+
+/** One resolved sidecar dependency (FEAT-c5a15c). */
+export interface PreflightTool {
+  ok: boolean
+  /** Absolute path when resolved; omitted when missing. */
+  path?: string
+}
+
+/**
+ * Which sidecar binaries actually resolved. `utils/paths.ts` already resolves all
+ * of these — this channel is purely about TELLING the renderer, so a missing
+ * binary becomes a red chip before the user starts rather than a spawn error
+ * mid-import.
+ */
+export interface PreflightResult {
+  ffmpeg: PreflightTool
+  ffprobe: PreflightTool
+  whisperCli: PreflightTool
+  ytDlp: PreflightTool
+}
+
 /** Whisper model presence on disk (PRD §13 / §10.1 model:status). */
 export interface ModelStatus {
   model: WhisperModelSize
@@ -258,6 +319,7 @@ export interface ChannelMap {
   [IPCChannels.GENERATE_TITLES]: ChannelPayload<GenerateTitlesRequest, GenerateTitlesResult>
   [IPCChannels.ENHANCE_CAPTIONS]: ChannelPayload<EnhanceCaptionsRequest, EnhanceCaptionsResult>
   [IPCChannels.AI_LIST_MODELS]: ChannelPayload<ListModelsRequest, ListModelsResult>
+  [IPCChannels.AI_TEST_CONNECTION]: ChannelPayload<TestConnectionRequest, TestConnectionResult>
 
   // --- Media ---
   [IPCChannels.MEDIA_ADOPT_SOURCE]: ChannelPayload<
@@ -295,6 +357,7 @@ export interface ChannelMap {
   [IPCChannels.MODEL_STATUS]: ChannelPayload<{ model?: WhisperModelSize }, ModelStatus[]>
   // MODEL_DOWNLOAD kicks off a streaming job; returns a job handle (port streams progress).
   [IPCChannels.MODEL_DOWNLOAD]: ChannelPayload<{ model: WhisperModelSize }, JobStartResult>
+  [IPCChannels.MODEL_DELETE]: ChannelPayload<{ model: WhisperModelSize }, ModelDeleteResult>
 
   // --- Long jobs ---
   // start: invoke({kind,params}) → { jobId }. The per-job MessagePort streams
@@ -330,6 +393,7 @@ export interface ChannelMap {
     { canceled: boolean; filePaths: string[] }
   >
   [IPCChannels.CHECK_UPDATE]: ChannelPayload<void, UpdateStatus>
+  [IPCChannels.SYSTEM_PREFLIGHT]: ChannelPayload<void, PreflightResult>
   // Renderer→main ACK that the pending autosave was flushed at quit (openclip-49y) →
   // `system.autosaveFlushed()`. main resolves its before-quit wait and proceeds.
   [IPCChannels.AUTOSAVE_FLUSHED]: ChannelPayload<void, { ok: boolean }>

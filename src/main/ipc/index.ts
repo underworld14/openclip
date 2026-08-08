@@ -24,6 +24,7 @@ import { registerProjectHandlers } from './project'
 import { registerSettingsHandlers } from './settings'
 import { registerModelHandlers } from './model'
 import { registerTranscribeHandlers } from './transcribe'
+import { registerSystemPreflightHandler } from './system'
 
 // ============================================================================
 // IpcContext — the DI seam handed to every registrar (plan E.4)
@@ -78,7 +79,8 @@ export const HANDLER_REGISTRARS: ReadonlyArray<HandlerRegistrar> = Object.freeze
   registerProjectHandlers,
   registerSettingsHandlers,
   registerModelHandlers,
-  registerTranscribeHandlers
+  registerTranscribeHandlers,
+  registerSystemPreflightHandler
 ])
 
 /** Convenience: run every registrar against a context (called by main/index.ts). */

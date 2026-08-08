@@ -139,3 +139,27 @@ describe('contract fixtures validate against the frozen Zod schemas', () => {
     expect(CaptionStyle.parse(captionStyleFixture)).toEqual(captionStyleFixture)
   })
 })
+
+// ── Onboarding contract additions (EPIC-xzzpty) ──────────────────────────────
+// These three channels back the first-run experience: a readiness probe, a
+// pre-flight "does this key/model actually work" check, and reclaiming model
+// disk. They are asserted here because the preload bridge and the test mock are
+// both DERIVED from ChannelMap — adding a channel silently widens the public
+// surface, so the contract test is the place that must notice.
+describe('first-run onboarding channels are on the frozen contract', () => {
+  it('declares the three new channels', async () => {
+    const { IPCChannels } = await import('@shared/channels')
+    expect(IPCChannels.SYSTEM_PREFLIGHT).toBe('system:preflight')
+    expect(IPCChannels.AI_TEST_CONNECTION).toBe('ai:test-connection')
+    expect(IPCChannels.MODEL_DELETE).toBe('model:delete')
+  })
+
+  it('derives them onto the preload bridge as camelCased methods', async () => {
+    const { buildSystemApi } = await import('@preload/api/system')
+    const { buildAiApi } = await import('@preload/api/ai')
+    const { buildModelApi } = await import('@preload/api/model')
+    expect(typeof buildSystemApi().preflight).toBe('function')
+    expect(typeof buildAiApi().testConnection).toBe('function')
+    expect(typeof buildModelApi().delete).toBe('function')
+  })
+})

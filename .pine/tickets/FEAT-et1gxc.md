@@ -1,14 +1,14 @@
 ---
 id: FEAT-et1gxc
 title: Google/Gemini is selectable in the provider dropdown but hard-throws, and two AI channels return silent empty successes
-status: todo
+status: doing
 priority: medium
 labels:
     - ux
     - ai
 parent: EPIC-xzzpty
 created: "2026-08-08T15:56:46Z"
-updated: "2026-08-08T15:56:46Z"
+updated: "2026-08-08T17:13:27Z"
 ---
 
 ## Current behavior

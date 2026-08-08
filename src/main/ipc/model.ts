@@ -17,11 +17,11 @@
  */
 
 import { IPCChannels } from '@shared/channels'
-import type { ModelStatus, JobStartResult } from '@shared/channels'
+import type { ModelStatus, JobStartResult, ModelDeleteResult } from '@shared/channels'
 import type { WhisperModelSize } from '@shared/jobs'
 import type { IpcContext } from './index'
 import { registerRunner, hasRunner } from '@main/services/sidecar-manager'
-import { modelStatus } from '@main/services/model-manager'
+import { modelStatus, deleteModel, ALL_MODELS } from '@main/services/model-manager'
 import { modelDownloadRunner } from '@main/services/jobs/model-download-runner'
 
 export function registerModelHandlers(ctx: IpcContext): void {
@@ -32,6 +32,20 @@ export function registerModelHandlers(ctx: IpcContext): void {
   ctx.ipcMain.handle(
     IPCChannels.MODEL_STATUS,
     (_e, req: { model?: WhisperModelSize }): ModelStatus[] => modelStatus(req?.model)
+  )
+
+  // MODEL_DELETE — reclaim the 75MB–2.9GB a model occupies (FEAT-1k76hk).
+  // The id is checked against ALL_MODELS before it reaches the filesystem: it is
+  // interpolated into a path by `modelFilePath`, so an unvalidated renderer value
+  // would be an arbitrary-file-delete primitive.
+  ctx.ipcMain.handle(
+    IPCChannels.MODEL_DELETE,
+    (_e, req: { model: WhisperModelSize }): ModelDeleteResult => {
+      if (!ALL_MODELS.includes(req?.model)) {
+        throw new Error(`unknown whisper model: ${String(req?.model)}`)
+      }
+      return deleteModel(req.model)
+    }
   )
 
   // MODEL_DOWNLOAD — start a streaming job; renderer streams progress via

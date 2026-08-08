@@ -39,28 +39,33 @@ const OLLAMA_DEFAULT_URL = 'http://127.0.0.1:11434'
 /**
  * OpenAI's `/v1/models` returns embeddings, speech, image and moderation models
  * alongside chat ones. Offering `text-embedding-3-large` in a clip-detection
- * picker is the same dead end as an empty field, so filter to chat-capable ids.
+ * picker is the same dead end as an empty field, so filter those out.
  *
- * Matching by id prefix rather than a fixed allow-list keeps new releases
- * visible the day they ship — the whole point of fetching live.
+ * EXCLUSION-only, deliberately. An earlier revision allow-listed
+ * `startsWith('gpt'|'o1'|'o3')`, which silently hid `o4-mini` and
+ * `chatgpt-4o-latest` and would hide every future family — a static table
+ * wearing a different hat, and the exact rot this module exists to avoid. A
+ * wrongly-included id is visible and recoverable (the user picks another, or
+ * presses Test); a wrongly-excluded one is invisible.
  */
+const NON_CHAT_FRAGMENTS = [
+  'embedding',
+  'whisper',
+  'tts',
+  'dall-e',
+  'moderation',
+  'audio',
+  'realtime',
+  'image',
+  'transcribe',
+  'search',
+  'codex',
+  'instruct'
+]
+
 function isOpenAiChatModel(id: string): boolean {
   const lower = id.toLowerCase()
-  const excluded = [
-    'embedding',
-    'whisper',
-    'tts',
-    'dall-e',
-    'moderation',
-    'audio',
-    'realtime',
-    'image',
-    'transcribe',
-    'search',
-    'codex'
-  ]
-  if (excluded.some((frag) => lower.includes(frag))) return false
-  return lower.startsWith('gpt') || lower.startsWith('o1') || lower.startsWith('o3')
+  return !NON_CHAT_FRAGMENTS.some((frag) => lower.includes(frag))
 }
 
 function defaultFetcher(): CatalogueFetcher {

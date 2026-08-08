@@ -252,8 +252,10 @@ export function registerAiHandlers(ctx: IpcContext): void {
       const started = Date.now()
       try {
         const transport = await factory({ provider: req.provider, model, apiKey })
-        // Deliberately tiny: this proves auth + model id + reachability, and is the
-        // cheapest request the provider will accept. It is NOT a schema check.
+        // This DOES exercise structured output: `createTransport` always attaches
+        // the strict ClipSchema response_format, so a model that cannot produce
+        // it fails here — which is the more useful probe, since that is exactly
+        // what clip detection needs. It is not the cheapest possible request.
         await transport({
           system: 'You are a connectivity probe. Answer with exactly one word.',
           user: 'Reply with the single word: pong'
@@ -329,6 +331,9 @@ function humanTransportError(err: unknown, provider: AIProvider, model: string):
   }
   if (/\b404\b|model[_ ]?not[_ ]?found|does not exist|unknown model/i.test(raw)) {
     return `${provider} does not recognise the model "${model}". Pick one from the list.`
+  }
+  if (/response_format|json_schema|structured|schema/i.test(raw)) {
+    return `"${model}" cannot produce the strict JSON that clip detection needs. Pick another model.`
   }
   if (/\b429\b|rate[_ ]?limit|quota|insufficient[_ ]?quota|billing/i.test(raw)) {
     return `${provider} rejected the request for quota or rate-limit reasons. Check your billing.`

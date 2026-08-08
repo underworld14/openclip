@@ -34,6 +34,27 @@ describe('fetchProviderModels: OpenAI', () => {
     expect(ids).not.toContain('dall-e-3')
   })
 
+  it('does not drop new model families the way a prefix allow-list would', async () => {
+    // `startsWith('gpt'|'o1'|'o3')` silently hid o4-mini and chatgpt-4o-latest,
+    // and would hide every future family — the same rot the hardcoded catalogue
+    // had. Exclude what is definitely not a chat model instead.
+    const fetcher = async (): Promise<unknown> => ({
+      data: [
+        { id: 'o4-mini' },
+        { id: 'chatgpt-4o-latest' },
+        { id: 'gpt-6-turbo' },
+        { id: 'text-embedding-4' },
+        { id: 'tts-2' }
+      ]
+    })
+    const ids = (await fetchProviderModels({ provider: 'openai', apiKey: 'k', fetcher })).map(
+      (m) => m.id
+    )
+    expect(ids).toEqual(expect.arrayContaining(['o4-mini', 'chatgpt-4o-latest', 'gpt-6-turbo']))
+    expect(ids).not.toContain('text-embedding-4')
+    expect(ids).not.toContain('tts-2')
+  })
+
   it('requires a key and says so rather than calling with none', async () => {
     let called = false
     const fetcher = async (): Promise<unknown> => {

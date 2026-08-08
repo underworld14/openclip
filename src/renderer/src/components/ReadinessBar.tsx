@@ -39,8 +39,12 @@ export function ReadinessBar({
             // sends the user hunting.
             title={`${chip.label} — ${chip.detail}`}
             aria-label={`${chip.label} — ${chip.detail}`}
-            disabled={!clickable}
+            // aria-disabled, not `disabled`: a disabled button suppresses the
+            // hover events some engines need for `title`, which would hide the
+            // explanatory detail on exactly the chips that are already fine.
+            aria-disabled={!clickable}
             onClick={() => {
+              if (!clickable) return
               if (chip.action === 'settings') onOpenSettings()
               else if (chip.action === 'download-model') onDownloadModel()
             }}

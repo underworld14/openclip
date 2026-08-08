@@ -23,6 +23,7 @@ import { createWriteStream, existsSync, readFileSync, rmSync, statSync } from 'n
 import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { Writable } from 'node:stream'
+import { JobError } from '@shared/jobs'
 import type { WhisperModelSize } from '@shared/jobs'
 import type { ModelStatus } from '@shared/channels'
 import { modelFilePath, modelsDir } from '@main/utils/paths'
@@ -152,9 +153,14 @@ export async function downloadModel(opts: DownloadModelOptions): Promise<Downloa
     throw new Error(`model download failed: HTTP ${res.status} for ${url}`)
   }
 
-  const totalBytes = Number(
-    res.headers.get('x-linked-size') ?? res.headers.get('content-length') ?? 0
-  )
+  // Total size for the progress bar. Prefer HF's authoritative `x-linked-size`; a
+  // non-finite/absent value resolves to 0 = INDETERMINATE (audit fix openclip-flg):
+  // for xet/LFS-backed multi-GB models served via a redirect/CDN, both headers can be
+  // missing. We pass the REAL total (0 when unknown) to onProgress below instead of
+  // faking it as `received`, so the runner shows a byte counter rather than a
+  // misleading near-100% bar from the first chunk.
+  const sizeHeader = Number(res.headers.get('x-linked-size') ?? res.headers.get('content-length'))
+  const totalBytes = Number.isFinite(sizeHeader) && sizeHeader > 0 ? sizeHeader : 0
   const etagSha = parseEtag(res.headers.get('x-linked-etag'))
   const expected = opts.expectedSha256 ?? etagSha ?? KNOWN_SHA256[opts.model]
 
@@ -163,24 +169,32 @@ export async function downloadModel(opts: DownloadModelOptions): Promise<Downloa
 
   await new Promise<void>((resolve, reject) => {
     const out = createWriteStream(dest)
-    const onAbort = (): void => {
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader()
+    const sink = new Writable({
+      write(chunk: Buffer, _enc, cb) {
+        hash.update(chunk)
+        received += chunk.length
+        opts.onProgress?.(received, totalBytes)
+        out.write(chunk, cb)
+      }
+    })
+    // Tear the body stream down deterministically on abort/error (audit fix
+    // openclip-0wn): the fetch reader holds a lock + an in-flight read() that the fetch
+    // signal alone doesn't settle, and the manual sink is otherwise never destroyed —
+    // for a multi-GB cancelled download that pins the reader/socket until GC.
+    const teardown = (): void => {
       out.destroy()
+      reader.cancel().catch(() => {})
+      sink.destroy()
+    }
+    const onAbort = (): void => {
+      teardown()
       reject(new Error('model download cancelled'))
     }
     if (opts.signal) {
       if (opts.signal.aborted) return onAbort()
       opts.signal.addEventListener('abort', onAbort, { once: true })
     }
-
-    const reader = (res.body as ReadableStream<Uint8Array>).getReader()
-    const sink = new Writable({
-      write(chunk: Buffer, _enc, cb) {
-        hash.update(chunk)
-        received += chunk.length
-        opts.onProgress?.(received, totalBytes || received)
-        out.write(chunk, cb)
-      }
-    })
 
     const pump = async (): Promise<void> => {
       for (;;) {
@@ -204,7 +218,7 @@ export async function downloadModel(opts: DownloadModelOptions): Promise<Downloa
       })
       .catch((err: unknown) => {
         opts.signal?.removeEventListener('abort', onAbort)
-        out.destroy()
+        teardown()
         reject(err instanceof Error ? err : new Error(String(err)))
       })
   }).catch((err) => {
@@ -212,9 +226,26 @@ export async function downloadModel(opts: DownloadModelOptions): Promise<Downloa
     throw err
   })
 
-  // Verify the SHA before declaring success.
+  // Verify the SHA before declaring success. An UNVERIFIABLE download — no explicit
+  // expectedSha256, no `x-linked-etag` from HF, and the model isn't pinned in
+  // KNOWN_SHA256 — must be REFUSED, not kept (audit fix openclip-t1b). Previously the
+  // `if (expected && …)` guard silently skipped verification when `expected` was
+  // undefined, so a corrupt/tampered multi-GB model could land on disk whenever HF
+  // (or a CDN/proxy) omitted the etag header. Integrity is byte-level here, never a
+  // header-only signal.
   const actual = hash.digest('hex')
-  if (expected && actual !== expected) {
+  if (!expected) {
+    cleanup()
+    // PERMANENT: no expected hash will ever materialize for this model, so retrying is
+    // futile — surface as a non-retriable INPUT_INVALID, not a retriable SIDECAR_CRASH
+    // (audit fix openclip-1ly).
+    throw new JobError(
+      'INPUT_INVALID',
+      `model ${opts.model}: unable to verify integrity — no expected SHA256, no x-linked-etag, and not in KNOWN_SHA256. Refusing to keep an unverified download.`,
+      false
+    )
+  }
+  if (actual !== expected) {
     cleanup()
     throw new Error(
       `model download SHA256 mismatch for ${opts.model}: expected ${expected}, got ${actual}`

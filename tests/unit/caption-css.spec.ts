@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest'
 import {
   captionContainerStyle,
   captionWordStyle,
+  captionWordAnimationClass,
   isTransparentBg
 } from '@renderer/components/caption-css'
 import { resolveEffectiveCaptionStyle } from '@renderer/components/captionPresets'
@@ -51,6 +52,17 @@ describe('captionWordStyle', () => {
     expect(css.transform).toBe('scale(1.2)')
   })
 
+  it('suppresses the static keyword scale when a per-word animation is active (openclip-yuk)', () => {
+    // The burn (ass-captions) drops the keyword \fscx/\fscy when perWordAnimation
+    // drives the scale; the preview must match so WYSIWYG holds.
+    const animated = { ...base, keywordScale: 120, perWordAnimation: 'bounce' as const }
+    const css = captionWordStyle(animated, { active: false, keyword: true })
+    expect(css.transform).toBeUndefined()
+    // 'none' is NOT an active animation — the static scale still applies.
+    const none = { ...base, keywordScale: 120, perWordAnimation: 'none' as const }
+    expect(captionWordStyle(none, { active: false, keyword: true }).transform).toBe('scale(1.2)')
+  })
+
   it('opaque bg draws a box; transparent bg does not', () => {
     expect(
       captionWordStyle({ ...base, backgroundColor: '#000000' }, { active: false }).backgroundColor
@@ -58,5 +70,22 @@ describe('captionWordStyle', () => {
     expect(
       captionWordStyle({ ...base, backgroundColor: '#00000000' }, { active: false }).backgroundColor
     ).toBeUndefined()
+  })
+})
+
+describe('captionWordAnimationClass — per-word reveal animation in the preview (openclip-4v1)', () => {
+  it('returns the bounce/pop class only for the CURRENT word', () => {
+    const bounce = { ...base, perWordAnimation: 'bounce' as const }
+    expect(captionWordAnimationClass(bounce, true)).toBe('oc-cap-bounce')
+    expect(captionWordAnimationClass(bounce, false)).toBeUndefined()
+    const pop = { ...base, perWordAnimation: 'pop' as const }
+    expect(captionWordAnimationClass(pop, true)).toBe('oc-cap-pop')
+  })
+
+  it("returns undefined for 'none' or an unset animation even on the current word", () => {
+    expect(
+      captionWordAnimationClass({ ...base, perWordAnimation: 'none' as const }, true)
+    ).toBeUndefined()
+    expect(captionWordAnimationClass(base, true)).toBeUndefined()
   })
 })

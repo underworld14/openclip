@@ -13,6 +13,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { SourceVideo } from '@shared/schema'
 import { ffprobePath } from '@main/utils/paths'
+import { assertSafePathArg } from '@main/utils/safe-arg'
 
 const execFileAsync = promisify(execFile)
 
@@ -26,6 +27,8 @@ interface FfprobeStream {
   height?: number
   r_frame_rate?: string
   avg_frame_rate?: string
+  /** Per-stream duration tag (fallback when the container omits format.duration). */
+  duration?: string
 }
 
 interface FfprobeFormat {
@@ -65,11 +68,31 @@ export function parseFfprobeJson(json: FfprobeJson, path: string): SourceVideo {
   const fps = parseFrameRate(video.r_frame_rate) || parseFrameRate(video.avg_frame_rate)
   return {
     path,
-    duration: Number(json.format?.duration ?? 0),
+    duration: finiteDuration(json),
     resolution: { width: video.width ?? 0, height: video.height ?? 0 },
     fps,
     format: json.format?.format_name ?? ''
   }
+}
+
+/**
+ * Resolve a FINITE, non-negative duration in seconds (audit fix openclip-bro).
+ * ffprobe emits the literal string `"N/A"` for `format.duration` on some real
+ * containers (fragmented MP4, certain MKV/transport streams, live captures), and
+ * `Number("N/A")` is NaN — which Zod rejects for `SourceVideo.duration` and which
+ * NaN-poisons the timeline / progress math downstream. Prefer the format duration,
+ * fall back to the longest per-stream duration tag, else 0 (a finite "unknown" the
+ * UI can render as such rather than NaN).
+ */
+function finiteDuration(json: FfprobeJson): number {
+  const fmt = Number(json.format?.duration)
+  if (Number.isFinite(fmt) && fmt > 0) return fmt
+  let best = 0
+  for (const s of json.streams ?? []) {
+    const d = Number(s.duration)
+    if (Number.isFinite(d) && d > best) best = d
+  }
+  return best
 }
 
 // ============================================================================
@@ -79,10 +102,13 @@ export function parseFfprobeJson(json: FfprobeJson, path: string): SourceVideo {
 /** Probe a video file and return its `SourceVideo` metadata (PRD §6.1). */
 export async function probeVideo(filePath: string, binPath?: string): Promise<SourceVideo> {
   const bin = binPath ?? ffprobePath()
+  // Guard the trailing positional path against option injection (audit fix
+  // openclip-6l6): a filePath beginning with '-' would be parsed by ffprobe as a flag.
+  const safePath = assertSafePathArg(filePath, 'filePath')
   const { stdout } = await execFileAsync(
     bin,
-    ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', filePath],
+    ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', safePath],
     { maxBuffer: 16 * 1024 * 1024 }
   )
-  return parseFfprobeJson(JSON.parse(stdout) as FfprobeJson, filePath)
+  return parseFfprobeJson(JSON.parse(stdout) as FfprobeJson, safePath)
 }

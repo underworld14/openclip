@@ -11,9 +11,8 @@
  * (job-termination invariant, PRD §10.2).
  */
 
-import type { JobResult, JobParams, JobEventFor } from '@shared/jobs'
-import { jobEvents } from '@renderer/hooks/useJob'
-import { acquireJobPort } from '@renderer/hooks/jobPort'
+import type { JobResult, JobParams } from '@shared/jobs'
+import { drainJob } from '@renderer/hooks/useJob'
 
 /** Bridge surface derived from the global `window.openclip` typing (no preload import). */
 export type OpenClipBridge = typeof window.openclip
@@ -34,26 +33,10 @@ export interface RunExportOptions {
  * dimensions + duration) or throws on a terminal error event.
  */
 export async function runExport(opts: RunExportOptions): Promise<JobResult['export']> {
-  const { jobId } = await opts.bridge.jobs.start('export', opts.params)
-  opts.onStart?.(jobId)
-  const port = await acquireJobPort(jobId)
-  let result: JobResult['export'] | null = null
-
-  for await (const ev of jobEvents<'export'>(port)) {
-    const e = ev as JobEventFor<'export'>
-    switch (e.t) {
-      case 'progress':
-        opts.onProgress?.(e.pct)
-        break
-      case 'done':
-        result = e.result
-        break
-      case 'error':
-        throw new Error(`export failed [${e.code}]: ${e.message}`)
-    }
-  }
-  if (!result) throw new Error('export ended without a result')
-  return result
+  return drainJob(opts.bridge, 'export', opts.params, {
+    onStart: opts.onStart,
+    onProgress: (pct) => opts.onProgress?.(pct)
+  })
 }
 
 /**

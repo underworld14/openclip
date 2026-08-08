@@ -6,13 +6,12 @@
  */
 
 import type { Clip, ClipVirality } from '@shared/schema'
+import { formatSeconds } from '@renderer/components/format-time'
 
-/** Format absolute seconds as M:SS. */
+/** Format absolute seconds as M:SS (no hours rollover). Thin wrapper over the single
+ * `formatSeconds` formatter (audit fix openclip-64e). */
 export function formatTimecode(seconds: number): string {
-  const total = Math.max(0, Math.floor(seconds))
-  const m = Math.floor(total / 60)
-  const s = total % 60
-  return `${m}:${s.toString().padStart(2, '0')}`
+  return formatSeconds(seconds)
 }
 
 /** One bar in the virality breakdown (label + raw 0-25 score, for the card). */
@@ -76,7 +75,13 @@ export function clipViewModel(clip: Clip): ClipViewModel {
   }
 }
 
-/** Sort clips for the sidebar: highest virality first, mapped to view models. */
-export function sortClipsForSidebar(clips: Clip[]): ClipViewModel[] {
-  return [...clips].sort((a, b) => b.viralityScore - a.viralityScore).map(clipViewModel)
+/**
+ * Sort clips for the sidebar: highest virality first. Returns the sorted `Clip[]`
+ * directly (audit fix openclip-0hp/don): the sidebar previously got back view models,
+ * then did an O(n) `clips.find()` PER ROW (O(n²)) to recover each Clip, and ClipCard
+ * rebuilt the view model a second time. Returning Clips lets the sidebar render
+ * `ClipCard` straight from the sorted list (ClipCard builds the view model once).
+ */
+export function sortClipsForSidebar(clips: Clip[]): Clip[] {
+  return [...clips].sort((a, b) => b.viralityScore - a.viralityScore)
 }

@@ -80,8 +80,14 @@ function entryConfidence(entry: WhisperEntry): number {
   return sum / ps.length
 }
 
-/** A word ends a sentence when its trimmed text ends in `.`, `!`, `?`, or `…`. */
-function endsSentence(word: string): boolean {
+/**
+ * A word ends a sentence when its trimmed text ends in `.`, `!`, `?`, or `…`
+ * (optionally followed by a closing quote/bracket). Exported as the SINGLE source
+ * of truth (audit fix openclip-du4): the live transcribe-runner segment grouping
+ * must use the EXACT same predicate as this terminal-JSON grouping, or live and
+ * final segments desync. The runner imports this instead of re-declaring the regex.
+ */
+export function endsSentence(word: string): boolean {
   return /[.!?…]["')\]]?$/.test(word.trim())
 }
 

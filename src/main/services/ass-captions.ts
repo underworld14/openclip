@@ -198,13 +198,19 @@ export function buildKaraokeLine(
       : undefined
   const emojiBefore = style?.emojiPosition === 'before'
 
+  // Drift-free `\k` cues (audit fix openclip-a9z): round each boundary's OFFSET from
+  // the line start to centiseconds, then take CONSECUTIVE DIFFERENCES — so the sum of
+  // all `\k` values is EXACTLY (endSec - startSec) in cs, instead of accumulating
+  // independent per-cue rounding error that let the karaoke fill finish a few cs off
+  // the line's End on longer lines.
+  const offCs = (t: number): number => toCentiseconds(t - startSec)
   let prevEnd = startSec
   const parts: string[] = []
   words.forEach((w, i) => {
     // Gap (silence) before this word, as an empty karaoke syllable.
-    const gapCs = toCentiseconds(w.start - prevEnd)
+    const gapCs = Math.max(0, offCs(w.start) - offCs(prevEnd))
     if (gapCs > 0) parts.push(`{\\k${gapCs}}`)
-    const durCs = toCentiseconds(w.end - w.start)
+    const durCs = Math.max(0, offCs(w.end) - offCs(w.start))
     const space = i === 0 ? '' : ' '
 
     // Per-word override block — stays EMPTY unless a per-word animation or a
@@ -295,7 +301,16 @@ export function buildStyleLine(style: CaptionStyle): string {
   const bg = toAssColor(style.backgroundColor) // box (BackColour)
   // Part I caption presets — all optional; the defaults reproduce the pre-Part-I
   // output byte-for-byte (yellow highlight, opaque-black outline width 3, no shadow).
-  const highlight = style.highlightColor ? toAssColor(style.highlightColor) : HIGHLIGHT_COLOR_ASS
+  // Honor highlightCurrentWord (audit fix openclip-r7k): when the user turns the
+  // current-word highlight OFF, set PrimaryColour == SecondaryColour so the `\k`
+  // karaoke fill produces no visible color change (the words stay one color — static
+  // captions). The `\k` cues remain (timing-accurate) but light nothing up.
+  const highlight =
+    style.highlightCurrentWord === false
+      ? fontColor
+      : style.highlightColor
+        ? toAssColor(style.highlightColor)
+        : HIGHLIGHT_COLOR_ASS
   const outlineColor = style.strokeColor ? toAssColor(style.strokeColor) : '&H00000000'
   const outlineWidth = style.strokeWidth ?? 3
   const shadow = style.shadow ? 2 : 0

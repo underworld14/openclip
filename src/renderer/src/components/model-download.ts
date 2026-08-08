@@ -5,9 +5,8 @@
  * unit-testable against the mock bridge + fake-port harness.
  */
 
-import type { JobResult, WhisperModelSize, JobEventFor } from '@shared/jobs'
-import { jobEvents } from '@renderer/hooks/useJob'
-import { acquireJobPort } from '@renderer/hooks/jobPort'
+import type { JobResult, WhisperModelSize } from '@shared/jobs'
+import { drainJob } from '@renderer/hooks/useJob'
 
 // ============================================================================
 // Model table (PRD §6.2 GGML model selection + §13 download UX)
@@ -55,23 +54,12 @@ export interface RunModelDownloadOptions {
 export async function runModelDownload(
   opts: RunModelDownloadOptions
 ): Promise<JobResult['model-download']> {
-  const { jobId } = await opts.bridge.jobs.start('model-download', { model: opts.model })
-  const port = await acquireJobPort(jobId)
-  let result: JobResult['model-download'] | null = null
-
-  for await (const ev of jobEvents<'model-download'>(port)) {
-    const e = ev as JobEventFor<'model-download'>
-    switch (e.t) {
-      case 'partial':
-        opts.onProgress?.(e.data.receivedBytes, e.data.totalBytes)
-        break
-      case 'done':
-        result = e.result
-        break
-      case 'error':
-        throw new Error(`model download failed [${e.code}]: ${e.message}`)
+  return drainJob(
+    opts.bridge,
+    'model-download',
+    { model: opts.model },
+    {
+      onPartial: (data) => opts.onProgress?.(data.receivedBytes, data.totalBytes)
     }
-  }
-  if (!result) throw new Error('model download ended without a result')
-  return result
+  )
 }

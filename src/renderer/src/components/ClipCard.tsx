@@ -38,7 +38,20 @@ export function ClipCard({ clip }: ClipCardProps): React.JSX.Element {
       data-testid="clip-card"
       data-clip-id={clip.id}
       data-selected={selected}
+      // Keyboard-selectable + announced as an actionable, pressable control (audit fix
+      // openclip-uzb): the card was a plain onClick <div> that Tab skipped and screen
+      // readers never announced. Enter/Space select it; aria-pressed surfaces selection.
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
+      aria-label={`Select clip: ${vm.title}`}
       onClick={() => selectClip(clip.id)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          selectClip(clip.id)
+        }
+      }}
       className={`flex flex-col gap-1 rounded-md border p-2 text-sm ${
         selected ? 'border-primary' : ''
       }`}

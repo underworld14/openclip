@@ -17,7 +17,7 @@
 import { describe, expect, it } from 'vitest'
 import { MessageChannel } from 'node:worker_threads'
 import { jobEvents, type MessagePortLike, type JobStatus } from '@renderer/hooks/useJob'
-import { acquireJobPort } from '@renderer/hooks/jobPort'
+import { acquireJobPort, registerJobPort } from '@renderer/hooks/jobPort'
 import { driveScriptOverChannel } from '../harness/fake-utility-process'
 import { createMockOpenclip } from '../mocks/openclip'
 import { transcribeResultFixture, transcribePartialFixture } from '../fixtures/contract'
@@ -110,5 +110,56 @@ describe('useJob streaming path drives a consumer to a "done" result', () => {
     expect(progress).toBe(100)
     expect(partials).toBe(1)
     expect(result).toEqual(transcribeResultFixture)
+  })
+})
+
+describe('acquireJobPort: bounded wait (audit fix openclip-ki6/me0/jp1)', () => {
+  it('rejects after the timeout when the per-job port never arrives (no silent hang)', async () => {
+    // No registerJobPort for this id ⇒ the port never arrives. Without the timeout
+    // this Promise would hang forever; with it the consumer gets a typed rejection.
+    await expect(acquireJobPort('port-never-arrives', 20)).rejects.toThrow(
+      /never arrived|timed out/i
+    )
+  })
+
+  it('still resolves immediately when the port arrives before the timeout fires', async () => {
+    const noop = (): void => undefined
+    const fakePort = {
+      postMessage: noop,
+      close: noop,
+      start: noop,
+      addEventListener: noop
+    }
+    const p = acquireJobPort('port-arrives', 1000)
+    registerJobPort('port-arrives', fakePort as unknown as MessagePortLike)
+    await expect(p).resolves.toBe(fakePort)
+  })
+})
+
+describe('jobEvents detaches its message listener on teardown (audit fix openclip-2g3/vet)', () => {
+  it('removeEventListener is called with the same handler it added, then the port closes', async () => {
+    let captured: ((ev: { data: unknown }) => void) | null = null
+    const removeEventListener = vi.fn()
+    const close = vi.fn()
+    const port = {
+      onmessage: null,
+      start: () => {},
+      close,
+      addEventListener: (_t: 'message', l: (ev: { data: unknown }) => void) => {
+        captured = l
+      },
+      removeEventListener
+    } as MessagePortLike
+
+    const gen = jobEvents<'transcribe'>(port)
+    const pump = (async () => {
+      for await (const _ev of gen) void _ev // drain to completion
+    })()
+    // Emit a terminal `done` so the generator returns and runs its finally.
+    captured!({ data: { t: 'done', result: transcribeResultFixture } })
+    await pump
+
+    expect(removeEventListener).toHaveBeenCalledWith('message', captured)
+    expect(close).toHaveBeenCalled()
   })
 })

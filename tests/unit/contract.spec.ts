@@ -17,7 +17,9 @@ import {
   ClipSchema,
   SourceVideo,
   ExportRecord,
-  BrandTemplate
+  BrandTemplate,
+  GenerateTitlesResultSchema,
+  EnhanceCaptionsResultSchema
 } from '@shared/schema'
 import {
   wordTimestampFixture,
@@ -85,6 +87,33 @@ describe('contract fixtures validate against the frozen Zod schemas', () => {
       clips: [{ ...clipSchemaFixture.clips[0], unexpected_field: true }]
     }
     expect(ClipSchema.safeParse(bad).success).toBe(false)
+  })
+
+  // ── AI title/caption generation outputs (openclip-xgk) — strictObject like ClipSchema ──
+  it('GenerateTitlesResultSchema parses valid options and rejects extra props', () => {
+    const ok = {
+      options: [{ title: 'A bold claim', hook: 'You wont believe', psychology: 'curiosity gap' }]
+    }
+    expect(GenerateTitlesResultSchema.parse(ok)).toEqual(ok)
+    expect(
+      GenerateTitlesResultSchema.safeParse({
+        options: [{ ...ok.options[0], extra: 1 }]
+      }).success
+    ).toBe(false)
+  })
+
+  it('EnhanceCaptionsResultSchema parses rewrite + emoji shapes and rejects extra props', () => {
+    const rewrite = {
+      enhanced_captions: [{ start_time: 0, end_time: 1.5, text: 'Hello there' }]
+    }
+    expect(EnhanceCaptionsResultSchema.parse(rewrite)).toEqual(rewrite)
+    const withEmoji = { ...rewrite, emoji_map: { fire: '🔥', love: '❤️' } }
+    expect(EnhanceCaptionsResultSchema.parse(withEmoji)).toEqual(withEmoji)
+    expect(
+      EnhanceCaptionsResultSchema.safeParse({
+        enhanced_captions: [{ start_time: 0, end_time: 1, text: 'x', extra: true }]
+      }).success
+    ).toBe(false)
   })
 
   // ── Part K (caption template gallery + brand kit) — additive-optional fields ──

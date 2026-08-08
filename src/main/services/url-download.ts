@@ -28,6 +28,8 @@ import { statSync, existsSync, renameSync, rmSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { ffmpegPath, ytDlpPath } from '@main/utils/paths'
+import { assertSafePathArg } from '@main/utils/safe-arg'
+import { JobError } from '@shared/jobs'
 
 // ============================================================================
 // Pure progress parsing (unit-tested; no I/O)
@@ -152,16 +154,20 @@ export function parseTitle(stdout: string): string | undefined {
  * (argv injection). Returns the trimmed URL; throws on rejection.
  */
 export function assertSafeUrl(raw: string): string {
+  // An invalid/unsupported URL is a PERMANENT failure — retrying can't fix it — so it
+  // surfaces as a non-retriable INPUT_INVALID, not a retriable SIDECAR_CRASH (audit fix
+  // openclip-1ly).
   const url = (raw ?? '').trim()
-  if (!url || url.startsWith('-')) throw new Error('invalid download URL')
+  if (!url || url.startsWith('-'))
+    throw new JobError('INPUT_INVALID', 'invalid download URL', false)
   let parsed: URL
   try {
     parsed = new URL(url)
   } catch {
-    throw new Error('invalid download URL')
+    throw new JobError('INPUT_INVALID', 'invalid download URL', false)
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`unsupported URL protocol: ${parsed.protocol}`)
+    throw new JobError('INPUT_INVALID', `unsupported URL protocol: ${parsed.protocol}`, false)
   }
   return url
 }
@@ -215,6 +221,8 @@ export interface UrlDownloadOptions {
   signal?: AbortSignal
   /** Called once with the spawned pid so the sidecar can kill it on quit. */
   onPid?: (pid: number) => void
+  /** Called when a tracked child exits, to untrack its pid (audit fix openclip-yul). */
+  onExit?: (pid: number) => void
   /** Injectable exec (tests). Defaults to a real `create(ytDlpPath())` binding. */
   exec?: YtDlpExec
   /** Injectable ffmpeg dir (tests). Defaults to `dirname(ffmpegPath())`. */
@@ -233,6 +241,8 @@ export interface UrlDownloadResult {
 interface FfmpegRunOptions {
   /** Register the spawned pid so the SidecarManager can SIGTERM→SIGKILL it on quit. */
   onPid?: (pid: number) => void
+  /** Untrack the pid when the child exits (audit fix openclip-yul). */
+  onExit?: (pid: number) => void
   /** Cancel: SIGKILL the ffmpeg child if this aborts. */
   signal?: AbortSignal
 }
@@ -256,6 +266,8 @@ function runFfmpeg(
     opts.signal?.addEventListener('abort', onAbort, { once: true })
     const done = (ok: boolean): void => {
       opts.signal?.removeEventListener('abort', onAbort)
+      // Untrack the exited pid (audit fix openclip-yul).
+      if (typeof p.pid === 'number') opts.onExit?.(p.pid)
       resolve(ok)
     }
     p.on('error', () => done(false))
@@ -275,6 +287,8 @@ export interface FaststartOptions {
   run?: FfmpegRunner
   /** Register the ffmpeg pid (→ ctx.trackPid) so it's killed on quit (PRD §17). */
   onPid?: (pid: number) => void
+  /** Untrack the ffmpeg pid when it exits (→ ctx.untrackPid, openclip-yul). */
+  onExit?: (pid: number) => void
   /** Cancel the remux on abort; also skips entirely if already aborted. */
   signal?: AbortSignal
 }
@@ -296,12 +310,16 @@ export async function faststartRemux(
   if (opts.signal?.aborted) return // don't start a remux for an already-cancelled job
   const run = opts.run ?? runFfmpeg
   const tmp = `${filePath}.faststart.mp4`
+  // Option-injection guard (audit fix openclip-6l6, defense-in-depth): filePath is an
+  // app-owned yt-dlp temp path so it can't start with '-', but guard at the spawn anyway.
+  const safeIn = assertSafePathArg(filePath, 'filePath')
   try {
     const ok = await run(
       ffmpegBin,
-      ['-y', '-i', filePath, '-c', 'copy', '-movflags', '+faststart', tmp],
+      ['-y', '-i', safeIn, '-c', 'copy', '-movflags', '+faststart', tmp],
       {
         onPid: opts.onPid,
+        onExit: opts.onExit,
         signal: opts.signal
       }
     )
@@ -408,6 +426,9 @@ export async function downloadUrl(opts: UrlDownloadOptions): Promise<UrlDownload
     throw new Error(ytdlpErrorMessage(err))
   } finally {
     opts.signal?.removeEventListener('abort', onAbort)
+    // The yt-dlp child has exited (its promise settled) — untrack its pid so a later
+    // quit/cancel can't SIGKILL a recycled foreign PID (audit fix openclip-yul).
+    if (typeof subprocess.pid === 'number') opts.onExit?.(subprocess.pid)
   }
 
   if (opts.signal?.aborted) throw new Error('url download cancelled')
@@ -426,7 +447,12 @@ export async function downloadUrl(opts: UrlDownloadOptions): Promise<UrlDownload
   const ffmpegBin = join(ffmpegDir, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg')
   const remux =
     opts.remux ??
-    ((fp: string) => faststartRemux(fp, ffmpegBin, { signal: opts.signal, onPid: opts.onPid }))
+    ((fp: string) =>
+      faststartRemux(fp, ffmpegBin, {
+        signal: opts.signal,
+        onPid: opts.onPid,
+        onExit: opts.onExit
+      }))
   await remux(filePath)
 
   let bytes = 0

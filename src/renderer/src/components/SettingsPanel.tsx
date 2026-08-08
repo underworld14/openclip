@@ -96,6 +96,30 @@ export function SettingsPanel(): React.JSX.Element {
   // Part K — separate key entry for the (optional) independent emoji provider.
   const [emojiKeyDraft, setEmojiKeyDraft] = useState('')
 
+  // The free-text MODEL id fields (clip model + optional emoji model) keep a LOCAL
+  // draft and persist on blur/Enter instead of an async `settings.set` IPC + disk
+  // write per keystroke (audit fix openclip-i68): typing a model id like
+  // 'anthropic/claude-sonnet-4.5' fired ~25 round-trips and the controlled value
+  // depending on each round-trip could drop/reorder characters. Each draft re-syncs
+  // when the stored value changes externally (e.g. the OpenRouter model picker). The
+  // language ISO field stays immediate — it's 2-3 chars and its display couples to
+  // the curated-list Select.
+  const [modelDraft, setModelDraft] = useState(settings.model)
+  const [prevModel, setPrevModel] = useState(settings.model)
+  const [emojiModelDraft, setEmojiModelDraft] = useState(settings.emojiModel ?? '')
+  const [prevEmojiModel, setPrevEmojiModel] = useState(settings.emojiModel)
+  // React's "adjust state during render when a prop/store value changes" pattern (no
+  // effect) re-syncs each draft when the stored value changes externally — e.g. the
+  // OpenRouter model picker calling save({model}).
+  if (settings.model !== prevModel) {
+    setPrevModel(settings.model)
+    setModelDraft(settings.model)
+  }
+  if (settings.emojiModel !== prevEmojiModel) {
+    setPrevEmojiModel(settings.emojiModel)
+    setEmojiModelDraft(settings.emojiModel ?? '')
+  }
+
   useEffect(() => {
     void load()
   }, [load])
@@ -194,13 +218,19 @@ export function SettingsPanel(): React.JSX.Element {
         {/* Free-text id is always available — the escape hatch for any model id. */}
         <Input
           id="ai-model"
-          value={settings.model}
+          value={modelDraft}
           placeholder={
             provider === 'openrouter'
               ? 'e.g. anthropic/claude-sonnet-4.5 — or pick below'
               : 'e.g. gpt-4o-mini, claude-sonnet-4-5, llama3.1'
           }
-          onChange={(e) => void save({ model: e.target.value })}
+          onChange={(e) => setModelDraft(e.target.value)}
+          onBlur={() => {
+            if (modelDraft !== settings.model) void save({ model: modelDraft })
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+          }}
         />
 
         {provider === 'openrouter' && (
@@ -308,9 +338,16 @@ export function SettingsPanel(): React.JSX.Element {
           <>
             <Input
               aria-label="Emoji model"
-              value={settings.emojiModel ?? ''}
+              value={emojiModelDraft}
               placeholder={`e.g. ${settings.model || 'a fast cheap model'} — blank = clip model`}
-              onChange={(e) => void save({ emojiModel: e.target.value || undefined })}
+              onChange={(e) => setEmojiModelDraft(e.target.value)}
+              onBlur={() => {
+                const next = emojiModelDraft || undefined
+                if (next !== settings.emojiModel) void save({ emojiModel: next })
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+              }}
             />
             <Label htmlFor="emoji-api-key">
               API key for {providerLabel(emojiProvider)} —{' '}

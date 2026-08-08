@@ -13,11 +13,13 @@
  * source reuse the WAV instead of re-decoding.
  */
 
-import { mkdir, stat } from 'node:fs/promises'
+import { mkdir, stat, rename, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { runFfmpeg } from './ffmpeg-core'
+import { runFfmpeg as defaultRunFfmpeg, type RunFfmpegOptions } from './ffmpeg-core'
 import { cacheDirFor } from '@main/utils/paths'
+import { assertSafePathArg } from '@main/utils/safe-arg'
 
 // ============================================================================
 // Pure helpers
@@ -26,13 +28,21 @@ import { cacheDirFor } from '@main/utils/paths'
 /**
  * The verified ffmpeg argv for 16kHz mono PCM extraction. `-progress pipe:2
  * -nostats` makes ffmpeg-core's stderr parser emit progress snapshots.
+ *
+ * `-f wav` is EXPLICIT (not inferred from the output extension): the atomic-cache
+ * write (audit fix openclip-2bg) routes the real encode to a `.tmp` path, and
+ * without `-f` ffmpeg would fail to choose a muxer for `.tmp` (exit 234). Pinning
+ * the muxer decouples extraction from the temp filename. (regression guard for the
+ * review finding on openclip-2bg.)
  */
 export function audioExtractArgs(sourcePath: string, wavPath: string): string[] {
   return [
     '-hide_banner',
     '-y',
     '-i',
-    sourcePath,
+    // Guard against option injection (audit fix openclip-6l6): a sourcePath beginning
+    // with '-' would be parsed by ffmpeg as a flag rather than the input filename.
+    assertSafePathArg(sourcePath, 'sourcePath'),
     '-vn',
     '-acodec',
     'pcm_s16le',
@@ -40,6 +50,8 @@ export function audioExtractArgs(sourcePath: string, wavPath: string): string[] 
     '16000',
     '-ac',
     '1',
+    '-f',
+    'wav',
     '-progress',
     'pipe:2',
     '-nostats',
@@ -69,6 +81,8 @@ export interface ExtractAudioOptions {
   binPath?: string
   /** Override the base temp dir (tests). */
   baseTemp?: string
+  /** Inject the ffmpeg spawn driver (tests). Default: the real `runFfmpeg`. */
+  runFfmpeg?: (opts: RunFfmpegOptions) => Promise<unknown>
 }
 
 export interface ExtractAudioResult {
@@ -83,26 +97,40 @@ export interface ExtractAudioResult {
  * cache/` keyed on the source's size+mtime so re-imports don't re-decode.
  */
 export async function extractAudio(opts: ExtractAudioOptions): Promise<ExtractAudioResult> {
+  const runFfmpeg = opts.runFfmpeg ?? defaultRunFfmpeg
   const cacheDir = cacheDirFor(opts.projectId, opts.baseTemp)
   await mkdir(cacheDir, { recursive: true })
 
   const st = await stat(opts.sourcePath)
   const wavPath = join(cacheDir, wavCacheKey({ size: st.size, mtimeMs: st.mtimeMs }))
 
+  // The presence of `wavPath` is the cache-hit signal, so it MUST mean "complete".
   if (existsSync(wavPath)) {
     opts.onProgress?.(100)
     return { wavPath, cached: true }
   }
 
-  await runFfmpeg({
-    args: audioExtractArgs(opts.sourcePath, wavPath),
-    totalDurationSec: opts.durationSec,
-    binPath: opts.binPath,
-    signal: opts.signal,
-    onProgress: (pct) => {
-      if (pct !== undefined) opts.onProgress?.(pct)
-    }
-  })
+  // Atomic write (audit fix openclip-2bg): ffmpeg encodes to a sibling temp in the
+  // SAME cache dir, then we `rename` it onto the content-addressed path only after
+  // it resolves. A cancel/SIGKILL leaves the partial under the temp name (removed in
+  // the catch) — never at `wavPath` — so a killed extraction can't be served as a
+  // cache hit and re-poison whisper. `rename` is atomic on the same filesystem.
+  const tmpPath = join(cacheDir, `.${randomUUID()}.tmp`)
+  try {
+    await runFfmpeg({
+      args: audioExtractArgs(opts.sourcePath, tmpPath),
+      totalDurationSec: opts.durationSec,
+      binPath: opts.binPath,
+      signal: opts.signal,
+      onProgress: (pct) => {
+        if (pct !== undefined) opts.onProgress?.(pct)
+      }
+    })
+    await rename(tmpPath, wavPath)
+  } catch (err) {
+    await rm(tmpPath, { force: true }).catch(() => {})
+    throw err
+  }
 
   return { wavPath, cached: false }
 }

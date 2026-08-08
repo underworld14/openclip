@@ -10,7 +10,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** Resolve the dev ffmpeg binary (override via OPENCLIP_FFMPEG / ffmpeg-static). */
@@ -51,7 +51,12 @@ export function ensureFixtures(): FixturePaths {
   const videoMp4 = join(dir, 'testsrc2.mp4')
   const audioWav = join(dir, 'sine.16k.wav')
 
+  // Generate ATOMICALLY (audit fix openclip-lzk): write to a temp file then renameSync
+  // into place, so existsSync(target) is only ever true for a COMPLETE file. ffmpeg's
+  // `-y` writes the target incrementally, so a non-atomic generation let a concurrent
+  // @serial test read a half-written mp4 → "moov atom not found" flakes.
   if (!existsSync(videoMp4)) {
+    const tmp = `${videoMp4}.${process.pid}.tmp.mp4`
     const r = spawnSync(
       ffmpeg,
       [
@@ -73,14 +78,16 @@ export function ensureFixtures(): FixturePaths {
         '-c:a',
         'aac',
         '-shortest',
-        videoMp4
+        tmp
       ],
       { encoding: 'utf8' }
     )
     if (r.status !== 0) throw new Error(`ffmpeg fixture (video) failed: ${r.stderr ?? r.error}`)
+    renameSync(tmp, videoMp4)
   }
 
   if (!existsSync(audioWav)) {
+    const tmp = `${audioWav}.${process.pid}.tmp.wav`
     const r = spawnSync(
       ffmpeg,
       [
@@ -95,11 +102,12 @@ export function ensureFixtures(): FixturePaths {
         '1',
         '-c:a',
         'pcm_s16le',
-        audioWav
+        tmp
       ],
       { encoding: 'utf8' }
     )
     if (r.status !== 0) throw new Error(`ffmpeg fixture (audio) failed: ${r.stderr ?? r.error}`)
+    renameSync(tmp, audioWav)
   }
 
   return { videoMp4, audioWav, dir }

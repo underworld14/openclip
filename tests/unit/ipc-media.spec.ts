@@ -53,11 +53,32 @@ afterEach(async () => {
 })
 
 describe('registerMediaHandlers', () => {
-  it('registers exactly MEDIA_ADOPT_SOURCE', () => {
+  it('registers MEDIA_ADOPT_SOURCE and MEDIA_RECLAIM', () => {
     const { ctx } = makeFakeContext()
     const spy = vi.spyOn(ctx.ipcMain, 'handle')
     registerMediaHandlers(ctx)
-    expect(spy.mock.calls.map((c) => c[0])).toEqual([IPCChannels.MEDIA_ADOPT_SOURCE])
+    expect(spy.mock.calls.map((c) => c[0])).toEqual([
+      IPCChannels.MEDIA_ADOPT_SOURCE,
+      IPCChannels.MEDIA_RECLAIM
+    ])
+  })
+
+  it('MEDIA_RECLAIM deletes the project media dir (openclip-e5s)', async () => {
+    const { ctx, invoke } = makeFakeContext()
+    registerMediaHandlers(ctx)
+    // Adopt a file so media/<projectId>/ exists, then reclaim it.
+    const src = join(work, 'v.mp4')
+    await writeFile(src, 'VID')
+    const { path } = (await invoke(IPCChannels.MEDIA_ADOPT_SOURCE, {
+      projectId: 'p9',
+      filePath: src
+    })) as { path: string }
+    expect(await readFile(path, 'utf8')).toBe('VID')
+    const res = (await invoke(IPCChannels.MEDIA_RECLAIM, { projectId: 'p9' })) as {
+      reclaimed: boolean
+    }
+    expect(res.reclaimed).toBe(true)
+    await expect(readFile(path, 'utf8')).rejects.toThrow() // dir gone
   })
 
   it('adopts a downloaded file into media/<projectId>/ and returns its new path', async () => {

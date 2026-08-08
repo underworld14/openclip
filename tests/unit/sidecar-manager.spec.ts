@@ -17,7 +17,9 @@ import {
   getRunner,
   concurrencyFor,
   exportConcurrency,
-  type EventPort
+  defaultArrayLimiterFactory,
+  type EventPort,
+  type Limiter
 } from '@main/services/sidecar-manager'
 import { scriptedRunner } from '../harness/fake-utility-process'
 import { transcribeResultFixture, transcribePartialFixture } from '../fixtures/contract'
@@ -64,6 +66,139 @@ function collectPort(port: {
   return { events, done }
 }
 
+describe('defaultArrayLimiterFactory: a synchronous throw releases the slot (audit fix openclip-40a)', () => {
+  it('does not starve the kind when a task throws synchronously', async () => {
+    const limiter = defaultArrayLimiterFactory(1) // serial: one slot
+    // First task throws SYNCHRONOUSLY (not a rejected promise) — the bug case.
+    const p1 = limiter.add((() => {
+      throw new Error('sync boom')
+    }) as () => Promise<void>)
+    await expect(p1).rejects.toThrow('sync boom')
+    // The one slot must be freed so a SECOND task runs; without the fix activeCount
+    // would stay at 1 and this add() would queue forever (test would time out).
+    let ran = false
+    await limiter.add(async () => {
+      ran = true
+    })
+    expect(ran).toBe(true)
+  })
+})
+
+describe('SidecarManager: a QUEUED job is settled synchronously on cancel/killAll', () => {
+  // A limiter that NEVER admits the task — simulates a job stuck behind a full queue.
+  const neverAdmit = (): Limiter => ({
+    get pending(): number {
+      return 1
+    },
+    add: <T>(): Promise<T> => new Promise<T>(() => {}) // never resolves ⇒ runner never starts
+  })
+  const mkPort = (): { eventPort: EventPort; collected: ReturnType<typeof collectPort> } => {
+    const { port1, port2 } = new MessageChannel()
+    const eventPort: EventPort = {
+      postMessage: (v) => port2.postMessage(v),
+      close: () => port2.close(),
+      on: (e, l) => port2.on(e, l),
+      start: () => port2.start()
+    }
+    return { eventPort, collected: collectPort(port1 as never) }
+  }
+  const params = { projectId: 'p1', wavPath: '/a.wav', model: 'base' as const }
+
+  it('cancel() on a QUEUED job emits CANCELLED now, not after the limiter drains (openclip-yyi)', async () => {
+    const mgr = new SidecarManager({ coreCount: 10, limiterFactory: neverAdmit })
+    const { eventPort, collected } = mkPort()
+    const jobId = mgr.startJob('transcribe', params, eventPort)
+    mgr.cancel(jobId) // runner never started ⇒ must settle synchronously
+    await collected.done
+    const last = collected.events.at(-1) as { t: string; code?: string }
+    expect(last.t).toBe('error')
+    expect(last.code).toBe('CANCELLED')
+  })
+
+  it('killAll() settles a QUEUED job with terminal CANCELLED (openclip-sf0)', async () => {
+    const mgr = new SidecarManager({ coreCount: 10, limiterFactory: neverAdmit })
+    const { eventPort, collected } = mkPort()
+    mgr.startJob('transcribe', params, eventPort)
+    mgr.killAll()
+    await collected.done
+    const last = collected.events.at(-1) as { t: string; code?: string }
+    expect(last.t).toBe('error')
+    expect(last.code).toBe('CANCELLED')
+  })
+})
+
+describe('SidecarManager: settle() never leaks a job when the port throws (audit fix openclip-asx)', () => {
+  it('removes the job from active even when port.postMessage throws (renderer torn down)', async () => {
+    const mgr = new SidecarManager({ coreCount: 10 })
+    // A port whose postMessage ALWAYS throws — as if the peer MessagePort was torn
+    // down. Without the fix, settle()'s postMessage throws BEFORE active.delete, so the
+    // job (and its PIDs) leak in `active` forever.
+    const throwingPort: EventPort = {
+      postMessage: () => {
+        throw new Error('port closed')
+      },
+      close: () => {},
+      on: () => {},
+      start: () => {}
+    }
+    const jobId = mgr.startJob(
+      'transcribe',
+      { projectId: 'p1', wavPath: '/a.wav', model: 'base' },
+      throwingPort
+    )
+    // Let the scripted runner run; every emit throws → the error path reaches settle().
+    await new Promise((r) => setTimeout(r, 20))
+    expect(mgr.activeJobIds()).not.toContain(jobId)
+  })
+})
+
+describe('SidecarManager: untrackPid prevents SIGKILLing a recycled PID (audit fix openclip-yul)', () => {
+  it('a PID untracked on normal child exit is NOT SIGTERM/SIGKILLed on a later cancel', async () => {
+    const killPid = vi.fn()
+    const mgr = new SidecarManager({ coreCount: 10, killPid, killGraceMs: 5 })
+    // A runner whose child spawns (trackPid) then EXITS normally (untrackPid) while the
+    // job keeps running (e.g. a follow-up step). The exited PID must not be killed later.
+    registerRunner('url-download', async (_p, emit, ctx) => {
+      ctx.trackPid(919191)
+      ctx.untrackPid?.(919191) // child exited normally
+      emit.progress(50, 'downloading')
+      await new Promise<void>((_resolve, reject) => {
+        ctx.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+      })
+      return { filePath: '/x', title: 't', bytes: 1 }
+    })
+
+    const { port1, port2 } = new MessageChannel()
+    const eventPort: EventPort = {
+      postMessage: (v) => port2.postMessage(v),
+      close: () => port2.close(),
+      on: (e, l) => port2.on(e, l),
+      start: () => port2.start()
+    }
+    const collected = collectPort(port1 as never)
+    const jobId = mgr.startJob('url-download', { url: 'https://x.test/v' }, eventPort)
+    await new Promise((r) => setTimeout(r, 10)) // let the runner track+untrack the PID
+    mgr.cancel(jobId)
+    await collected.done
+    await new Promise((r) => setTimeout(r, 15)) // past the grace period
+
+    expect(killPid).not.toHaveBeenCalledWith(919191, 'SIGTERM')
+    expect(killPid).not.toHaveBeenCalledWith(919191, 'SIGKILL')
+  })
+})
+
+describe('SidecarManager lifecycle hooks (audit fix openclip-032)', () => {
+  it('wires before-quit/will-quit but NOT child-process-gone to killAll', () => {
+    const mgr = new SidecarManager({ coreCount: 10 })
+    const appEvents: string[] = []
+    mgr.installLifecycleHooks({ on: (e: string) => appEvents.push(e) })
+    expect(appEvents).toContain('before-quit')
+    expect(appEvents).toContain('will-quit')
+    // A recoverable GPU/utility child crash must NOT massacre every running job.
+    expect(appEvents).not.toContain('child-process-gone')
+  })
+})
+
 describe('SidecarManager registry + seam', () => {
   it('has runners registered for transcribe + export', () => {
     expect(hasRunner('transcribe')).toBe(true)
@@ -74,6 +209,78 @@ describe('SidecarManager registry + seam', () => {
     expect(() => registerRunner('transcribe', scriptedRunner({ steps: [] }))).toThrow(
       /already registered/
     )
+  })
+})
+
+describe('SidecarManager concurrency BEHAVIOR (audit fix openclip-nh3)', () => {
+  it('serializes tasks at concurrency 1 — the 2nd starts only after the 1st resolves', async () => {
+    const limiter = defaultArrayLimiterFactory(1)
+    const order: string[] = []
+    let release1: () => void = () => {}
+    const p1 = limiter.add(
+      () =>
+        new Promise<void>((r) => {
+          order.push('start1')
+          release1 = () => {
+            order.push('end1')
+            r()
+          }
+        })
+    )
+    const p2 = limiter.add(async () => {
+      order.push('start2')
+    })
+    await new Promise((r) => setTimeout(r, 5))
+    expect(order).toEqual(['start1']) // task2 is serialized BEHIND the in-flight task1
+    release1()
+    await Promise.all([p1, p2])
+    expect(order).toEqual(['start1', 'end1', 'start2'])
+  })
+
+  it('runs the export cap (2) concurrently but queues the overflow', async () => {
+    const limiter = defaultArrayLimiterFactory(exportConcurrency(10)) // = 2
+    const running: number[] = []
+    const releases: Array<() => void> = []
+    const mk = (i: number): Promise<void> =>
+      limiter.add(
+        () =>
+          new Promise<void>((r) => {
+            running.push(i)
+            releases.push(r)
+          })
+      )
+    const ps = [mk(0), mk(1), mk(2)]
+    await new Promise((r) => setTimeout(r, 5))
+    expect(running).toEqual([0, 1]) // exactly 2 admitted; the 3rd waits
+    releases[0]()
+    await new Promise((r) => setTimeout(r, 5))
+    expect(running).toEqual([0, 1, 2]) // freeing a slot admits the 3rd
+    releases[1]()
+    releases[2]()
+    await Promise.all(ps)
+  })
+
+  it('surfaces queue position as a "queued" progress stage when the limiter is busy', async () => {
+    // A limiter that reports a non-empty queue + never admits — the manager must emit a
+    // `queued` progress for a job that can't start yet (PRD §17 queue UX).
+    const busyLimiter: Limiter = {
+      get pending(): number {
+        return 1
+      },
+      add: <T>(): Promise<T> => new Promise<T>(() => {})
+    }
+    const mgr = new SidecarManager({ coreCount: 10, limiterFactory: () => busyLimiter })
+    const { port1, port2 } = new MessageChannel()
+    const eventPort: EventPort = {
+      postMessage: (v) => port2.postMessage(v),
+      close: () => port2.close(),
+      on: (e, l) => port2.on(e, l),
+      start: () => port2.start()
+    }
+    const collected = collectPort(port1 as never)
+    mgr.startJob('transcribe', { projectId: 'p1', wavPath: '/a.wav', model: 'base' }, eventPort)
+    await new Promise((r) => setTimeout(r, 10))
+    expect(collected.events.some((e) => e.t === 'progress' && e.stage === 'queued')).toBe(true)
   })
 })
 
@@ -142,7 +349,7 @@ describe('SidecarManager.startJob drives a scripted runner to done over a real p
     expect(last.code).toBe('INPUT_INVALID')
   })
 
-  it('cancel() escalates SIGTERM to tracked PIDs', async () => {
+  it('cancel() escalates SIGTERM then SIGKILL after the grace period (audit fix openclip-ai5)', async () => {
     const killPid = vi.fn()
     const mgr = new SidecarManager({ coreCount: 10, killPid, killGraceMs: 5 })
 
@@ -175,6 +382,12 @@ describe('SidecarManager.startJob drives a scripted runner to done over a real p
     const last = collected.events.at(-1) as { t: string; code?: string }
     expect(last.t).toBe('error')
     expect(last.code).toBe('CANCELLED')
+
+    // Prove the SIGTERM→SIGKILL escalation TIMER actually fires the SIGKILL after the
+    // grace period (audit fix openclip-ai5 — previously only the SIGTERM was asserted,
+    // so a broken/zero grace timer would have gone unnoticed). killGraceMs is 5ms here.
+    await new Promise((r) => setTimeout(r, 15))
+    expect(killPid).toHaveBeenCalledWith(424242, 'SIGKILL')
   })
 
   it('forced port-close (renderer crash/nav) is an implicit cancel that terminates the job', async () => {

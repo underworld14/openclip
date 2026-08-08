@@ -138,6 +138,66 @@ describe('ai handler: GENERATE_CLIPS (transport injected — no network)', () =>
     __setTransportFactoryForTests(null)
   })
 
+  it('clamps an out-of-range numClips to 1..50 at the boundary (audit fix openclip-9hc)', async () => {
+    const { ctx, handlers, vault } = makeCtx()
+    vault.setKey('openai', 'sk-live-9999')
+    let promptSeen = ''
+    const factory = vi.fn(
+      (): RawTransport => async (p) => {
+        promptSeen = p.user
+        return { rawText: JSON.stringify(clipSchemaFixture) }
+      }
+    )
+    __setTransportFactoryForTests(factory)
+    registerAiHandlers(ctx)
+
+    await call(handlers, IPCChannels.GENERATE_CLIPS, {
+      projectId: 'p1',
+      provider: 'openai',
+      model: 'gpt-4o-mini',
+      segments: transcriptSegmentsFixture,
+      videoTitle: 'Demo',
+      durationSeconds: 240,
+      clipStyle: 'all',
+      numClips: 10000, // absurd → must be clamped to 50
+      targetPlatform: 'tiktok'
+    })
+    // The prompt the model sees reflects the clamped count, not 10000.
+    expect(promptSeen).toContain('NUMBER OF CLIPS REQUESTED: 50')
+    expect(promptSeen).not.toContain('10000')
+    __setTransportFactoryForTests(null)
+  })
+
+  it('honours project min/maxDuration in the prompt when supplied (audit fix openclip-t0v)', async () => {
+    const { ctx, handlers, vault } = makeCtx()
+    vault.setKey('openai', 'sk-live-9999')
+    let promptSeen = ''
+    const factory = vi.fn(
+      (): RawTransport => async (p) => {
+        promptSeen = p.user
+        return { rawText: JSON.stringify(clipSchemaFixture) }
+      }
+    )
+    __setTransportFactoryForTests(factory)
+    registerAiHandlers(ctx)
+
+    await call(handlers, IPCChannels.GENERATE_CLIPS, {
+      projectId: 'p1',
+      provider: 'openai',
+      model: 'gpt-4o-mini',
+      segments: transcriptSegmentsFixture,
+      videoTitle: 'Demo',
+      durationSeconds: 240,
+      clipStyle: 'all',
+      numClips: 5,
+      targetPlatform: 'tiktok',
+      minDuration: 30,
+      maxDuration: 120
+    })
+    expect(promptSeen).toContain('between 30 and 120 seconds') // not the old 15/90
+    __setTransportFactoryForTests(null)
+  })
+
   it('throws a typed error when the provider returns unrepairable JSON', async () => {
     const { ctx, handlers, vault } = makeCtx()
     vault.setKey('ollama', 'unused')

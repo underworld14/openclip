@@ -65,4 +65,28 @@ describe('ffprobe: parseFfprobeJson → SourceVideo (PRD §6.1/§9.3)', () => {
     const json = { streams: [{ codec_type: 'audio' }], format: { duration: '10' } }
     expect(() => parseFfprobeJson(json, '/audio-only.mp3')).toThrow(/no video stream/i)
   })
+
+  it('coerces a non-finite ffprobe duration ("N/A") to a Zod-valid number (audit fix openclip-bro)', () => {
+    const json = {
+      streams: [{ codec_type: 'video', width: 1280, height: 720, r_frame_rate: '25/1' }],
+      format: { duration: 'N/A', format_name: 'mp4' }
+    }
+    const sv = parseFfprobeJson(json, '/frag.mp4')
+    expect(Number.isFinite(sv.duration)).toBe(true)
+    expect(sv.duration).toBe(0) // unknown, but finite → never NaN-poisons the timeline
+    expect(() => SourceVideo.parse(sv)).not.toThrow()
+  })
+
+  it('falls back to the longest stream duration when format.duration is missing', () => {
+    const json = {
+      streams: [
+        { codec_type: 'video', width: 1280, height: 720, r_frame_rate: '25/1', duration: '42.5' },
+        { codec_type: 'audio', duration: '41.9' }
+      ],
+      format: { format_name: 'matroska' } // no format-level duration (common for MKV)
+    }
+    const sv = parseFfprobeJson(json, '/clip.mkv')
+    expect(sv.duration).toBeCloseTo(42.5, 1)
+    expect(() => SourceVideo.parse(sv)).not.toThrow()
+  })
 })

@@ -6,7 +6,7 @@
  *
  * Resolves, for both dev and prod (PRD §13):
  *   - ffmpeg / ffprobe binaries
- *       dev  → node_modules (`ffmpeg-static` / `ffmpeg-ffprobe-static`)
+ *       dev  → build/ffmpeg-cache redistributable, else `ffmpeg-static`/`ffmpeg-ffprobe-static`
  *       prod → `process.resourcesPath/ffmpeg/<platArch>/{ffmpeg,ffprobe}`
  *   - whisper-cli binary
  *       dev  → a locally-installed `whisper-cli` (brew: /opt/homebrew/bin) via
@@ -23,7 +23,7 @@
  * runtime. `app.getPath(...)` is only touched by the resolver functions.
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { join, delimiter } from 'node:path'
 import type { App } from 'electron'
 
@@ -68,32 +68,64 @@ function whichOnPath(bin: string): string | null {
 
 /**
  * Absolute path to the `ffmpeg` binary.
- * dev → ffmpeg-static (default string export); prod → bundled extraResource.
+ * dev → the SAME pinned redistributable as prod (build/ffmpeg-cache), else the
+ * version-matched ffmpeg-ffprobe-static; prod → bundled extraResource.
  * `OPENCLIP_FFMPEG` overrides everything (used by tests / smoke harness).
  */
 export function ffmpegPath(): string {
   if (process.env.OPENCLIP_FFMPEG) return process.env.OPENCLIP_FFMPEG
-  if (isDev()) {
-    // ffmpeg-static's default export is the absolute path string.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const p = require('ffmpeg-static') as string | null
-    if (p) return p
-  }
+  if (isDev()) return devFfmpegBinary('ffmpeg')
   return join(process.resourcesPath, 'ffmpeg', platArch(), 'ffmpeg')
 }
 
 /**
  * Absolute path to the `ffprobe` binary.
- * dev → ffmpeg-ffprobe-static; prod → bundled extraResource.
+ * dev → build/ffmpeg-cache redistributable, else ffmpeg-ffprobe-static; prod → bundled.
  */
 export function ffprobePath(): string {
   if (process.env.OPENCLIP_FFPROBE) return process.env.OPENCLIP_FFPROBE
-  if (isDev()) {
+  if (isDev()) return devFfmpegBinary('ffprobe')
+  return join(process.resourcesPath, 'ffmpeg', platArch(), 'ffprobe')
+}
+
+/**
+ * Resolve a dev ffmpeg/ffprobe binary (audit fixes openclip-d22/592). PREFER the pinned,
+ * SHA-verified redistributable that `bundle-binaries.mjs` caches under
+ * `build/ffmpeg-cache/<build>/<tool>/<tool>` — so once a dev has packaged once, dev runs
+ * the EXACT same build prod ships (libass-enabled, ffmpeg+ffprobe from ONE build → no
+ * version skew). When the cache isn't seeded yet, fall back to the npm packages so a
+ * fresh checkout still runs: ffmpeg from `ffmpeg-static` (the only one with libass, which
+ * the caption burn requires) and ffprobe from `ffmpeg-ffprobe-static`. (Fully dropping the
+ * nonfree `ffmpeg-static` is gated on the cache always being seeded — see the ticket.)
+ */
+function devFfmpegBinary(tool: 'ffmpeg' | 'ffprobe'): string {
+  const cached = devCachedFfmpeg(tool)
+  if (cached) return cached
+  if (tool === 'ffmpeg') {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const p = require('ffmpeg-static') as string | null
+    if (p) return p
+  } else {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const m = require('ffmpeg-ffprobe-static') as { ffprobePath?: string | null }
     if (m.ffprobePath) return m.ffprobePath
   }
-  return join(process.resourcesPath, 'ffmpeg', platArch(), 'ffprobe')
+  // Last resort: the prod layout (lets a manually-staged resources/ dir work in dev too).
+  return join(process.resourcesPath ?? process.cwd(), 'ffmpeg', platArch(), tool)
+}
+
+/** First `build/ffmpeg-cache/<build>/<tool>/<tool>` that exists, or null (cache unseeded). */
+function devCachedFfmpeg(tool: 'ffmpeg' | 'ffprobe'): string | null {
+  try {
+    const root = join(process.cwd(), 'build', 'ffmpeg-cache')
+    for (const build of readdirSync(root)) {
+      const bin = join(root, build, tool, tool)
+      if (existsSync(bin)) return bin
+    }
+  } catch {
+    /* no cache dir yet → caller falls back */
+  }
+  return null
 }
 
 /**
@@ -143,13 +175,20 @@ export function ytDlpPath(): string {
 }
 
 /**
- * Directory holding `default.metallib` (Metal kernels) next to whisper-cli.
- * Whisper-cli loads it relative to its own dir; in prod it ships beside the
- * binary, in dev brew places it in the cellar — resolved as the binary's dir.
+ * Directory holding `default.metallib` (Metal kernels) next to whisper-cli, i.e.
+ * `<resourcesPath>/whisper/<platArch>`. In PROD this ships beside the staged binary.
+ * In DEV `process.resourcesPath` is Electron's OWN resources dir (the project's
+ * binaries aren't staged there), so this path typically does NOT exist — and
+ * `resolveWhisperCwd` (whisper-spawn) `existsSync`-guards it and falls back to
+ * `process.cwd()`. A brew `whisper-cli` normally embeds its Metal shaders, so the
+ * dev cwd not being the binary's directory is harmless.
+ *
+ * (audit fix openclip-13j: the dev/prod branches were byte-identical apart from a
+ * `?? ''` guard, and the old comment falsely claimed dev "resolved the binary's dir";
+ * collapsed to one expression and corrected the comment.)
  */
 export function whisperResourcesDir(): string {
-  if (isDev()) return join(process.resourcesPath ?? '', 'whisper', platArch())
-  return join(process.resourcesPath, 'whisper', platArch())
+  return join(process.resourcesPath ?? '', 'whisper', platArch())
 }
 
 // ============================================================================

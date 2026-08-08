@@ -57,6 +57,8 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
   runImportPipeline: ReturnType<typeof vi.fn>
   runUrlDownload: ReturnType<typeof vi.fn>
   adoptSource: ReturnType<typeof vi.fn>
+  reclaimMedia: ReturnType<typeof vi.fn>
+  cancelJob: ReturnType<typeof vi.fn>
   onNeedModel: ReturnType<typeof vi.fn>
   pcts: number[]
   storage: ReturnType<typeof fakeStorage>
@@ -104,9 +106,13 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
     path: `/media/PID/${fp.split('/').pop()}`
   }))
 
+  const reclaimMedia = vi.fn(async (): Promise<void> => {})
+  const cancelJob = vi.fn(async (): Promise<void> => {})
+
   const ctl = createImportController({
     bridge: {
-      model: { status: async () => [{ model: 'base', installed: true }] }
+      model: { status: async () => [{ model: 'base', installed: true }] },
+      jobs: { cancel: cancelJob }
     } as unknown as ImportControllerDeps['bridge'],
     store,
     createBlankProject: (name, sv) => ({ ...fakeProject('blank-internal', name), sourceVideo: sv }),
@@ -114,6 +120,7 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
     storage,
     onNeedModel,
     adoptSource,
+    reclaimMedia,
     runImportPipeline: runImportPipeline as unknown as ImportControllerDeps['runImportPipeline'],
     runUrlDownload: runUrlDownload as unknown as ImportControllerDeps['runUrlDownload'],
     ...overrides
@@ -129,6 +136,8 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
     runImportPipeline,
     runUrlDownload,
     adoptSource,
+    reclaimMedia,
+    cancelJob,
     onNeedModel,
     pcts,
     storage
@@ -282,6 +291,77 @@ describe('import-controller: managed media adoption (Part H)', () => {
     const project = setCurrentProject.mock.calls.at(-1)?.[0]
     expect(project.sourceVideo.path).toBe('/Users/me/Movies/original.mp4')
     expect(project.sourceVideo.appOwned).toBe(false)
+  })
+
+  it('reclaims the adopted media when an app-owned import fails after adopt (openclip-e5s)', async () => {
+    const { ctl, adoptSource, reclaimMedia } = build({
+      storage: fakeStorage({ [CONSENT_KEY]: '1' }),
+      runImportPipeline: vi.fn(async () => {
+        throw new Error('transcribe failed')
+      }) as unknown as ImportControllerDeps['runImportPipeline']
+    })
+    await ctl.importUrl('https://youtu.be/x')
+    // The download was adopted into persistent media before the (failing) pipeline; the
+    // orphan dir must be reclaimed now, not left for the next-launch sweep.
+    expect(adoptSource).toHaveBeenCalledWith('PID', '/dl/v.mp4')
+    expect(reclaimMedia).toHaveBeenCalledWith('PID')
+    expect(ctl.getState().error).toBeTruthy()
+  })
+
+  it('does NOT reclaim media when a (non-app-owned) file import fails (openclip-e5s)', async () => {
+    const { ctl, reclaimMedia } = build({
+      runImportPipeline: vi.fn(async () => {
+        throw new Error('transcribe failed')
+      }) as unknown as ImportControllerDeps['runImportPipeline']
+    })
+    await ctl.importFile('/Users/me/Movies/original.mp4')
+    expect(reclaimMedia).not.toHaveBeenCalled()
+  })
+
+  it('cancel() aborts the in-flight job via the bridge (openclip-2bm)', async () => {
+    let release: (v: { filePath: string; title: string; bytes: number }) => void = () => {}
+    const runUrlDownload = vi.fn((o: { onStart?: (id: string) => void }) => {
+      o.onStart?.('DL-JOB-1') // the controller records this as the active job
+      return new Promise((r) => {
+        release = r as typeof release
+      })
+    })
+    const { ctl, cancelJob } = build({
+      storage: fakeStorage({ [CONSENT_KEY]: '1' }),
+      runUrlDownload: runUrlDownload as unknown as ImportControllerDeps['runUrlDownload']
+    })
+    const importing = ctl.importUrl('https://youtu.be/x')
+    await Promise.resolve() // let ensureModel + onStart fire
+    await Promise.resolve()
+    expect(ctl.getState().busy).toBe(true)
+    await ctl.cancel()
+    expect(cancelJob).toHaveBeenCalledWith('DL-JOB-1')
+    // Let the (now-irrelevant) download settle so the import promise resolves.
+    release({ filePath: '/dl/v.mp4', title: 't', bytes: 1 })
+    await importing
+  })
+
+  it('cancel() is a no-op when nothing is importing (openclip-2bm)', async () => {
+    const { ctl, cancelJob } = build()
+    await ctl.cancel()
+    expect(cancelJob).not.toHaveBeenCalled()
+  })
+
+  it('does NOT reclaim once the project is committed, even if a later step throws (e5s review)', async () => {
+    // The pipeline succeeds and the project goes live (setCurrentProject), then setView
+    // throws. The media belongs to a project the user can now see — it must NOT be
+    // deleted out from under them.
+    const { ctl, reclaimMedia, setCurrentProject } = build({
+      storage: fakeStorage({ [CONSENT_KEY]: '1' }),
+      ui: {
+        setView: () => {
+          throw new Error('view boom')
+        }
+      } as unknown as ImportControllerDeps['ui']
+    })
+    await ctl.importUrl('https://youtu.be/x')
+    expect(setCurrentProject).toHaveBeenCalledWith(expect.objectContaining({ id: 'PID' }))
+    expect(reclaimMedia).not.toHaveBeenCalled()
   })
 
   it('an adopt failure surfaces an error and does not create a project', async () => {

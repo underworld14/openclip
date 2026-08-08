@@ -63,15 +63,34 @@ export function registerJobPort(jobId: string, port: MessagePortLike): void {
  * returned port is a real DOM `MessagePort` (has `postMessage`/`onmessage`),
  * never a cloned Object — that is the whole point of the out-of-band transfer.
  */
-export function acquireJobPort(jobId: string): Promise<MessagePortLike> {
+export function acquireJobPort(jobId: string, timeoutMs = 30_000): Promise<MessagePortLike> {
   ensureWindowListener()
   const existing = ready.get(jobId)
   if (existing) {
     ready.delete(jobId)
     return Promise.resolve(existing)
   }
-  return new Promise<MessagePortLike>((resolve) => {
-    waiters.set(jobId, resolve)
+  return new Promise<MessagePortLike>((resolve, reject) => {
+    const wrappedResolve = (port: MessagePortLike): void => {
+      clearTimeout(timer)
+      resolve(port)
+    }
+    // Bounded wait (audit fix openclip-ki6/me0/jp1): the per-job port is delivered on
+    // the SAME tick as the `jobs.start()` invoke response, so any real delay means it
+    // is GONE — e.g. main/index.ts drops the port when `event.senderFrame` is null
+    // (frame destroyed/navigated mid-invoke). Without this, every consumer
+    // `await acquireJobPort(jobId)` hangs FOREVER (stuck progress bar, busy:true, a
+    // Promise.all that never settles) — violating the "never a silent hang" spirit.
+    // Reject + clear the parked waiter so the consumer surfaces a typed error instead.
+    const timer = setTimeout(() => {
+      if (waiters.get(jobId) === wrappedResolve) waiters.delete(jobId)
+      reject(
+        new Error(
+          `job ${jobId}: per-job MessagePort never arrived (timed out after ${timeoutMs}ms) — the job stream cannot be consumed`
+        )
+      )
+    }, timeoutMs)
+    waiters.set(jobId, wrappedResolve)
   })
 }
 

@@ -37,6 +37,18 @@ export function ModelDownloadDialog({
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [done, setDone] = useState(false)
+  const [prevInitial, setPrevInitial] = useState(initialModel)
+
+  // The dialog is mounted once and toggled via `open`; `useState` only read
+  // `initialModel` on first mount, so when the import flow later needs a DIFFERENT
+  // model the radio kept its stale selection and the user could download the wrong
+  // size (audit fix openclip-2x7). React's "adjust state during render when a prop
+  // changes" pattern (no effect) re-syncs `selected` — never clobbering a selection
+  // mid-download.
+  if (initialModel !== prevInitial) {
+    setPrevInitial(initialModel)
+    if (initialModel && !busy) setSelected(initialModel)
+  }
 
   const download = useCallback(
     async (model: WhisperModelSize): Promise<void> => {

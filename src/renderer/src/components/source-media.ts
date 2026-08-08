@@ -25,14 +25,20 @@ export const MEDIA_SCHEME = 'openclip-media'
  * Build the preview URL for an absolute source path, or `null` for an
  * empty/missing path (the PreviewPlayer renders an empty state then).
  *
- * Uses `encodeURI` semantics per segment via the WHATWG `URL` builder so the
- * percent-encoding matches Node's `pathToFileURL` on the main side (both encode
- * spaces as `%20`, leave `/` as separators, etc.).
+ * Encoding contract (audit fix openclip-10m — corrected from the old `pathToFileURL`
+ * claim): each `/`-separated path segment is percent-encoded with
+ * `encodeURIComponent`, and the MAIN-side decoder `pathFromMediaUrl` decodes each
+ * segment with `decodeURIComponent`. The round-trip relies on the
+ * `encodeURIComponent`/`decodeURIComponent` SYMMETRY (asserted by source-media.spec),
+ * NOT on `pathToFileURL` parity — `encodeURIComponent` actually escapes MORE than
+ * `pathToFileURL` (e.g. `+`→`%2B`). `pathToFileURL` is used only LATER, by the main
+ * protocol handler to feed `net.fetch`, after `pathFromMediaUrl` has already decoded.
+ * Do not "fix" one side to real `pathToFileURL` semantics or you break the byte
+ * equality the round-trip test depends on.
  */
 export function sourceMediaUrl(absPath: string | null | undefined): string | null {
   if (!absPath) return null
-  // Build a file: URL the same way Node's pathToFileURL would, then swap the
-  // scheme — this guarantees byte-for-byte agreement with the main decoder.
+  // Percent-encode each '/'-separated segment; pathFromMediaUrl decodes the same way.
   const encoded = absPath
     .split('/')
     .map((seg) => encodeURIComponent(seg))

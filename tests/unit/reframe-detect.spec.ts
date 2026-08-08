@@ -14,7 +14,9 @@ import {
   nms,
   parseMotionMetadata,
   splitMotionSeries,
+  trimMotionRois,
   detectReframe,
+  detectFromFrameChunks,
   planReframe,
   type YuNetOutputs,
   type ReframeRunner
@@ -26,6 +28,13 @@ import type { FaceBox, SampleFrame, MotionTimeline } from '@shared/reframe-plan'
 // ---------------------------------------------------------------------------
 
 describe('frameSampleArgs', () => {
+  it('frameSampleArgs/motionArgs reject a sourcePath beginning with a dash (openclip-6l6)', () => {
+    expect(() => frameSampleArgs('-i', 0, 1, 2, 640)).toThrow(/sourcePath/)
+    expect(() =>
+      motionArgs('-i', 0, 1, { x: 0, y: 0, w: 10, h: 10 }, { x: 0, y: 0, w: 10, h: 10 })
+    ).toThrow(/sourcePath/)
+  })
+
   it('seeks, limits duration, samples at fps and stretches to size x size RGB on stdout', () => {
     expect(frameSampleArgs('/src/in.mp4', 12, 8, 2, 640)).toEqual([
       '-hide_banner',
@@ -234,6 +243,30 @@ describe('parseMotionMetadata', () => {
 // splitMotionSeries
 // ---------------------------------------------------------------------------
 
+describe('trimMotionRois — mutually-exclusive motion ROIs (openclip-sx0)', () => {
+  it('clips two overlapping split tiles at the midpoint between cluster centers', () => {
+    // Left tile 100..400 (center 250), right tile 350..650 (center 500) overlap 350..400.
+    const leftTile = { x: 100, y: 0, w: 300, h: 1080 }
+    const rightTile = { x: 350, y: 0, w: 300, h: 1080 }
+    const { left, right } = trimMotionRois(leftTile, rightTile, 250, 500)
+    // Midpoint = (250+500)/2 = 375; tiles meet there and no longer overlap.
+    expect(left.x + left.w).toBeLessThanOrEqual(right.x)
+    expect(left.x + left.w).toBe(375)
+    expect(right.x).toBe(375)
+    // Vertical extent is preserved.
+    expect(left.h).toBe(1080)
+    expect(right.h).toBe(1080)
+  })
+
+  it('orders by center so a right-first argument pair still yields left.x < right.x', () => {
+    const a = { x: 350, y: 0, w: 300, h: 100 } // center 500 (the RIGHT speaker)
+    const b = { x: 100, y: 0, w: 300, h: 100 } // center 250 (the LEFT speaker)
+    const { left, right } = trimMotionRois(a, b, 500, 250)
+    expect(left.x).toBeLessThan(right.x)
+    expect(left.x + left.w).toBeLessThanOrEqual(right.x)
+  })
+})
+
 describe('splitMotionSeries', () => {
   it('maps first-seen group → left, second → right, offset to absolute time', () => {
     // Two grouped per-instance series (first-seen N = left, second = right).
@@ -262,11 +295,27 @@ describe('splitMotionSeries', () => {
       { times: [0, 0.5, 1.0], values: [1, 2, 3] },
       { times: [0, 0.5], values: [10, 20] }
     ]
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(splitMotionSeries(groups, 0)).toEqual({
       times: [0, 0.5],
       left: [1, 2],
       right: [10, 20]
     })
+    // The silent clamp is now visible (openclip-36u): a per-side count mismatch
+    // (left 3 vs right 2) risks misalignment, so it must be logged, not swallowed.
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/reframe.*motion.*mismatch/i))
+    warn.mockRestore()
+  })
+
+  it('does NOT warn when the two groups are equal length (openclip-36u)', () => {
+    const groups = [
+      { times: [0, 0.5], values: [1, 2] },
+      { times: [0, 0.5], values: [10, 20] }
+    ]
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    splitMotionSeries(groups, 0)
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
   })
 
   it('no groups → empty timeline', () => {
@@ -277,6 +326,62 @@ describe('splitMotionSeries', () => {
 // ---------------------------------------------------------------------------
 // detectReframe (orchestrator, injected run + detector)
 // ---------------------------------------------------------------------------
+
+describe('detectFromFrameChunks — streaming frame slicer (openclip-l41)', () => {
+  const FB = 48 // 4*4*3
+
+  it('slices frames that STRADDLE chunk boundaries and detects each exactly once', async () => {
+    const whole = Buffer.alloc(FB * 2)
+    // Uneven chunks (30 / 50 / 16) so neither frame aligns to a chunk edge.
+    const chunks = [whole.subarray(0, 30), whole.subarray(30, 80), whole.subarray(80, 96)]
+    let calls = 0
+    const detector = vi.fn((): FaceBox[] => {
+      calls += 1
+      return [{ x: calls, y: 0, w: 1, h: 1, confidence: 1 }]
+    })
+    const samples = await detectFromFrameChunks(chunks, {
+      frameBytes: FB,
+      modelSize: 4,
+      detector,
+      startTime: 10,
+      sampleFps: 2
+    })
+    expect(detector).toHaveBeenCalledTimes(2)
+    expect(samples).toEqual([
+      { timeMs: 10000, faces: [{ x: 1, y: 0, w: 1, h: 1, confidence: 1 }] },
+      { timeMs: 10500, faces: [{ x: 2, y: 0, w: 1, h: 1, confidence: 1 }] }
+    ])
+  })
+
+  it('ignores a trailing partial frame (incomplete final frame)', async () => {
+    const chunks = [Buffer.alloc(FB), Buffer.alloc(20)] // one full frame + 20 stray bytes
+    const detector = vi.fn((): FaceBox[] => [])
+    const samples = await detectFromFrameChunks(chunks, {
+      frameBytes: FB,
+      modelSize: 4,
+      detector,
+      startTime: 0,
+      sampleFps: 1
+    })
+    expect(detector).toHaveBeenCalledTimes(1)
+    expect(samples).toHaveLength(1)
+  })
+
+  it('aborts when the signal is already set', async () => {
+    const ctrl = new AbortController()
+    ctrl.abort()
+    await expect(
+      detectFromFrameChunks([Buffer.alloc(FB)], {
+        frameBytes: FB,
+        modelSize: 4,
+        detector: vi.fn((): FaceBox[] => []),
+        startTime: 0,
+        sampleFps: 1,
+        signal: ctrl.signal
+      })
+    ).rejects.toThrow(/aborted/)
+  })
+})
 
 describe('detectReframe', () => {
   const SIZE = 4 // tiny model size → 4*4*3 = 48 bytes per frame
@@ -313,6 +418,30 @@ describe('detectReframe', () => {
       { timeMs: 30500, faces: [{ x: 2, y: 0, w: 10, h: 10, confidence: 0.9 }] }
     ])
     expect(res.motion).toBeUndefined()
+  })
+
+  it('does NOT dispose an INJECTED detector — the caller owns it (audit fix openclip-y3h)', async () => {
+    // y3h disposes the WASM session ONLY for the DEFAULT detector it creates itself;
+    // a caller-injected detector must be left intact (its lifecycle is the caller's).
+    const stdout = Buffer.alloc(FRAME_BYTES)
+    const run = vi.fn<ReframeRunner>(async () => ({ stdout, stderr: '' }))
+    const dispose = vi.fn(async () => {})
+    const detector = Object.assign(
+      vi.fn((): FaceBox[] => []),
+      { dispose }
+    )
+    await detectReframe({
+      sourcePath: '/src/in.mp4',
+      startTime: 0,
+      endTime: 1,
+      sampleFps: 1,
+      source: { width: 100, height: 100 },
+      modelSize: SIZE,
+      run,
+      detector
+    })
+    expect(detector).toHaveBeenCalled()
+    expect(dispose).not.toHaveBeenCalled()
   })
 
   it('runs the motion pass and returns a MotionTimeline when motionRois are supplied', async () => {

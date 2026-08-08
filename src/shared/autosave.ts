@@ -42,6 +42,12 @@ export function createAutosave<T>(
   let timer: ReturnType<typeof setTimeout> | null = null
   let pending: T | null = null
   let hasPending = false
+  // Tail of the SERIALIZED save chain (audit fix openclip-9lf): each save runs only
+  // AFTER the previous one settles, so a slow save + a new edit can't fire two
+  // concurrent writes that interleave on the same `.ocproj` (the single-writer
+  // persistence invariant). A rejected save does NOT wedge the chain — the next save
+  // still runs.
+  let inFlight: Promise<void> = Promise.resolve()
 
   const fire = async (): Promise<void> => {
     timer = null
@@ -49,14 +55,27 @@ export function createAutosave<T>(
     const snapshot = pending as T
     pending = null
     hasPending = false
-    await save(snapshot)
+    const prev = inFlight
+    inFlight = (async () => {
+      // Wait for any in-flight save first; its failure must not block this write.
+      try {
+        await prev
+      } catch {
+        /* previous save failed — still attempt the newer write */
+      }
+      await save(snapshot)
+    })()
+    await inFlight
   }
 
   const autosave = ((payload: T): void => {
     pending = payload
     hasPending = true
     if (timer) clearTimeout(timer)
-    timer = setTimeout(() => void fire(), delayMs)
+    // The debounced fire is fire-and-forget: swallow its rejection here so a failed
+    // background save can't become an unhandled rejection. The chain stays intact, and
+    // `flush()` still surfaces a rejection to its caller (e.g. the app-close flush).
+    timer = setTimeout(() => void fire().catch(() => {}), delayMs)
   }) as Autosave<T>
 
   autosave.flush = async (): Promise<void> => {

@@ -149,8 +149,23 @@ export function installAutosave(delayMs?: number, onError?: (err: unknown) => vo
   }
   window.addEventListener('pagehide', onPageHide)
 
+  // Quit-time flush (audit fix openclip-49y): on Cmd-Q the main process HOLDS the quit and
+  // sends FLUSH_BEFORE_QUIT, which the preload re-posts as this window message (matching
+  // the preload's QUIT_FLUSH_MESSAGE constant). Flush the pending debounced save, then ACK
+  // via `system.autosaveFlushed()` so main quits the instant the write lands — closing the
+  // gap where pagehide's async flush races renderer teardown.
+  const QUIT_FLUSH_MESSAGE = 'openclip:flush-before-quit'
+  const onQuitFlush = (event: MessageEvent): void => {
+    if ((event.data as { __openclip?: unknown })?.__openclip !== QUIT_FLUSH_MESSAGE) return
+    void stop.flush().finally(() => {
+      void window.openclip.system.autosaveFlushed()
+    })
+  }
+  window.addEventListener('message', onQuitFlush)
+
   return () => {
     window.removeEventListener('pagehide', onPageHide)
+    window.removeEventListener('message', onQuitFlush)
     stop()
   }
 }

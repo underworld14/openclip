@@ -34,7 +34,11 @@ export function buildGenerateClipsRequest(
     durationSeconds: project.sourceVideo.duration,
     clipStyle: project.settings.clipStyle,
     numClips: settings.maxClips,
-    targetPlatform: project.settings.targetPlatform
+    targetPlatform: project.settings.targetPlatform,
+    // Pass the user's clip-length bounds so the handler honours them instead of its
+    // old hard-coded 15/90 (audit fix openclip-t0v).
+    minDuration: project.settings.minDuration,
+    maxDuration: project.settings.maxDuration
   }
 }
 

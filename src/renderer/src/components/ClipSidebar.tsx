@@ -7,6 +7,7 @@
  * (`sortClipsForSidebar`), unit-tested without a DOM.
  */
 
+import { useMemo } from 'react'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { ClipCard } from '@renderer/components/ClipCard'
 import { sortClipsForSidebar } from '@renderer/components/clipView'
@@ -16,7 +17,9 @@ export function ClipSidebar(): React.JSX.Element {
   const generating = useProjectStore((s) => s.generating)
   const generateError = useProjectStore((s) => s.generateError)
 
-  const ordered = sortClipsForSidebar(clips)
+  // Memoize the sort so it only re-runs when the clips array changes — not on every
+  // selection/approval re-render (audit fix openclip-don).
+  const ordered = useMemo(() => sortClipsForSidebar(clips), [clips])
 
   return (
     <div data-testid="clip-sidebar" className="flex h-full flex-col gap-2 p-3">
@@ -35,10 +38,9 @@ export function ClipSidebar(): React.JSX.Element {
         <p className="text-sm text-muted-foreground">No clips yet — run “Auto Generate Clips”.</p>
       )}
 
-      {ordered.map((vm) => {
-        const clip = clips.find((c) => c.id === vm.id)!
-        return <ClipCard key={vm.id} clip={clip} />
-      })}
+      {ordered.map((clip) => (
+        <ClipCard key={clip.id} clip={clip} />
+      ))}
     </div>
   )
 }

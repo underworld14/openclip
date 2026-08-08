@@ -29,7 +29,11 @@
  * caption stage passes `assPath` through `ExportClipOptions` — no other change.
  */
 
-import { runFfmpeg, type RunFfmpegOptions } from './ffmpeg-core'
+import { rename, rm } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { dirname, basename, join } from 'node:path'
+import { runFfmpeg as defaultRunFfmpeg, type RunFfmpegOptions } from './ffmpeg-core'
+import { assertSafePathArg } from '@main/utils/safe-arg'
 import type { AspectRatio } from '@shared/schema'
 import { keptDuration, removesAnything, type Range } from '@shared/keep-ranges'
 import type { ReframePlan } from '@shared/reframe-plan'
@@ -144,18 +148,76 @@ export function buildVf(opts: BuildVfOptions): string {
 }
 
 /**
- * Escape a filesystem path for use as a value inside an FFmpeg `-vf` filtergraph
- * (the `subtitles=` source). FFmpeg's filtergraph parser treats `:` `'` `\` `[`
- * `]` `,` `;` specially; libass burns are the only place we embed a path, so we
- * backslash-escape the characters that would otherwise break the graph.
+ * Escape a filesystem path for use as a value inside an FFmpeg `-vf`/
+ * `filter_complex` filtergraph (the `subtitles=`/`fontsdir=` source). Embedding a
+ * path in a filtergraph crosses TWO escaping levels (FFmpeg "Quoting and escaping":
+ * filter-option-value `\` `:` `'`, AND the filtergraph level where `,` `;` `[` `]`
+ * separate filters/chains/labels), so we backslash-escape the FULL set — an ordinary
+ * macOS path like `/Users/x/My [Clips]/a, b/clip.ass` would otherwise split the graph
+ * and break the burn (audit fix openclip-5ir/uas). `\` is escaped FIRST so the
+ * backslashes we add aren't themselves re-escaped.
  */
 export function escapeFilterPath(p: string): string {
-  return p.replace(/\\/g, '\\\\').replace(/:/g, '\\:').replace(/'/g, "\\'")
+  return p
+    .replace(/\\/g, '\\\\')
+    .replace(/:/g, '\\:')
+    .replace(/'/g, "\\'")
+    .replace(/,/g, '\\,')
+    .replace(/;/g, '\\;')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]')
 }
 
 /** Video-bitrate target per quality preset (PRD §6.9 quality presets). */
 export function videoBitrate(quality: '720p' | '1080p'): string {
   return quality === '720p' ? '5M' : '8M'
+}
+
+/**
+ * libx264 CRF per quality preset (lower = higher quality). The CPU fallback path
+ * must honour the chosen quality (audit fix openclip-ixa) — it previously pinned
+ * CRF 18 for every export, so a 720p "force CPU" clip came out near-1080p sized.
+ * Tuned to roughly track the videotoolbox bitrate targets: 720p→23, 1080p→18.
+ */
+export function x264Crf(quality: '720p' | '1080p'): string {
+  return quality === '720p' ? '23' : '18'
+}
+
+/**
+ * The `-c:v …`/bitrate args for the chosen encoder, shared by all three argv
+ * builders (audit fix openclip-6fz, previously copy-pasted 3×). Both branches now
+ * pin `-pix_fmt yuv420p` (audit fix openclip-ucs): a 10-bit / 4:2:2 source would
+ * otherwise re-encode into a clip that QuickTime/Safari and Instagram/TikTok upload
+ * paths refuse or mis-render. It's a no-op for already-8-bit-4:2:0 sources.
+ */
+export function codecArgs(opts: Pick<ExportArgsOptions, 'forceCpu' | 'quality'>): string[] {
+  return opts.forceCpu
+    ? ['-c:v', 'libx264', '-preset', 'medium', '-crf', x264Crf(opts.quality), '-pix_fmt', 'yuv420p']
+    : ['-c:v', 'h264_videotoolbox', '-b:v', videoBitrate(opts.quality), '-pix_fmt', 'yuv420p']
+}
+
+/**
+ * The shared audio + container + progress tail ending in the output path (audit fix
+ * openclip-6fz — previously repeated verbatim in all three builders): AAC 192k, a
+ * faststart mp4 (moov atom up front, web-playable), and `-progress pipe:2 -nostats`
+ * so ffmpeg-core's stderr parser can stream progress.
+ */
+export function outputTailArgs(outputPath: string): string[] {
+  return [
+    '-c:a',
+    'aac',
+    '-b:a',
+    '192k',
+    '-movflags',
+    '+faststart',
+    '-progress',
+    'pipe:2',
+    '-nostats',
+    // Guard the trailing positional output path against option injection (audit fix
+    // openclip-6l6): an outputPath beginning with '-' (e.g. '-y') would be parsed by
+    // ffmpeg as a flag instead of a filename.
+    assertSafePathArg(outputPath, 'outputPath')
+  ]
 }
 
 // ============================================================================
@@ -230,7 +292,9 @@ export function resolveLogo(
   const position = opts.logoPosition ?? DEFAULT_LOGO_POSITION
   const logoW = Math.max(1, Math.round(outW * scale))
   return {
-    input: ['-i', opts.logoPath],
+    // Option-injection guard (audit fix openclip-6l6): logoPath comes from the brand
+    // template on disk; a leading '-' would be parsed by ffmpeg as a flag.
+    input: ['-i', assertSafePathArg(opts.logoPath, 'logoPath')],
     scaleNode: `[${inputIndex}:v]scale=${logoW}:-1[logo]`,
     xy: overlayXY(position, margin)
   }
@@ -337,10 +401,6 @@ export function exportClipArgs(opts: ExportArgsOptions): string[] {
       `ffmpeg-export: non-positive clip span (start=${opts.startTime}, end=${opts.endTime})`
     )
   }
-  const codecArgs = opts.forceCpu
-    ? ['-c:v', 'libx264', '-preset', 'medium', '-crf', '18']
-    : ['-c:v', 'h264_videotoolbox', '-b:v', videoBitrate(opts.quality)]
-
   // Brand-kit logo (Part K): an overlay needs the logo as a 2nd input, which a
   // simple `-vf` chain can't express — so a logo SWITCHES this path to a
   // `filter_complex` (+ explicit `-map [v] -map 0:a`). With NO logo we keep the
@@ -367,17 +427,8 @@ export function exportClipArgs(opts: ExportArgsOptions): string[] {
       '[v]',
       '-map',
       '0:a',
-      ...codecArgs,
-      '-c:a',
-      'aac',
-      '-b:a',
-      '192k',
-      '-movflags',
-      '+faststart',
-      '-progress',
-      'pipe:2',
-      '-nostats',
-      opts.outputPath
+      ...codecArgs(opts),
+      ...outputTailArgs(opts.outputPath)
     ]
   }
 
@@ -399,18 +450,8 @@ export function exportClipArgs(opts: ExportArgsOptions): string[] {
       fontsDir: opts.fontsDir,
       reframePlan: opts.reframePlan
     }),
-    ...codecArgs,
-    '-c:a',
-    'aac',
-    '-b:a',
-    '192k',
-    // streaming-friendly mp4 (moov atom up front) so the export is web-playable:
-    '-movflags',
-    '+faststart',
-    '-progress',
-    'pipe:2',
-    '-nostats',
-    opts.outputPath
+    ...codecArgs(opts),
+    ...outputTailArgs(opts.outputPath)
   ]
 }
 
@@ -448,8 +489,11 @@ export function exportClipArgsMultiRange(opts: ExportArgsOptions): string[] {
   // the kept spans; single-quoted so the commas stay literal to the filtergraph.
   const rel = (n: number): number => Math.round((n - opts.startTime) * 1000) / 1000
   const between = keep.map(([a, b]) => `between(t,${rel(a)},${rel(b)})`).join('+')
-  // The reframe crop runs BEFORE `select`, so it sees each frame's UNcompressed
-  // clip-relative `t` — a `pan` `xExpr` (authored clip-relative) is correct here.
+  // INVARIANT (audit fix openclip-dwu — do NOT reorder): the reframe crop MUST
+  // precede `select` so a `pan` xExpr is evaluated against the UNcompressed
+  // clip-relative source `t` the planner authored. Moving the crop AFTER select (to
+  // match the silence-removal mental model) would feed the xExpr the compressed
+  // timeline and mis-time every pan keyframe — a silent correctness regression.
   // `select` then drops the silence frames and `setpts` re-stamps the survivors to
   // a compressed 0-based output (audio `aselect`'d in lock-step). static/center
   // crops are constant, so the ordering is harmless for them.
@@ -465,9 +509,6 @@ export function exportClipArgsMultiRange(opts: ExportArgsOptions): string[] {
     opts.fontsDir
   )
   const achain = `[0:a]aselect='${between}',asetpts=N/SR/TB[a]`
-  const codecArgs = opts.forceCpu
-    ? ['-c:v', 'libx264', '-preset', 'medium', '-crf', '18']
-    : ['-c:v', 'h264_videotoolbox', '-b:v', videoBitrate(opts.quality)]
   return [
     '-hide_banner',
     '-y',
@@ -484,25 +525,18 @@ export function exportClipArgsMultiRange(opts: ExportArgsOptions): string[] {
     '[v]',
     '-map',
     '[a]',
-    ...codecArgs,
-    '-c:a',
-    'aac',
-    '-b:a',
-    '192k',
-    '-movflags',
-    '+faststart',
-    '-progress',
-    'pipe:2',
-    '-nostats',
-    opts.outputPath
+    ...codecArgs(opts),
+    ...outputTailArgs(opts.outputPath)
   ]
 }
 
 /**
  * Build the SPLIT-screen (2-up) argv (Part J). A `split` `ReframePlan` can't be
  * rendered in a single `-vf` chain — it needs a `filter_complex` that forks the
- * (optionally jump-cut) video into two crops and `vstack`s them into one 9:16
- * frame. Each tile is a 1080×960 half; stacked → 1080×1920 (PRD §6.5 9:16).
+ * (optionally jump-cut) video into two crops and `vstack`s them into one frame of
+ * the CHOSEN aspect. Each tile is a full-width × half-height half of
+ * `outputDimensions(aspect)`; stacked → that aspect's output size (audit fix
+ * openclip-omd; default 9:16 → two 1080×960 tiles → 1080×1920).
  *
  *   ffmpeg -ss <start> -i src -t <dur> -filter_complex
  *     "[0:v][,select='…',setpts=…]split=2[l][r];
@@ -527,9 +561,16 @@ export function exportClipArgsSplit(opts: ExportArgsOptions): string[] {
     throw new Error('ffmpeg-export: exportClipArgsSplit requires a split ReframePlan')
   }
   const [r0, r1] = plan.regions
-  // Each tile fills the top/bottom 1080×960 half of the 1080×1920 9:16 output.
-  const TILE_W = 1080
-  const TILE_H = 960
+  // Each tile fills the top/bottom half of the CHOSEN aspect's output (audit fix
+  // openclip-omd): full output width × half its height, vstacked → the full output
+  // size. Previously hard-coded 1080×960 (9:16) so a 4:5/1:1/16:9 split silently
+  // produced a 9:16 file with wrong reported dims. Every output height is even, so
+  // TILE_H = height/2 is integral and 2× sums back to the exact output height; the
+  // ENCODED vstack frame is even on both axes (required by yuv420p) even where a
+  // tile is odd (4:5 → 1080×675 tiles → an even 1080×1350) — intermediate filter
+  // tiles aren't encoded, so their odd height is harmless.
+  const { width: TILE_W, height: outH } = outputDimensions(opts.aspectRatio)
+  const TILE_H = outH / 2
   const duration = opts.endTime - opts.startTime
 
   // Jump-cut (Part I.4): only when the kept ranges actually drop something. The
@@ -570,9 +611,6 @@ export function exportClipArgsSplit(opts: ExportArgsOptions): string[] {
   const aMap = removing ? '[a]' : '0:a'
   if (removing) fc += `;[0:a]aselect='${between}',asetpts=N/SR/TB[a]`
 
-  const codecArgs = opts.forceCpu
-    ? ['-c:v', 'libx264', '-preset', 'medium', '-crf', '18']
-    : ['-c:v', 'h264_videotoolbox', '-b:v', videoBitrate(opts.quality)]
   return [
     '-hide_banner',
     '-y',
@@ -590,17 +628,8 @@ export function exportClipArgsSplit(opts: ExportArgsOptions): string[] {
     '[v]',
     '-map',
     aMap,
-    ...codecArgs,
-    '-c:a',
-    'aac',
-    '-b:a',
-    '192k',
-    '-movflags',
-    '+faststart',
-    '-progress',
-    'pipe:2',
-    '-nostats',
-    opts.outputPath
+    ...codecArgs(opts),
+    ...outputTailArgs(opts.outputPath)
   ]
 }
 
@@ -627,12 +656,13 @@ export function thumbnailArgs(opts: ThumbnailArgsOptions): string[] {
     '-ss',
     String(opts.atTime),
     '-i',
-    opts.sourcePath,
+    // Option-injection guard for both path args (audit fix openclip-6l6, defense-in-depth).
+    assertSafePathArg(opts.sourcePath, 'sourcePath'),
     '-vframes',
     '1',
     '-vf',
     buildVf({ aspectRatio: opts.aspectRatio }),
-    opts.outputPath
+    assertSafePathArg(opts.outputPath, 'outputPath')
   ]
 }
 
@@ -647,6 +677,12 @@ export interface ExportClipOptions extends ExportArgsOptions {
   signal?: AbortSignal
   /** Override the ffmpeg binary (tests / smoke). */
   binPath?: string
+  /** Register the encode child's PID for the sidecar kill-on-quit backstop (openclip-a00). */
+  onSpawn?: (pid: number) => void
+  /** Untrack the encode child's PID when it exits (openclip-yul). */
+  onExit?: (pid: number) => void
+  /** Inject the ffmpeg spawn driver (tests). Default: the real `runFfmpeg`. */
+  runFfmpeg?: (opts: RunFfmpegOptions) => Promise<unknown>
 }
 
 export interface ExportClipResult {
@@ -663,6 +699,29 @@ export interface ExportClipResult {
  * body). Rejects on a non-zero ffmpeg exit (the runner maps it to a typed error).
  */
 export async function exportClip(opts: ExportClipOptions): Promise<ExportClipResult> {
+  const runFfmpeg = opts.runFfmpeg ?? defaultRunFfmpeg
+  // Guard the user-/project-supplied path args at the spawn boundary against option
+  // injection (audit fix openclip-6l6): JOB_START('export', params) is callable
+  // directly by the renderer with an attacker-chosen outputPath, and sourcePath comes
+  // verbatim from the project. A leading '-' on either would be parsed by ffmpeg as a
+  // flag. (outputTailArgs only sees the derived temp path, so the real outputPath must
+  // be checked here.)
+  assertSafePathArg(opts.sourcePath, 'sourcePath')
+  assertSafePathArg(opts.outputPath, 'outputPath')
+  // Atomic output (audit fix openclip-8dg): encode to a HIDDEN sibling temp in the
+  // SAME directory as the user's chosen outputPath, then `rename` it onto the target
+  // only after a clean exit. On cancel/SIGKILL or a non-zero exit the partial (which,
+  // with +faststart, is an unplayable file whose moov atom was never written) is left
+  // under the temp name and unlinked — so the user's export folder never shows a
+  // truncated half-written clip and the final file appears atomically. Same-dir temp
+  // keeps the rename atomic (no cross-filesystem copy).
+  const finalOut = opts.outputPath
+  // Cap the temp stem so a near-255-char chosen filename can't push the `.part.mp4`
+  // temp over ENAMETOOLONG; the random suffix still makes it unique + collision-free.
+  const tmpStem = basename(finalOut).slice(0, 200)
+  const tmpOut = join(dirname(finalOut), `.${tmpStem}.${randomUUID()}.part.mp4`)
+  const argvOpts: ExportClipOptions = { ...opts, outputPath: tmpOut }
+
   // Jump-cut path (Part I.4): only when keep ranges actually drop something —
   // otherwise the cheaper single `-ss/-to` cut. The output (and progress total)
   // is the COMPRESSED kept duration, not the original span.
@@ -675,15 +734,14 @@ export async function exportClip(opts: ExportClipOptions): Promise<ExportClipRes
   // along whichever of the latter two runs.
   const split = opts.reframePlan?.mode === 'split'
   const args = split
-    ? exportClipArgsSplit(opts)
+    ? exportClipArgsSplit(argvOpts)
     : jumpCut
-      ? exportClipArgsMultiRange(opts)
-      : exportClipArgs(opts)
-  // Split always renders a 1080×1920 (9:16) 2-up frame; otherwise the aspect's
-  // output size. The reported result dims drive thumbnails/UI — keep them honest.
-  const { width, height } = split
-    ? { width: 1080, height: 1920 }
-    : outputDimensions(opts.aspectRatio)
+      ? exportClipArgsMultiRange(argvOpts)
+      : exportClipArgs(argvOpts)
+  // Split renders a 2-up frame at the CHOSEN aspect's output size (audit fix
+  // openclip-omd), same as the non-split paths. The reported result dims drive
+  // thumbnails/UI — keep them honest.
+  const { width, height } = outputDimensions(opts.aspectRatio)
   const durationSec = jumpCut ? keptDuration(opts.keepRanges!) : opts.endTime - opts.startTime
 
   const runOpts: RunFfmpegOptions = {
@@ -691,14 +749,22 @@ export async function exportClip(opts: ExportClipOptions): Promise<ExportClipRes
     totalDurationSec: durationSec,
     binPath: opts.binPath,
     signal: opts.signal,
+    onSpawn: opts.onSpawn,
+    onExit: opts.onExit,
     onProgress: (pct) => {
       if (pct !== undefined) opts.onProgress?.(pct)
     }
   }
-  await runFfmpeg(runOpts)
+  try {
+    await runFfmpeg(runOpts)
+    await rename(tmpOut, finalOut)
+  } catch (err) {
+    await rm(tmpOut, { force: true }).catch(() => {})
+    throw err
+  }
 
   return {
-    outputPath: opts.outputPath,
+    outputPath: finalOut,
     width,
     height,
     durationMs: Math.round(durationSec * 1000)
@@ -712,7 +778,7 @@ export async function exportClip(opts: ExportClipOptions): Promise<ExportClipRes
 export async function generateThumbnail(
   opts: ThumbnailArgsOptions & { signal?: AbortSignal; binPath?: string }
 ): Promise<{ thumbnailPath: string }> {
-  await runFfmpeg({
+  await defaultRunFfmpeg({
     args: thumbnailArgs(opts),
     binPath: opts.binPath,
     signal: opts.signal

@@ -32,6 +32,7 @@ import { existsSync } from 'node:fs'
 import type { WordTimestamp } from '@shared/schema'
 import { parseWhisperJson, type ParsedTranscript, type WhisperJson } from './whisper-parse'
 import { whisperCliPath, whisperResourcesDir } from '@main/utils/paths'
+import { assertSafePathArg } from '@main/utils/safe-arg'
 
 // ============================================================================
 // Argument construction (the Gate-A exact invocation)
@@ -54,11 +55,16 @@ export interface WhisperArgsOptions {
  * when a fixed language is requested (otherwise whisper auto-detects).
  */
 export function whisperArgs(opts: WhisperArgsOptions): string[] {
+  // Guard the path args against option injection (audit fix openclip-6l6): a model/
+  // wav/out path beginning with '-' would be parsed by whisper-cli as a flag.
+  const model = assertSafePathArg(opts.model, 'model')
+  const wavPath = assertSafePathArg(opts.wavPath, 'wavPath')
+  const outBase = assertSafePathArg(opts.outBase, 'outBase')
   const args = [
     '-m',
-    opts.model,
+    model,
     '-f',
-    opts.wavPath,
+    wavPath,
     '-ml',
     '1',
     '--split-on-word',
@@ -67,7 +73,7 @@ export function whisperArgs(opts: WhisperArgsOptions): string[] {
     '-pp'
   ]
   if (opts.language) args.push('-l', opts.language)
-  args.push('-of', opts.outBase)
+  args.push('-of', outBase)
   return args
 }
 
@@ -146,6 +152,8 @@ export interface RunWhisperOptions extends WhisperArgsOptions {
   binPath?: string
   /** Register the spawned PID with the sidecar for kill-on-quit. */
   onSpawn?: (pid: number) => void
+  /** Untrack the PID when the child exits (audit fix openclip-yul). */
+  onExit?: (pid: number) => void
 }
 
 /** Resolve a safe cwd for whisper (resources dir if it exists, else cwd). */
@@ -181,6 +189,12 @@ export function runWhisper(opts: RunWhisperOptions): Promise<ParsedTranscript> {
 
     let stderr = ''
     let stdoutBuf = ''
+    // Progress line buffer (audit fix openclip-2p4): the `-pp` progress arrives as
+    // `whisper_print_progress_callback: progress = N%` lines on stderr, and a chunk
+    // boundary can split one mid-line so parseWhisperProgress misses it. Carry the
+    // trailing partial across chunks and parse only complete lines (mirrors the
+    // stdout word buffer below). Raw `stderr` accumulation is unchanged.
+    let progressResidual = ''
 
     const onAbort = (): void => {
       child.kill('SIGKILL')
@@ -194,8 +208,14 @@ export function runWhisper(opts: RunWhisperOptions): Promise<ParsedTranscript> {
       const text = buf.toString()
       stderr += text
       if (opts.onProgress) {
-        const pct = parseWhisperProgress(text)
-        if (pct !== undefined) opts.onProgress(pct)
+        progressResidual += text
+        let nl: number
+        while ((nl = progressResidual.indexOf('\n')) !== -1) {
+          const line = progressResidual.slice(0, nl)
+          progressResidual = progressResidual.slice(nl + 1)
+          const pct = parseWhisperProgress(line)
+          if (pct !== undefined) opts.onProgress(pct)
+        }
       }
     })
 
@@ -216,11 +236,16 @@ export function runWhisper(opts: RunWhisperOptions): Promise<ParsedTranscript> {
 
     child.on('error', (err) => {
       opts.signal?.removeEventListener('abort', onAbort)
+      // Untrack on error too (defensive symmetry, review follow-up to openclip-yul).
+      if (typeof child.pid === 'number') opts.onExit?.(child.pid)
       reject(err)
     })
 
     child.on('close', (code) => {
       opts.signal?.removeEventListener('abort', onAbort)
+      // Untrack the exited PID so a later quit/cancel can't SIGKILL a recycled foreign
+      // PID (audit fix openclip-yul).
+      if (typeof child.pid === 'number') opts.onExit?.(child.pid)
       if (opts.signal?.aborted) {
         reject(new Error('whisper aborted'))
         return

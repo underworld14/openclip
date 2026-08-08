@@ -55,6 +55,25 @@ export type JobErrorCode =
   | 'API_RATE_LIMIT'
   | 'TIMEOUT'
 
+/**
+ * A CLASSIFIED job failure a runner (or the services it calls) can throw so the
+ * sidecar maps the right `{code, retriable}` to the terminal `error` event instead
+ * of bucketing everything as a retriable `SIDECAR_CRASH` (audit fix openclip-1ly):
+ * an invalid URL or a model that can't be verified is DETERMINISTIC — retrying can't
+ * help — so it should surface as a non-retriable `INPUT_INVALID`. An unexpected throw
+ * (no `JobError`) stays a retriable `SIDECAR_CRASH`.
+ */
+export class JobError extends Error {
+  constructor(
+    readonly code: JobErrorCode,
+    message: string,
+    readonly retriable: boolean
+  ) {
+    super(message)
+    this.name = 'JobError'
+  }
+}
+
 // ============================================================================
 // JobEvent<R> — one discriminated union streamed over the per-job MessagePort
 // (PRD §10.2). `R` is the per-kind result type; `P` the per-kind partial type.

@@ -152,11 +152,15 @@ export function registerAiHandlers(ctx: IpcContext): void {
       videoTitle: req.videoTitle,
       durationSeconds: req.durationSeconds,
       clipStyle: req.clipStyle,
-      numClips: req.numClips,
+      // Clamp numClips to a sane 1..50 at the trust boundary (audit fix openclip-9hc):
+      // an unbounded value (e.g. 10000) would inflate the prompt + BYOK token cost and
+      // risk output truncation, and a non-positive value yields an always-empty result.
+      numClips: Math.max(1, Math.min(50, Math.floor(req.numClips) || 1)),
       targetPlatform: req.targetPlatform,
-      // PRD §9.3 defaults; the renderer passes project-level overrides via settings.
-      minDuration: 15,
-      maxDuration: 90,
+      // Honour the user's project-level clip-length bounds when supplied; PRD §9.3
+      // defaults otherwise (audit fix openclip-t0v — previously hard-coded 15/90).
+      minDuration: req.minDuration ?? 15,
+      maxDuration: req.maxDuration ?? 90,
       model: req.model,
       cache: clipCache
     })

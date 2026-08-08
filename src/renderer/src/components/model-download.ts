@@ -44,6 +44,12 @@ export interface RunModelDownloadOptions {
   bridge: OpenClipBridge
   model: WhisperModelSize
   onProgress?: (receivedBytes: number, totalBytes: number) => void
+  /**
+   * Receives the job id as soon as the job starts, so the caller can cancel it
+   * (FEAT-kncqxf). Without this the dialog had no handle on the download and
+   * therefore no way to offer a Cancel button.
+   */
+  onStart?: (jobId: string) => void
 }
 
 /**
@@ -59,6 +65,7 @@ export async function runModelDownload(
     'model-download',
     { model: opts.model },
     {
+      onStart: (jobId) => opts.onStart?.(jobId),
       onPartial: (data) => opts.onProgress?.(data.receivedBytes, data.totalBytes)
     }
   )

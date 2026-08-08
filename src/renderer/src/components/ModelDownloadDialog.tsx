@@ -18,6 +18,13 @@ import {
 } from '@renderer/components/model-download'
 import { Button } from '@renderer/components/ui/button'
 import { Progress } from '@renderer/components/ui/progress'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle
+} from '@renderer/components/ui/dialog'
 
 export interface ModelDownloadDialogProps {
   open?: boolean
@@ -25,12 +32,21 @@ export interface ModelDownloadDialogProps {
   initialModel?: WhisperModelSize
   /** Called once a model finishes downloading. */
   onDownloaded?: (model: WhisperModelSize) => void
+  /**
+   * Called when the user dismisses the dialog (Escape, backdrop, or Cancel).
+   *
+   * Previously there was no way out at all: a hand-rolled `fixed inset-0` div
+   * with no Escape handler, no backdrop dismiss and no close control, so the only
+   * exit from a mis-click was completing a 75MB–2.9GB download (FEAT-kncqxf).
+   */
+  onDismiss?: () => void
 }
 
 export function ModelDownloadDialog({
   open = false,
   initialModel,
-  onDownloaded
+  onDownloaded,
+  onDismiss
 }: ModelDownloadDialogProps): React.JSX.Element | null {
   const [selected, setSelected] = useState<WhisperModelSize>(initialModel ?? DEFAULT_WHISPER_MODEL)
   const [pct, setPct] = useState(0)
@@ -38,6 +54,8 @@ export function ModelDownloadDialog({
   const [err, setErr] = useState<string | null>(null)
   const [done, setDone] = useState(false)
   const [prevInitial, setPrevInitial] = useState(initialModel)
+  // Held so Cancel can abort an in-flight download instead of only hiding the UI.
+  const [jobId, setJobId] = useState<string | null>(null)
 
   // The dialog is mounted once and toggled via `open`; `useState` only read
   // `initialModel` on first mount, so when the import flow later needs a DIFFERENT
@@ -60,6 +78,7 @@ export function ModelDownloadDialog({
         await runModelDownload({
           bridge: window.openclip,
           model,
+          onStart: (id) => setJobId(id),
           onProgress: (received, total) => {
             if (total > 0) setPct(Math.min(100, Math.round((received / total) * 100)))
           }
@@ -70,23 +89,34 @@ export function ModelDownloadDialog({
         setErr(e instanceof Error ? e.message : String(e))
       } finally {
         setBusy(false)
+        setJobId(null)
       }
     },
     [onDownloaded]
   )
 
+  /**
+   * Dismiss. A running download is CANCELLED rather than orphaned — hiding the
+   * dialog while multiple gigabytes keep streaming would be a worse dead end
+   * than the one this replaces.
+   */
+  const dismiss = useCallback((): void => {
+    if (jobId) void window.openclip.jobs.cancel(jobId)
+    onDismiss?.()
+  }, [jobId, onDismiss])
+
   if (!open) return null
 
   return (
-    <div
-      data-testid="model-download-dialog"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-    >
-      <div className="w-[28rem] max-w-[90vw] rounded-lg border bg-background p-4 shadow-lg">
-        <h2 className="mb-1 text-base font-semibold">Download a transcription model</h2>
-        <p className="mb-3 text-xs text-muted-foreground">
-          Models are downloaded on demand (PRD §13). Pick a speed/quality/disk trade-off.
-        </p>
+    <Dialog open={open} onOpenChange={(o) => !o && dismiss()}>
+      <DialogContent className="app-no-drag" data-testid="model-download-dialog">
+        <DialogHeader>
+          <DialogTitle>Choose a transcription model</DialogTitle>
+          <DialogDescription>
+            Transcription runs entirely on this Mac, so the model has to be downloaded once. Larger
+            models are more accurate and slower.
+          </DialogDescription>
+        </DialogHeader>
         <ul className="mb-3 flex flex-col gap-1" data-testid="model-table">
           {WHISPER_MODEL_TABLE.map((row) => (
             <li key={row.model}>
@@ -122,7 +152,10 @@ export function ModelDownloadDialog({
             {err}
           </span>
         )}
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="ghost" data-testid="model-download-cancel" onClick={dismiss}>
+            {busy ? 'Cancel download' : 'Not now'}
+          </Button>
           <Button
             size="sm"
             data-testid="model-download-start"
@@ -132,8 +165,8 @@ export function ModelDownloadDialog({
             {busy ? 'Downloading…' : `Download ${selected}`}
           </Button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 

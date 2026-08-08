@@ -427,3 +427,72 @@ describe('import-controller: transcription language (Part I cross-language)', ()
     expect(runImportPipeline).toHaveBeenCalledWith(expect.objectContaining({ language: undefined }))
   })
 })
+
+describe('resuming the import a model download interrupted (FEAT-kncqxf)', () => {
+  /** A controller whose model gate fails until `installed` flips true. */
+  function buildWithMissingModel(): ReturnType<typeof build> & { install: () => void } {
+    let installed = false
+    const onNeedModel = vi.fn()
+    const b = build({
+      bridge: {
+        model: { status: async () => [{ model: 'base', installed }] },
+        jobs: { cancel: vi.fn(async () => {}) }
+      } as unknown as ImportControllerDeps['bridge'],
+      onNeedModel
+    })
+    return Object.assign(b, {
+      install: () => {
+        installed = true
+      }
+    })
+  }
+
+  it('remembers the file import that was blocked, and replays it after the download', async () => {
+    // The model dialog used to be a dead end: it downloaded the model, closed,
+    // and left the user staring at the Welcome screen wondering why nothing
+    // happened. The controller now holds the intent so it can be replayed.
+    const { ctl, install, runImportPipeline } = buildWithMissingModel()
+
+    await ctl.importFile('/movies/talk.mp4')
+    expect(runImportPipeline).not.toHaveBeenCalled()
+    expect(ctl.getState().pendingImport).toEqual({ kind: 'file', value: '/movies/talk.mp4' })
+
+    install()
+    await ctl.resumePending()
+
+    expect(runImportPipeline).toHaveBeenCalledTimes(1)
+    expect(ctl.getState().pendingImport).toBeNull()
+  })
+
+  it('remembers a blocked URL import too', async () => {
+    const storage = fakeStorage()
+    storage.setItem(CONSENT_KEY, '1') // past the one-time TOS gate
+    const { ctl } = build({
+      bridge: {
+        model: { status: async () => [{ model: 'base', installed: false }] },
+        jobs: { cancel: vi.fn(async () => {}) }
+      } as unknown as ImportControllerDeps['bridge'],
+      storage
+    })
+
+    await ctl.importUrl('https://youtu.be/abc')
+
+    expect(ctl.getState().pendingImport).toEqual({ kind: 'url', value: 'https://youtu.be/abc' })
+  })
+
+  it('clears the pending intent when the user cancels instead of downloading', async () => {
+    const { ctl } = buildWithMissingModel()
+    await ctl.importFile('/movies/talk.mp4')
+    expect(ctl.getState().pendingImport).not.toBeNull()
+
+    ctl.discardPending()
+
+    expect(ctl.getState().pendingImport).toBeNull()
+  })
+
+  it('resumePending is a no-op when nothing was blocked', async () => {
+    const { ctl, runImportPipeline } = build()
+    await ctl.resumePending()
+    expect(runImportPipeline).not.toHaveBeenCalled()
+  })
+})

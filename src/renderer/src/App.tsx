@@ -42,6 +42,7 @@ import { createGenerateClipsHandler } from '@renderer/components/generateClips'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { installAutosave } from '@renderer/stores/projectStore/autosave'
+import { useImportController } from '@renderer/hooks/useImportController'
 
 type Modal = 'none' | 'import' | 'export' | 'settings'
 
@@ -85,6 +86,11 @@ function App(): React.JSX.Element {
     setNeededModel(model)
     setModelDialogOpen(true)
   }
+
+  // The import controller is a shared singleton, so this is the SAME in-flight
+  // import ImportPanel started — which is what lets the model dialog hand the
+  // interrupted import back instead of silently abandoning it (FEAT-kncqxf).
+  const importCtl = useImportController()
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-transparent text-foreground">
@@ -216,7 +222,19 @@ function App(): React.JSX.Element {
       <ModelDownloadDialog
         open={modelDialogOpen}
         initialModel={neededModel}
-        onDownloaded={() => setModelDialogOpen(false)}
+        onDownloaded={() => {
+          setModelDialogOpen(false)
+          // Pick the import back up rather than dropping the user on the Welcome
+          // screen wondering why nothing happened (FEAT-kncqxf).
+          if (importCtl.pendingImport) {
+            toast.info('Model ready — resuming your import…')
+            void importCtl.resumePending()
+          }
+        }}
+        onDismiss={() => {
+          setModelDialogOpen(false)
+          importCtl.discardPending()
+        }}
       />
 
       {/* App-wide toasts (autosave failures, etc.). Mounted once. */}

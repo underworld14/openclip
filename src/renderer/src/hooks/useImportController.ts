@@ -13,6 +13,10 @@ import type { WhisperModelSize } from '@shared/jobs'
 import type { Project } from '@shared/schema'
 import { createBlankProject, hydrateFromProject } from '@renderer/hooks/useProject'
 import { createImportController } from '@renderer/hooks/import-controller'
+import type {
+  ImportController as CoreImportController,
+  PendingImport
+} from '@renderer/hooks/import-controller'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useUiStore } from '@renderer/stores/uiStore'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
@@ -37,6 +41,32 @@ export interface ImportController {
   importAny: (value: string) => Promise<void>
   /** Cancel the in-flight import (download/transcribe) — openclip-2bm. */
   cancel: () => Promise<void>
+  /** The import a missing whisper model turned away, if any (FEAT-kncqxf). */
+  pendingImport: PendingImport | null
+  /** Replay that import once the model is installed. */
+  resumePending: () => Promise<void>
+  /** Forget it — the user cancelled the download instead. */
+  discardPending: () => void
+}
+
+/**
+ * The controller is a MODULE SINGLETON, not per-component state.
+ *
+ * It used to be built in a `useMemo` inside this hook, which meant every caller
+ * got its own instance and — worse — the instance died with the component. The
+ * ImportPanel unmounts partway through a first-run import (App swaps to the
+ * editor as soon as the first transcript partial lands), taking the in-flight
+ * import's progress, cancel and error state with it. A single shared instance
+ * lets any component observe the same import, and lets App resume the import the
+ * model dialog interrupted (FEAT-kncqxf) even though ImportPanel started it.
+ *
+ * The seams it closes over are all module-level zustand stores and
+ * `window.openclip`, so there is nothing per-component to capture.
+ */
+let sharedController: CoreImportController | null = null
+/** TEST-ONLY: drop the singleton so specs start from a clean controller. */
+export function __resetImportControllerForTests(): void {
+  sharedController = null
 }
 
 export function useImportController(opts: ImportControllerOptions = {}): ImportController {
@@ -62,7 +92,7 @@ export function useImportController(opts: ImportControllerOptions = {}): ImportC
 
   const controller = useMemo(
     () =>
-      createImportController({
+      (sharedController ??= createImportController({
         bridge: window.openclip,
         createBlankProject,
         store: {
@@ -90,8 +120,8 @@ export function useImportController(opts: ImportControllerOptions = {}): ImportC
         // latest Settings value applies without rebuilding the controller.
         getLanguage: () => useSettingsStore.getState().settings.language,
         onNeedModel: (m) => onNeedModelRef.current?.(m)
-      }),
-    // Built once; all referenced actions are stable zustand refs.
+      })),
+    // Built once for the whole app; all referenced actions are stable zustand refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   )
@@ -109,6 +139,9 @@ export function useImportController(opts: ImportControllerOptions = {}): ImportC
     importFile: controller.importFile,
     importUrl: controller.importUrl,
     importAny: controller.importAny,
-    cancel: controller.cancel
+    cancel: controller.cancel,
+    pendingImport: state.pendingImport,
+    resumePending: controller.resumePending,
+    discardPending: controller.discardPending
   }
 }

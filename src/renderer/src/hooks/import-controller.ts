@@ -37,6 +37,12 @@ import {
 export const CONSENT_KEY = 'openclip:url-consent'
 const DEFAULT_MODEL: WhisperModelSize = 'base'
 
+/** An import that was blocked on a missing whisper model, kept so it can be replayed. */
+export interface PendingImport {
+  kind: 'file' | 'url'
+  value: string
+}
+
 export interface ImportControllerState {
   busy: boolean
   pct: number
@@ -44,6 +50,14 @@ export interface ImportControllerState {
   error: string | null
   /** True when a URL import is blocked awaiting the one-time TOS consent. */
   needsConsent: boolean
+  /**
+   * The import the missing-model gate turned away (audit fix FEAT-kncqxf).
+   *
+   * Without this the model dialog was a dead end: it downloaded the model,
+   * closed, and left the user back on the Welcome screen with no indication that
+   * their import had been abandoned and had to be started again by hand.
+   */
+  pendingImport: PendingImport | null
 }
 
 /** The minimal `localStorage`-like surface the consent gate needs (injectable). */
@@ -134,6 +148,10 @@ export interface ImportController {
   cancel(): Promise<void>
   acceptConsent(): void
   declineConsent(): void
+  /** Replay the import the missing-model gate turned away (FEAT-kncqxf). No-op if none. */
+  resumePending(): Promise<void>
+  /** Forget the blocked import — the user cancelled the model download instead. */
+  discardPending(): void
 }
 
 function basename(p: string): string {
@@ -167,7 +185,8 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     pct: 0,
     stage: '',
     error: null,
-    needsConsent: false
+    needsConsent: false,
+    pendingImport: null
   }
   let pendingUrl: string | null = null
   // The in-flight streaming job's id (download or transcribe), tracked so cancel() can
@@ -283,6 +302,25 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     deps.ui?.setView?.('editor')
   }
 
+  /**
+   * Replay the import the missing-model gate turned away.
+   *
+   * Clears the intent BEFORE replaying so a second failure re-records it fresh
+   * rather than resuming a stale value, and so a double-fire (dialog closing and
+   * `onDownloaded` both calling in) cannot start the same import twice.
+   */
+  async function resumePending(): Promise<void> {
+    const pending = state.pendingImport
+    if (!pending) return
+    set({ pendingImport: null })
+    if (pending.kind === 'file') await importFile(pending.value)
+    else await importUrl(pending.value)
+  }
+
+  function discardPending(): void {
+    set({ pendingImport: null })
+  }
+
   async function importFile(path: string): Promise<void> {
     if (!path) return
     // Per-import task key (audit fix openclip-ce3): a hardcoded 'import' key meant two
@@ -292,7 +330,8 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     set({ busy: true, error: null, pct: 0 })
     try {
       if (!(await ensureModel())) {
-        set({ busy: false })
+        // Hold the intent so the model dialog can hand it back (FEAT-kncqxf).
+        set({ busy: false, pendingImport: { kind: 'file', value: path } })
         return
       }
       await runPipeline(path, basename(path), 0, 100, false, taskId) // file import: user's original, not app-owned
@@ -320,7 +359,7 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     set({ busy: true, error: null, pct: 0, stage: 'downloading' })
     try {
       if (!(await ensureModel())) {
-        set({ busy: false })
+        set({ busy: false, pendingImport: { kind: 'url', value: u } })
         return
       }
       const dl = await runUrl({
@@ -389,6 +428,8 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     importAny,
     cancel,
     acceptConsent,
-    declineConsent
+    declineConsent,
+    resumePending,
+    discardPending
   }
 }

@@ -122,3 +122,25 @@ export function ffmpegAvailable(): boolean {
     return false
   }
 }
+
+/**
+ * Whether the resolved FFmpeg can actually encode with `h264_videotoolbox` — the
+ * macOS HW encoder `codecArgs()` picks whenever an export does NOT set `forceCpu`
+ * (ffmpeg-export.ts). VideoToolbox is a macOS framework, so a Linux build of the
+ * very same ffmpeg version simply does not carry the encoder.
+ *
+ * `ffmpegAvailable()` is too weak a guard for the GPU-path smokes: `ffmpeg-static`
+ * is a devDependency, so on a Linux CI runner ffmpeg IS invokable, the smokes ran,
+ * and ffmpeg died with `Unknown encoder 'h264_videotoolbox'` (exit 8) — CI run
+ * 31293580008. A smoke must guard on the CAPABILITY it exercises, not merely on the
+ * binary existing; otherwise "the binary is here" silently promises a macOS build.
+ */
+export function videotoolboxAvailable(): boolean {
+  try {
+    const r = spawnSync(resolveFfmpeg(), ['-hide_banner', '-encoders'], { encoding: 'utf8' })
+    if (r.status !== 0) return false
+    return /h264_videotoolbox/.test(`${r.stdout ?? ''}${r.stderr ?? ''}`)
+  } catch {
+    return false
+  }
+}

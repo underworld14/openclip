@@ -22,6 +22,13 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+        # youtube-dl-exec's postinstall fetches the yt-dlp release off the GitHub API.
+        # Unauthenticated, that shares a 60/hr budget with every other runner on the
+        # same egress IP, so `npm ci` dies with "API rate limit exceeded" at random
+        # (it took down the macos job of run 31293580008). The token lifts it to the
+        # per-repo 5000/hr. See scripts/postinstall.js → src/constants.js in that pkg.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       # electron-builder install-app-deps runs in postinstall and needs no display.
       - run: npm run typecheck
       - run: npm run lint
@@ -40,6 +47,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+        # Same yt-dlp / GitHub-API rate-limit story as the gates job above — this is
+        # the step that actually failed in run 31293580008.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # A broken/partial Electron download makes every E2E spec die inside
       # electron.launch with a message that reads like an environment quirk. Fail

@@ -2,8 +2,8 @@
  * tests/unit/ass-captions.serial.spec.ts — @serial real-FFmpeg structural test
  * for the CAPTION-BURN path (CAPTION-BURN spine, plan E.5 done-when / E.7 /
  * PRD §18 "FFmpeg structural assertions, no pixel diff"). Runs the REAL bundled
- * ffmpeg (ffmpeg-static, which HAS libass + h264_videotoolbox) burning a
- * generated karaoke `.ass` over a synthetic 9:16 clip, then asserts:
+ * ffmpeg (which HAS libass) burning a generated karaoke `.ass` over a synthetic
+ * 9:16 clip, then asserts:
  *   - resolution = 1080×1920, codec = h264 (the export canvas survives the burn)
  *   - frame count within ±1 of the requested cut
  *   - libass resolved the BUNDLED font (DejaVuSans.ttf via fontsdir) — stderr
@@ -13,7 +13,10 @@
  *
  * @serial — runs single-file (machine-global lock): spawns the real binary and
  * may use the Metal/VideoToolbox encoder (plan E.7). SKIPS gracefully when
- * ffmpeg is unavailable so the bulk mocked suite stays green.
+ * ffmpeg is unavailable so the bulk mocked suite stays green — and the burn case
+ * goes through `exportClip` WITHOUT `forceCpu`, so it additionally skips when the
+ * resolved ffmpeg has no `h264_videotoolbox` (a macOS-only encoder). The fontsdir
+ * case below drives ffmpeg directly with libx264 and stays portable.
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'
@@ -24,9 +27,16 @@ import { describe, it, expect } from 'vitest'
 import type { CaptionStyle, WordTimestamp } from '@shared/schema'
 import { buildAss } from '@main/services/ass-captions'
 import { exportClip } from '@main/services/ffmpeg-export'
-import { ensureFixtures, ffmpegAvailable, resolveFfmpeg } from '../harness/fixtures'
+import {
+  ensureFixtures,
+  ffmpegAvailable,
+  resolveFfmpeg,
+  videotoolboxAvailable
+} from '../harness/fixtures'
 
 const HAVE_FFMPEG = ffmpegAvailable()
+/** The burn case exports without `forceCpu` → h264_videotoolbox → macOS only. */
+const HAVE_GPU_ENCODER = HAVE_FFMPEG && videotoolboxAvailable()
 
 /** The repo's bundled libass font dir (build/fonts/DejaVuSans.ttf — PRD §13/fix M3). */
 const FONTS_DIR = join(process.cwd(), 'build', 'fonts')
@@ -104,7 +114,7 @@ const WORDS: WordTimestamp[] = [
 ]
 
 describe('@serial ass-captions — real libass burn over a 9:16 clip', () => {
-  it.skipIf(!HAVE_FFMPEG)(
+  it.skipIf(!HAVE_GPU_ENCODER)(
     'burns karaoke captions: 1080×1920 h264, bundled font resolves, frames differ from plain',
     async () => {
       const { videoMp4 } = ensureFixtures()

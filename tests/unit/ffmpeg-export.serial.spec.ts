@@ -1,8 +1,8 @@
 /**
  * tests/unit/ffmpeg-export.serial.spec.ts — @serial real-FFmpeg structural test
  * for the EXPORT path (plan E.5 done-when / E.7 / PRD §18 "FFmpeg structural
- * assertions, no pixel diff"). Runs the REAL bundled ffmpeg (ffmpeg-static, which
- * HAS h264_videotoolbox) on a synthetic fixture and ffprobe-asserts the output:
+ * assertions, no pixel diff"). Runs the REAL bundled ffmpeg on a synthetic fixture
+ * and ffprobe-asserts the output:
  *   - resolution = 1080×1920
  *   - codec      = h264
  *   - duration / frame count within ±1 frame of the requested cut span
@@ -10,7 +10,10 @@
  *
  * @serial — runs single-file (machine-global lock): it spawns the real binary
  * and may use the Metal/VideoToolbox encoder (plan E.7). It SKIPS gracefully
- * when ffmpeg is unavailable so the bulk mocked suite stays green.
+ * when ffmpeg is unavailable so the bulk mocked suite stays green — and the one
+ * case that exercises the DEFAULT (GPU) encoder additionally skips when the
+ * resolved ffmpeg has no `h264_videotoolbox`, since that encoder only exists on
+ * macOS. The `forceCpu` (libx264) cases below stay portable and always run.
  */
 
 import { execFileSync } from 'node:child_process'
@@ -19,9 +22,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { exportClip, generateThumbnail } from '@main/services/ffmpeg-export'
-import { ensureFixtures, ffmpegAvailable, resolveFfmpeg } from '../harness/fixtures'
+import {
+  ensureFixtures,
+  ffmpegAvailable,
+  resolveFfmpeg,
+  videotoolboxAvailable
+} from '../harness/fixtures'
 
 const HAVE_FFMPEG = ffmpegAvailable()
+/** The default (non-forceCpu) export path encodes with h264_videotoolbox — macOS only. */
+const HAVE_GPU_ENCODER = HAVE_FFMPEG && videotoolboxAvailable()
 
 function ffprobeBin(): string {
   try {
@@ -93,7 +103,7 @@ function probe(path: string): { stream: ProbedStream; durationSec: number; first
 }
 
 describe('@serial ffmpeg-export — real cut + 9:16 reframe re-encode', () => {
-  it.skipIf(!HAVE_FFMPEG)(
+  it.skipIf(!HAVE_GPU_ENCODER)(
     'exports a 1080×1920 h264 clip whose duration is within ±1 frame of the cut',
     async () => {
       const { videoMp4 } = ensureFixtures()

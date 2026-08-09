@@ -12,7 +12,7 @@
  * failure.
  */
 import { describe, it, expect } from 'vitest'
-import { ffmpegAvailable } from '../harness/fixtures'
+import { ffmpegAvailable, videotoolboxAvailable } from '../harness/fixtures'
 
 const STRICT = !!process.env.OPENCLIP_REQUIRE_SMOKES
 
@@ -28,5 +28,23 @@ describe.skipIf(!STRICT)(
           'set OPENCLIP_FFMPEG to a libass-enabled build.'
       ).toBe(true)
     })
+
+    // The GPU-path smokes (ffmpeg-export / ass-captions burn) now guard on the
+    // h264_videotoolbox CAPABILITY rather than on ffmpeg merely being invokable, so
+    // they self-skip on Linux instead of dying with "Unknown encoder". That guard is
+    // itself a silent-skip risk on the one platform that MUST exercise it: a macOS
+    // runner resolving a videotoolbox-less ffmpeg would quietly lose the whole
+    // default-encoder layer. Fail loudly there instead.
+    it.skipIf(process.platform !== 'darwin')(
+      'the resolved ffmpeg has h264_videotoolbox so the GPU-path @serial smokes do NOT skip',
+      () => {
+        expect(
+          videotoolboxAvailable(),
+          'The resolved ffmpeg has no h264_videotoolbox encoder → the default (non-forceCpu) ' +
+            'export + caption-burn @serial smokes would silently SKIP on macOS, leaving the ' +
+            'shipped HW-encode path untested. Check OPENCLIP_FFMPEG / the ffmpeg-static build.'
+        ).toBe(true)
+      }
+    )
   }
 )

@@ -39,6 +39,18 @@ other runner on the same egress IP:
     npm error command sh -c node scripts/postinstall.js
     Error: { "message": "API rate limit exceeded for 13.105.117.134. …" }
 
+**Correction — passing `GITHUB_TOKEN` does NOT fix this, and the first attempt at it was
+inert.** `getBinary()` in that postinstall does `fetch(url, headers)`, passing the header
+object as fetch's *init* argument, so the `Authorization` header is silently dropped; the
+package reads `GITHUB_TOKEN` and then throws it away. Two runs happened to pass `npm ci`
+afterwards, which looked like the fix working — it was luck on a shared-IP budget, and the
+failure returned in run 31294745592 with the same *unauthenticated* wording ("rate limit
+exceeded for &lt;ip&gt;", not "for user ID"). The real fix is `YOUTUBE_DL_SKIP_DOWNLOAD=1`:
+nothing in CI consumes that binary — `ytDlpPath()` returns youtube-dl-exec's computed PATH
+CONSTANT without ever stat-ing the file, and the only spec that runs real yt-dlp is gated
+behind `RUN_NETWORK_E2E` *and* a package-time-staged `resources/yt-dlp/…`. Verified by
+deleting the managed binary locally: full suite still 932 passed.
+
 # Steps to Reproduce
 
 Locally, on a Mac, emulate a Linux ffmpeg (real binary, VideoToolbox stripped) and run the

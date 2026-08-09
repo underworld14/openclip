@@ -22,13 +22,20 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-        # youtube-dl-exec's postinstall fetches the yt-dlp release off the GitHub API.
-        # Unauthenticated, that shares a 60/hr budget with every other runner on the
-        # same egress IP, so `npm ci` dies with "API rate limit exceeded" at random
-        # (it took down the macos job of run 31293580008). The token lifts it to the
-        # per-repo 5000/hr. See scripts/postinstall.js → src/constants.js in that pkg.
+        # youtube-dl-exec's postinstall downloads yt-dlp from the GitHub API, which
+        # unauthenticated shares a 60/hr budget with every runner on the same egress IP
+        # — `npm ci` then dies with "API rate limit exceeded for <ip>" at random (runs
+        # 31293580008, 31294745592). Authenticating does NOT help: its getBinary() calls
+        # `fetch(url, headers)`, passing the header object as fetch's INIT argument, so
+        # the Authorization header is silently dropped and GITHUB_TOKEN is inert.
+        #
+        # Nothing in CI needs that binary. `ytDlpPath()` prefers the standalone release
+        # staged under resources/ and otherwise returns youtube-dl-exec's PATH CONSTANT
+        # (a computed string — it never stats the file), and the only spec that runs the
+        # real yt-dlp is gated behind RUN_NETWORK_E2E *and* that staged path. So skip the
+        # download outright: no API call, no rate limit, faster installs.
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          YOUTUBE_DL_SKIP_DOWNLOAD: '1'
       # electron-builder install-app-deps runs in postinstall and needs no display.
       - run: npm run typecheck
       - run: npm run lint
@@ -47,10 +54,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-        # Same yt-dlp / GitHub-API rate-limit story as the gates job above — this is
-        # the step that actually failed in run 31293580008.
+        # Same yt-dlp / GitHub-API rate-limit story as the gates job above — this is the
+        # step that actually failed on this job, in runs 31293580008 and 31294745592.
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          YOUTUBE_DL_SKIP_DOWNLOAD: '1'
 
       # A broken/partial Electron download makes every E2E spec die inside
       # electron.launch with a message that reads like an environment quirk. Fail

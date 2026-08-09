@@ -90,6 +90,7 @@ export interface ExportRunnerDeps {
     aspect: JobParams['export']['aspectRatio']
     mode: 'auto' | 'split'
     signal?: AbortSignal
+    onFrame?: (framesDone: number, frameBudget: number) => void
   }) => Promise<ReframePlan | null>
   /** Resolve the per-job temp .ass path (injected for tests). */
   resolveAssPath?: (projectId: string, jobId: string, clipId: string) => string
@@ -102,6 +103,16 @@ export interface ExportRunnerDeps {
    */
   removeJobTemp?: (projectId: string, jobId: string) => void
 }
+
+/**
+ * How much of the bar the 'analyzing' phase owns before encoding begins.
+ *
+ * Kept small and honest: face sampling is slow but it is not most of the work,
+ * and a bar that reaches 60% before the encode starts only to crawl afterwards
+ * is a worse lie than one that moves a little. Encoding reports its own 0..100
+ * and takes over from here.
+ */
+export const ANALYZE_PROGRESS_CEILING = 15
 
 /**
  * Best-effort removal of a job's temp scratch dir (audit fix openclip-2j3).
@@ -194,7 +205,19 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
               source: params.sourceResolution,
               aspect: params.aspectRatio,
               mode: params.reframe,
-              signal: ctx.signal
+              signal: ctx.signal,
+              // Face sampling is the long pole of 'analyzing'. Map it into the
+              // 0..ANALYZE_PROGRESS_CEILING band so the bar visibly moves
+              // instead of sitting at 0 for the slowest phase (FEAT-8559h1);
+              // encoding then takes over the rest of the bar.
+              onFrame: (framesDone, frameBudget) =>
+                emit.progress(
+                  Math.min(
+                    ANALYZE_PROGRESS_CEILING,
+                    Math.round((framesDone / frameBudget) * ANALYZE_PROGRESS_CEILING)
+                  ),
+                  'analyzing'
+                )
             })
           } catch (e) {
             // Best-effort → static center-crop (never block the export). LOG it, though:

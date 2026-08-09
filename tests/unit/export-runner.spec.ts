@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest'
-import { createExportRunner } from '@main/services/jobs/export-runner'
+import { createExportRunner, ANALYZE_PROGRESS_CEILING } from '@main/services/jobs/export-runner'
 import type { JobParams } from '@shared/jobs'
 import type { JobEmitter, JobRunnerContext } from '@main/services/sidecar-manager'
 import { transcriptFixture, captionStyleFixture } from '../fixtures/contract'
@@ -278,5 +278,70 @@ describe('export-runner — auto-reframe (Part J)', () => {
     const result = await runner({ ...REFRAME_BASE, reframe: 'auto' }, fakeEmitter(), fakeCtx())
     expect(result).toEqual(EXPORT_RESULT)
     expect(exportClip).toHaveBeenCalledWith(expect.objectContaining({ reframePlan: null }))
+  })
+})
+
+/**
+ * 'analyzing' sub-progress (FEAT-8559h1). The runner used to emit
+ * `progress(0,'analyzing')` once and then nothing until encoding began — an
+ * unbounded frozen 0% bar through what is often the slowest phase of an export
+ * (up to four separate decodes of the span).
+ */
+describe('export-runner — analyzing is no longer a frozen 0%', () => {
+  const REFRAME_PARAMS: JobParams['export'] = {
+    ...BASE,
+    reframe: 'auto',
+    sourceResolution: { width: 1920, height: 1080 }
+  }
+
+  it('reports face-sampling progress as frames are detected', async () => {
+    const exportClip = vi.fn(async () => ({
+      outputPath: '/out/clip.mp4',
+      width: 1080,
+      height: 1920,
+      durationMs: 3000
+    }))
+    // Drive the runner's onFrame hook the way the real frame slicer does.
+    const planReframe = vi.fn(async (o: { onFrame?: (done: number, budget: number) => void }) => {
+      o.onFrame?.(1, 4)
+      o.onFrame?.(2, 4)
+      o.onFrame?.(4, 4)
+      return null
+    })
+    const emit = fakeEmitter()
+    const runner = createExportRunner({
+      exportClip: exportClip as never,
+      planReframe: planReframe as never,
+      fontsDir: () => '/fonts'
+    })
+
+    await runner(REFRAME_PARAMS, emit, fakeCtx())
+
+    const analyzing = (emit.progress as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([, stage]) => stage === 'analyzing'
+    )
+    const pcts = analyzing.map(([pct]) => pct as number)
+    // Starts at 0, then MOVES — that is the whole point.
+    expect(pcts[0]).toBe(0)
+    expect(Math.max(...pcts)).toBeGreaterThan(0)
+    // Monotonic, and it never eats the encode's share of the bar.
+    expect([...pcts].sort((a, b) => a - b)).toEqual(pcts)
+    expect(Math.max(...pcts)).toBeLessThanOrEqual(ANALYZE_PROGRESS_CEILING)
+  })
+
+  it('goes straight to encoding when there is nothing to analyze', async () => {
+    const exportClip = vi.fn(async () => ({
+      outputPath: '/out/clip.mp4',
+      width: 1080,
+      height: 1920,
+      durationMs: 3000
+    }))
+    const emit = fakeEmitter()
+    const runner = createExportRunner({ exportClip: exportClip as never, fontsDir: () => '/fonts' })
+
+    await runner(BASE, emit, fakeCtx())
+
+    const stages = (emit.progress as ReturnType<typeof vi.fn>).mock.calls.map(([, s]) => s)
+    expect(stages).not.toContain('analyzing')
   })
 })

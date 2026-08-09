@@ -15,6 +15,7 @@ import { FolderOpen, Loader2, Upload } from 'lucide-react'
 import type { WhisperModelSize } from '@shared/jobs'
 import { useImportController } from '@renderer/hooks/useImportController'
 import { isUrl } from '@renderer/components/import-pipeline'
+import { stageLabel } from '@renderer/components/jobStatus'
 import { Button } from '@renderer/components/ui/button'
 import { Input } from '@renderer/components/ui/input'
 import { Progress } from '@renderer/components/ui/progress'
@@ -157,8 +158,11 @@ export function ImportPanel({ onNeedModel }: ImportPanelProps = {}): React.JSX.E
         <div className="flex flex-col gap-1">
           <Progress value={ctl.pct} data-testid="import-progress" />
           <div className="flex items-center justify-between gap-2">
+            {/* Was the raw internal token — "transcribing · 62%" (FEAT-8559h1).
+                Same `stageLabel` map the status bar uses, so the two surfaces
+                cannot describe the same stage differently. */}
             <span className="text-xs text-muted-foreground" data-testid="import-stage">
-              {ctl.stage} · {ctl.pct}%
+              {stageLabel(ctl.stage) || 'Working'} · {ctl.pct}%
             </span>
             {/* Cancel the in-flight download/transcribe (openclip-2bm). */}
             <Button

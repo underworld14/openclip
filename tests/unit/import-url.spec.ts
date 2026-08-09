@@ -56,3 +56,24 @@ describe('runUrlDownload: url-download job over the port', () => {
     ).rejects.toThrow(/yt-dlp failed|SIDECAR_CRASH/)
   })
 })
+
+describe('runUrlDownload: byte counts reach the caller (FEAT-8559h1)', () => {
+  it('forwards downloaded/total bytes alongside the percentage', async () => {
+    // These numbers existed all along — yt-dlp prints them, the runner parses
+    // them into a partial — and were then collapsed to just `pct` before any UI
+    // could see them, which is why a download could never show "12 MB of 140 MB".
+    const openclip = createMockOpenclip()
+    const details: Array<{ receivedBytes?: number; totalBytes?: number } | undefined> = []
+
+    await runUrlDownload({
+      bridge: openclip,
+      url: 'https://youtu.be/M5XbNdzPuDQ',
+      onProgress: (_pct, _stage, detail) => details.push(detail)
+    })
+
+    const withBytes = details.filter((d) => d?.receivedBytes !== undefined)
+    expect(withBytes.length).toBeGreaterThan(0)
+    expect(withBytes[0]!.receivedBytes).toBe(5_000_000)
+    expect(withBytes[0]!.totalBytes).toBe(50_000_000)
+  })
+})

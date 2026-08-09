@@ -401,6 +401,14 @@ export interface DetectReframeOptions {
   detector?: FrameDetector
   /** Injectable ffmpeg runner (defaults to ffmpeg-core.runFfmpeg w/ stdout capture). */
   run?: ReframeRunner
+  /**
+   * Sub-progress as frames are detected (FEAT-8559h1). The export runner used to
+   * emit `progress(0,'analyzing')` once and then nothing until encoding began —
+   * an unbounded frozen 0% bar through what is often the slowest phase. The
+   * frame budget is knowable (`ceil(duration * sampleFps)`) and this loop
+   * already walks frames one at a time, so the bar can just move.
+   */
+  onFrame?: (framesDone: number, frameBudget: number) => void
 }
 
 export interface DetectReframeResult {
@@ -447,13 +455,17 @@ export async function detectReframe(opts: DetectReframeOptions): Promise<DetectR
     // stdout so memory stays ~1 frame instead of holding the whole decoded clip.
     const sampleArgv = frameSampleArgs(opts.sourcePath, opts.startTime, dur, sampleFps, modelSize)
     const frameBytes = modelSize * modelSize * 3
+    // What ffmpeg's `fps=` filter will emit for this span — the denominator the
+    // caller needs to turn a frame count into a percentage.
+    const frameBudget = Math.max(1, Math.ceil(dur * sampleFps))
     const detectOpts = {
       frameBytes,
       modelSize,
       detector,
       startTime: opts.startTime,
       sampleFps,
-      signal: opts.signal
+      signal: opts.signal,
+      onFrame: opts.onFrame ? (done: number) => opts.onFrame!(done, frameBudget) : undefined
     }
     let samples: SampleFrame[]
     if (opts.run) {
@@ -602,6 +614,8 @@ export async function detectFromFrameChunks(
     startTime: number
     sampleFps: number
     signal?: AbortSignal
+    /** Called after each detected frame, so a caller can report sub-progress. */
+    onFrame?: (framesDone: number) => void
   }
 ): Promise<SampleFrame[]> {
   const samples: SampleFrame[] = []
@@ -617,6 +631,7 @@ export async function detectFromFrameChunks(
       samples.push({ timeMs: (opts.startTime + frameIndex / opts.sampleFps) * 1000, faces })
       frameIndex += 1
       offset += opts.frameBytes
+      opts.onFrame?.(frameIndex)
     }
     // Keep only the partial-frame remainder, COPIED so the big chunk can be GC'd.
     carry = offset > 0 ? Buffer.from(carry.subarray(offset)) : carry
@@ -842,6 +857,8 @@ export interface PlanReframeOptions {
   /** Injectable passes (default the real ffmpeg+YuNet) — the unit test fakes these. */
   detect?: typeof detectReframe
   motion?: typeof detectMotion
+  /** Face-sampling sub-progress, so 'analyzing' is not a frozen 0% (FEAT-8559h1). */
+  onFrame?: (framesDone: number, frameBudget: number) => void
 }
 
 /**
@@ -862,7 +879,8 @@ export async function planReframe(opts: PlanReframeOptions): Promise<ReframePlan
     source: opts.source,
     sampleFps: opts.sampleFps,
     signal: opts.signal,
-    binPath: opts.binPath
+    binPath: opts.binPath,
+    onFrame: opts.onFrame
   })
   const filtered = filterFaceOutliers(samples, opts.source)
   if (filtered.length === 0) return null

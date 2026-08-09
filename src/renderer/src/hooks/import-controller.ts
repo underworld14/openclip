@@ -352,10 +352,10 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
       // Source language for whisper (undefined/'' ⇒ auto-detect). Read lazily so
       // the latest Settings value applies without rebuilding the controller.
       language: deps.getLanguage?.(),
-      onProgress: (p, s) => {
+      onProgress: (p, s, detail) => {
         const scaled = base + Math.round((p / 100) * span)
         set({ pct: scaled, stage: s })
-        deps.ui?.updateTask?.(taskId, { pct: scaled, stage: s })
+        deps.ui?.updateTask?.(taskId, { pct: scaled, stage: s, detail })
       },
       onProbed: commitProject,
       onPartial: (partial) => deps.store.appendTranscriptPartial(partial),
@@ -453,10 +453,10 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
       const dl = await runUrl({
         bridge: deps.bridge,
         url: u,
-        onProgress: (p) => {
+        onProgress: (p, _stage, detail) => {
           const scaled = Math.round(p * 0.2) // 0..20% band
           set({ pct: scaled, stage: 'downloading' })
-          deps.ui?.updateTask?.(taskId, { pct: scaled, stage: 'downloading' })
+          deps.ui?.updateTask?.(taskId, { pct: scaled, stage: 'downloading', detail })
         },
         onStart: (jobId) => {
           activeJobId = jobId

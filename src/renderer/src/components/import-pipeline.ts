@@ -8,7 +8,17 @@
 
 import type { SourceVideo } from '@shared/schema'
 import type { JobResult, JobPartial, WhisperModelSize } from '@shared/jobs'
+import type { TaskDetail } from '@renderer/components/jobStatus'
 import { drainJob } from '@renderer/hooks/useJob'
+
+/**
+ * Extra numbers a stage can report alongside its percentage — bytes for a
+ * download, and so on. Threaded through rather than discarded (FEAT-8559h1):
+ * `runUrlDownload` used to collapse a `{downloadedBytes,totalBytes,pct}` partial
+ * down to the percent alone, so the UI could never say "12 MB of 140 MB" about a
+ * download whose byte counts it already had.
+ */
+export type ProgressDetail = TaskDetail
 
 /**
  * The frozen bridge surface, derived from the global `window.openclip` typing
@@ -24,7 +34,7 @@ export interface ImportPipelineOptions {
   model: WhisperModelSize
   language?: string
   /** 0..100 progress across the whole pipeline + the current stage label. */
-  onProgress?: (pct: number, stage: string) => void
+  onProgress?: (pct: number, stage: string, detail?: ProgressDetail) => void
   /**
    * The probed source video, as soon as ffprobe returns and BEFORE the
    * minutes-long extract + transcribe (FEAT-ky1jfw). AWAITED, so a caller can
@@ -59,7 +69,8 @@ export async function runImportPipeline(
   opts: ImportPipelineOptions
 ): Promise<ImportPipelineResult> {
   const { bridge, filePath, projectId, model, language } = opts
-  const report = (pct: number, stage: string): void => opts.onProgress?.(pct, stage)
+  const report = (pct: number, stage: string, detail?: ProgressDetail): void =>
+    opts.onProgress?.(pct, stage, detail)
 
   // 1) Import / probe → SourceVideo metadata (PRD §6.1).
   report(2, 'probing')
@@ -100,8 +111,8 @@ export function isUrl(value: string): boolean {
 export interface UrlDownloadOptions {
   bridge: OpenClipBridge
   url: string
-  /** 0..100 download progress + stage label. */
-  onProgress?: (pct: number, stage: string) => void
+  /** 0..100 download progress, the stage label, and the byte counts. */
+  onProgress?: (pct: number, stage: string, detail?: ProgressDetail) => void
   /** The url-download jobId, right after start, so the caller can cancel it (openclip-2bm). */
   onStart?: (jobId: string) => void
 }
@@ -120,7 +131,14 @@ export async function runUrlDownload(opts: UrlDownloadOptions): Promise<JobResul
     {
       onStart: opts.onStart,
       onProgress: (pct, stage) => opts.onProgress?.(pct, stage),
-      onPartial: (data) => opts.onProgress?.(data.pct, 'downloading')
+      // Forward the byte counts instead of dropping them on the floor: yt-dlp
+      // reports them, the runner parses them, and the UI wants to show
+      // "12 MB of 140 MB · 2.1 MB/s" (FEAT-8559h1).
+      onPartial: (data) =>
+        opts.onProgress?.(data.pct, 'downloading', {
+          receivedBytes: data.downloadedBytes,
+          totalBytes: data.totalBytes
+        })
     }
   )
   opts.onProgress?.(100, 'downloaded')

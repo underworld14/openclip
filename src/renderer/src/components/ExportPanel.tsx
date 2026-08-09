@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { useBrandStore, activeBrand } from '@renderer/stores/brandStore'
+import { trackTask, useJobsStore } from '@renderer/stores/jobsStore'
 import { buildExportParams } from '@renderer/stores/projectStore/exportSlice'
 import {
   exportToFile,
@@ -142,31 +143,54 @@ export function ExportPanel(): React.JSX.Element {
         clip,
         autoEmoji
       })
-      const outcome = await exportToFile({
-        bridge: window.openclip,
-        defaultFileName: defaultClipFileName(clip.title),
-        buildParams: (chosenPath) =>
-          buildExportParams({
-            projectId: project.id,
-            clip,
-            source: project.sourceVideo,
-            settings: project.settings,
-            outputPath: chosenPath,
-            captionsEnabled: captionsEnabled && hasWords,
-            words: project.transcript.words,
-            // Brand overrides caption font/colors; autoEmoji selects the emoji source.
-            captionStyle: resolveEffectiveCaptionStyle(captionTemplateId, {
-              autoEmoji,
-              brand: brandCaptionOverride(brand)
-            }),
-            aiEmojiMap,
-            // Brand logo overlay (Part K) — {} when the brand has no logo.
-            ...brandLogoParams(brand),
-            removeSilence,
-            reframe
-          }),
-        onProgress: (p) => setPct(Math.round(p))
-      })
+      // Tracked in the app-level registry so the encode stays visible and
+      // cancellable after this dialog closes — Escape or a backdrop click used
+      // to orphan a running ffmpeg with no consumer (EPIC-zpa1nd).
+      const outcome = await trackTask(
+        {
+          kind: 'export',
+          label: clip.title,
+          // Mirror the runner's own `willAnalyze` branch so the checklist shows
+          // the stages this particular export will really pass through.
+          stages: removeSilence || reframe !== 'off' ? ['analyzing', 'encoding'] : ['encoding']
+        },
+        async (task) => {
+          const result = await exportToFile({
+            bridge: window.openclip,
+            defaultFileName: defaultClipFileName(clip.title),
+            onStart: (jobId) => task.setCancel(() => window.openclip.jobs.cancel(jobId)),
+            buildParams: (chosenPath) =>
+              buildExportParams({
+                projectId: project.id,
+                clip,
+                source: project.sourceVideo,
+                settings: project.settings,
+                outputPath: chosenPath,
+                captionsEnabled: captionsEnabled && hasWords,
+                words: project.transcript.words,
+                // Brand overrides caption font/colors; autoEmoji selects the emoji source.
+                captionStyle: resolveEffectiveCaptionStyle(captionTemplateId, {
+                  autoEmoji,
+                  brand: brandCaptionOverride(brand)
+                }),
+                aiEmojiMap,
+                // Brand logo overlay (Part K) — {} when the brand has no logo.
+                ...brandLogoParams(brand),
+                removeSilence,
+                reframe
+              }),
+            onProgress: (p) => {
+              setPct(Math.round(p))
+              task.progress(p, 'encoding')
+            }
+          })
+          // The save dialog was dismissed: no job ran, so there is nothing to
+          // report as finished OR failed — drop the row rather than invent one.
+          if (result.canceled) task.abandon()
+          else task.setOutputPath(result.outputPath)
+          return result
+        }
+      )
       if (outcome.canceled) {
         setPhase('idle')
         return
@@ -227,6 +251,18 @@ export function ExportPanel(): React.JSX.Element {
     batchAbort.current = controller
     setBatch({ running: true, total: approvedClips.length, done: 0, failed: 0 })
 
+    // One parent row for the batch plus a child row per clip. `onClipProgress`
+    // has existed on runBatchExport since it was written and was never passed,
+    // so ten concurrent encodes reported as a single "3/10 exported" counter
+    // with no way to see which clip was slow or which one failed (FEAT-ckxz8d).
+    const jobs = useJobsStore.getState()
+    const batchTaskId = jobs.beginTask({
+      kind: 'batch-export',
+      label: `${approvedClips.length} clips`,
+      cancel: async () => controller.abort()
+    })
+    const childIds = new Map<string, string>()
+
     const results = await runBatchExport({
       bridge: window.openclip,
       project,
@@ -246,7 +282,24 @@ export function ExportPanel(): React.JSX.Element {
           autoEmoji
         }),
       signal: controller.signal,
-      onClipStatus: (_id, status) =>
+      onClipProgress: (clipId, pct) => {
+        const childId = childIds.get(clipId)
+        if (childId) useJobsStore.getState().updateTask(childId, { pct, stage: 'encoding' })
+      },
+      onClipStatus: (clipId, status, info) => {
+        const store = useJobsStore.getState()
+        if (status === 'running') {
+          const title = approvedClips.find((c) => c.id === clipId)?.title ?? clipId
+          childIds.set(
+            clipId,
+            store.beginTask({ kind: 'export', label: title, parentId: batchTaskId })
+          )
+        } else {
+          const childId = childIds.get(clipId)
+          // Keep the per-clip FAILURE MESSAGE, which the old counter discarded:
+          // "3 failed" cannot be acted on, "clip-4: No space left on device" can.
+          if (childId) store.settleTask(childId, status, { error: info?.error })
+        }
         setBatch((b) =>
           b
             ? {
@@ -256,6 +309,7 @@ export function ExportPanel(): React.JSX.Element {
               }
             : b
         )
+      }
     })
 
     const exported: string[] = []
@@ -275,6 +329,20 @@ export function ExportPanel(): React.JSX.Element {
     }
     if (exported.length) markExported(exported)
     setBatch((b) => (b ? { ...b, running: false } : b))
+
+    // Settle the parent. "Reveal" is pointed at the first exported FILE rather
+    // than the folder, because the main handler reveals a path INSIDE its
+    // parent — handing it the directory would open the directory's parent.
+    const failures = results.filter((r) => r.status === 'error')
+    const firstOutput = results.find((r) => r.status === 'done')?.outputPath
+    useJobsStore.getState().settleTask(batchTaskId, failures.length === 0 ? 'done' : 'error', {
+      outputPath: firstOutput,
+      detail: { itemsDone: exported.length, itemsTotal: results.length },
+      error:
+        failures.length > 0
+          ? `${failures.length} of ${results.length} clips failed — see the rows below.`
+          : undefined
+    })
     batchAbort.current = null
   }, [
     composeProject,

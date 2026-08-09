@@ -14,6 +14,7 @@
 
 import type { WhisperModelSize, JobResult, JobPartial } from '@shared/jobs'
 import type { Project, SourceVideo } from '@shared/schema'
+import { isCancellation, type TaskDetail } from '@renderer/components/jobStatus'
 import {
   runImportPipeline as defaultRunImportPipeline,
   runUrlDownload as defaultRunUrlDownload,
@@ -36,6 +37,14 @@ import {
  */
 export const CONSENT_KEY = 'openclip:url-consent'
 const DEFAULT_MODEL: WhisperModelSize = 'base'
+
+/**
+ * The stage sequences the status-bar checklist walks. These are the tokens
+ * `runImportPipeline` actually emits, in the order it emits them — a URL import
+ * is the same pipeline with a yt-dlp download bolted on the front.
+ */
+const FILE_IMPORT_STAGES = ['probing', 'extracting', 'transcribing']
+const URL_IMPORT_STAGES = ['downloading', ...FILE_IMPORT_STAGES]
 
 /** An import that was blocked on a missing whisper model, kept so it can be replayed. */
 export interface PendingImport {
@@ -93,11 +102,30 @@ export interface ImportControllerStore {
   saveProject(project: Project): Promise<void>
 }
 
-/** Optional UI seam (view routing + the task/progress map). */
+/**
+ * Optional UI seam: view routing + the app-level job registry (EPIC-zpa1nd).
+ *
+ * This used to be a two-method `upsertTask`/`clearTask` pair feeding
+ * `uiStore.tasks`, a map nothing ever read. It now feeds the persistent status
+ * bar, which is the surface that survives this panel unmounting mid-import — so
+ * it carries what a person actually needs: a name for the work, the stages it
+ * will pass through, live progress, a cancel handle, and a terminal state that
+ * distinguishes "you cancelled this" from "this failed".
+ */
 export interface ImportControllerUi {
   setView?(view: 'editor'): void
-  upsertTask?(task: { jobId: string; progress: number; status: 'running' | 'done' | 'error' }): void
-  clearTask?(jobId: string): void
+  beginTask?(task: {
+    id: string
+    label: string
+    stages: string[]
+    cancel: () => Promise<void>
+    retry: () => Promise<void>
+  }): void
+  updateTask?(
+    id: string,
+    patch: { pct?: number; stage?: string; detail?: TaskDetail; label?: string }
+  ): void
+  settleTask?(id: string, status: 'done' | 'error' | 'canceled', patch?: { error?: string }): void
 }
 
 export interface ImportControllerDeps {
@@ -281,7 +309,7 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
       onProgress: (p, s) => {
         const scaled = base + Math.round((p / 100) * span)
         set({ pct: scaled, stage: s })
-        deps.ui?.upsertTask?.({ jobId: taskId, progress: scaled, status: 'running' })
+        deps.ui?.updateTask?.(taskId, { pct: scaled, stage: s })
       },
       onPartial: (partial) => deps.store.appendTranscriptPartial(partial),
       onTranscript: (t: JobResult['transcribe']) => deps.store.hydrateTranscript(t),
@@ -337,24 +365,39 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
   async function importFile(path: string): Promise<void> {
     if (!path) return
     // Per-import task key (audit fix openclip-ce3): a hardcoded 'import' key meant two
-    // concurrent imports would share one tasks entry and the first to finish would
-    // clearTask the other's progress. genId() makes each import's task key unique.
+    // concurrent imports shared one registry entry, and the first to finish wiped the
+    // other's progress. genId() makes each import's task key unique.
     const taskId = genId()
     set({ busy: true, error: null, pct: 0 })
+    let tracked = false
     try {
       if (!(await ensureModel())) {
         // Hold the intent so the model dialog can hand it back (FEAT-kncqxf).
         set({ busy: false, pendingImport: { kind: 'file', value: path } })
         return
       }
+      // Register the activity only once it can actually run: a model-gated import
+      // never started, and a status-bar row for it would be reporting fiction.
+      deps.ui?.beginTask?.({
+        id: taskId,
+        label: basename(path),
+        stages: FILE_IMPORT_STAGES,
+        cancel,
+        retry: () => importFile(path)
+      })
+      tracked = true
       await runPipeline(path, basename(path), 0, 100, false, taskId) // file import: user's original, not app-owned
       set({ stage: 'done' })
+      deps.ui?.settleTask?.(taskId, 'done')
     } catch (e) {
-      set({ error: asMessage(e) })
+      const message = asMessage(e)
+      set({ error: message })
+      if (tracked) {
+        deps.ui?.settleTask?.(taskId, isCancellation(e) ? 'canceled' : 'error', { error: message })
+      }
     } finally {
       activeJobId = null
       set({ busy: false })
-      deps.ui?.clearTask?.(taskId)
     }
   }
 
@@ -370,27 +413,47 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     }
     const taskId = genId() // per-import task key (audit fix openclip-ce3)
     set({ busy: true, error: null, pct: 0, stage: 'downloading' })
+    let tracked = false
     try {
       if (!(await ensureModel())) {
         set({ busy: false, pendingImport: { kind: 'url', value: u } })
         return
       }
+      deps.ui?.beginTask?.({
+        id: taskId,
+        label: u,
+        stages: URL_IMPORT_STAGES,
+        cancel,
+        retry: () => importUrl(u)
+      })
+      tracked = true
       const dl = await runUrl({
         bridge: deps.bridge,
         url: u,
-        onProgress: (p) => set({ pct: Math.round(p * 0.2), stage: 'downloading' }), // 0..20% band
+        onProgress: (p) => {
+          const scaled = Math.round(p * 0.2) // 0..20% band
+          set({ pct: scaled, stage: 'downloading' })
+          deps.ui?.updateTask?.(taskId, { pct: scaled, stage: 'downloading' })
+        },
         onStart: (jobId) => {
           activeJobId = jobId
         }
       })
+      // Now that yt-dlp has resolved it, name the row after the video rather
+      // than the raw URL it was pasted from.
+      deps.ui?.updateTask?.(taskId, { pct: 20, label: dl.title ?? u })
       await runPipeline(dl.filePath, dl.title ?? 'Imported video', 20, 80, true, taskId) // URL import: app-owned download
       set({ stage: 'done' })
+      deps.ui?.settleTask?.(taskId, 'done')
     } catch (e) {
-      set({ error: asMessage(e) })
+      const message = asMessage(e)
+      set({ error: message })
+      if (tracked) {
+        deps.ui?.settleTask?.(taskId, isCancellation(e) ? 'canceled' : 'error', { error: message })
+      }
     } finally {
       activeJobId = null
       set({ busy: false })
-      deps.ui?.clearTask?.(taskId)
     }
   }
 

@@ -45,6 +45,7 @@ import { installAutosave } from '@renderer/stores/projectStore/autosave'
 import { useImportController } from '@renderer/hooks/useImportController'
 import { useReadiness } from '@renderer/hooks/useReadiness'
 import { ReadinessBar } from '@renderer/components/ReadinessBar'
+import { JobStatusBar } from '@renderer/components/JobStatusBar'
 
 type Modal = 'none' | 'import' | 'export' | 'settings'
 
@@ -172,6 +173,12 @@ function App(): React.JSX.Element {
           </Button>
         </div>
       </header>
+
+      {/* ── The persistent job surface (EPIC-zpa1nd). Mounted HERE, between the
+          title bar and the body, so it belongs to neither layout and survives
+          both the Welcome→editor swap and every modal dismissal. Renders
+          nothing when there is no work. ── */}
+      <JobStatusBar />
 
       {/* ── Body: welcome (first-run) or the 3-pane editor. ── */}
       {!showEditor ? (

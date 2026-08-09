@@ -26,7 +26,7 @@
 
 import { create } from 'zustand'
 import type { JobTask, TaskDetail, TaskKind, TaskStatus } from '@renderer/components/jobStatus'
-import { activeTasks, childTasks } from '@renderer/components/jobStatus'
+import { activeTasks, childTasks, isCancellation } from '@renderer/components/jobStatus'
 
 /** How long a SUCCEEDED task stays on screen before it clears itself. */
 export const DONE_DISMISS_MS = 6000
@@ -60,7 +60,11 @@ export interface JobsStore {
   /** Merge progress/stage/detail into a live task (no-op if it is gone). */
   updateTask: (id: string, patch: TaskPatch) => void
   /** Move a task to a terminal state. Success schedules its own dismissal. */
-  settleTask: (id: string, status: Extract<TaskStatus, 'done' | 'error' | 'canceled'>, patch?: TaskPatch & { error?: string }) => void
+  settleTask: (
+    id: string,
+    status: Extract<TaskStatus, 'done' | 'error' | 'canceled'>,
+    patch?: TaskPatch & { error?: string }
+  ) => void
   /** Drop a task and any children it owns. */
   dismissTask: (id: string) => void
 }
@@ -190,18 +194,13 @@ export interface TrackTaskHandle {
   setCancel: (cancel: () => Promise<void>) => void
   /** Record the produced file so the settled row can offer "Reveal". */
   setOutputPath: (path: string) => void
-}
-
-/**
- * `drainJob` reports a terminal job error as
- * `` `${kind} failed [${code}]: ${message}` `` (hooks/useJob.ts), and the
- * sidecar emits `CANCELLED` for a user cancel, a quit, and a renderer
- * port-close alike. A cancellation is not a failure and must not be presented
- * as one — hence sniffing the code rather than showing the raw string.
- */
-export function isCancellation(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err)
-  return /\[CANCELLED\]/.test(message)
+  /**
+   * Drop the row entirely instead of settling it — for work that turned out
+   * never to have started. An export whose save dialog the user dismissed did
+   * not succeed and did not fail; reporting either would be a lie, and
+   * "clip.mp4 finished" for a file that was never written is the worse one.
+   */
+  abandon: () => void
 }
 
 /**
@@ -219,18 +218,24 @@ export async function trackTask<T>(
 ): Promise<T> {
   const store = useJobsStore.getState()
   const id = store.beginTask(spec)
+  let abandoned = false
   const handle: TrackTaskHandle = {
     id,
     progress: (pct, stage, detail) =>
       useJobsStore.getState().updateTask(id, { pct: Math.round(pct), stage, detail }),
     setCancel: (cancel) => useJobsStore.getState().updateTask(id, { cancel }),
-    setOutputPath: (outputPath) => useJobsStore.getState().updateTask(id, { outputPath })
+    setOutputPath: (outputPath) => useJobsStore.getState().updateTask(id, { outputPath }),
+    abandon: () => {
+      abandoned = true
+      useJobsStore.getState().dismissTask(id)
+    }
   }
   try {
     const result = await run(handle)
-    useJobsStore.getState().settleTask(id, 'done')
+    if (!abandoned) useJobsStore.getState().settleTask(id, 'done')
     return result
   } catch (err) {
+    if (abandoned) throw err
     const message = err instanceof Error ? err.message : String(err)
     if (isCancellation(err)) useJobsStore.getState().settleTask(id, 'canceled')
     else useJobsStore.getState().settleTask(id, 'error', { error: message })

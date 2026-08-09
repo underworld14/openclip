@@ -16,6 +16,7 @@ import {
   DEFAULT_WHISPER_MODEL,
   runModelDownload
 } from '@renderer/components/model-download'
+import { trackTask } from '@renderer/stores/jobsStore'
 import { Button } from '@renderer/components/ui/button'
 import { Progress } from '@renderer/components/ui/progress'
 import {
@@ -87,14 +88,30 @@ export function ModelDownloadDialog({
       setDone(false)
       setPct(0)
       try {
-        await runModelDownload({
-          bridge: window.openclip,
-          model,
-          onStart: (id) => setJobId(id),
-          onProgress: (received, total) => {
-            if (total > 0) setPct(Math.min(100, Math.round((received / total) * 100)))
+        // Tracked so the download stays visible (and cancellable) in the status
+        // bar after this dialog is dismissed — a 2.9GB large-v3 pull outlives
+        // any reason the user had for keeping the dialog open (EPIC-zpa1nd).
+        await trackTask(
+          { kind: 'model-download', label: model, stages: ['downloading'] },
+          async (task) => {
+            await runModelDownload({
+              bridge: window.openclip,
+              model,
+              onStart: (id) => {
+                setJobId(id)
+                task.setCancel(() => window.openclip.jobs.cancel(id))
+              },
+              onProgress: (received, total) => {
+                const next = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0
+                if (total > 0) setPct(next)
+                task.progress(next, 'downloading', {
+                  receivedBytes: received,
+                  totalBytes: total
+                })
+              }
+            })
           }
-        })
+        )
         setDone(true)
         onDownloaded?.(model)
       } catch (e) {

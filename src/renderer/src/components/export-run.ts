@@ -51,6 +51,13 @@ export interface ExportToFileOptions {
   /** Default filename suggested in the save dialog (e.g. "the-wildest-take.mp4"). */
   defaultFileName: string
   onProgress?: (pct: number) => void
+  /**
+   * The assigned jobId, once the save dialog is past and the encode has actually
+   * started. Exposed so a caller can offer Cancel for the running ffmpeg — the
+   * job plane always supported it; nothing had ever asked for the handle
+   * (EPIC-zpa1nd).
+   */
+  onStart?: (jobId: string) => void
 }
 
 export type ExportToFileResult =
@@ -69,7 +76,12 @@ export async function exportToFile(opts: ExportToFileOptions): Promise<ExportToF
   if (dialog.canceled || !dialog.filePath) return { canceled: true }
 
   const params = opts.buildParams(dialog.filePath)
-  const result = await runExport({ bridge: opts.bridge, params, onProgress: opts.onProgress })
+  const result = await runExport({
+    bridge: opts.bridge,
+    params,
+    onProgress: opts.onProgress,
+    onStart: opts.onStart
+  })
   return { canceled: false, result, outputPath: dialog.filePath }
 }
 

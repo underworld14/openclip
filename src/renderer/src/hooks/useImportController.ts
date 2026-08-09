@@ -20,6 +20,7 @@ import type {
 } from '@renderer/hooks/import-controller'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useUiStore } from '@renderer/stores/uiStore'
+import { useJobsStore } from '@renderer/stores/jobsStore'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 
 export interface ImportControllerOptions {
@@ -89,8 +90,10 @@ export function useImportController(opts: ImportControllerOptions = {}): ImportC
     hydrateFromProject(useProjectStore, project)
   }, [])
   const setView = useUiStore((s) => s.setView)
-  const upsertTask = useUiStore((s) => s.upsertTask)
-  const clearTask = useUiStore((s) => s.clearTask)
+  // The app-level job registry the persistent status bar renders (EPIC-zpa1nd).
+  const beginTask = useJobsStore((s) => s.beginTask)
+  const updateTask = useJobsStore((s) => s.updateTask)
+  const settleTask = useJobsStore((s) => s.settleTask)
 
   const controller = useMemo(
     () =>
@@ -109,14 +112,18 @@ export function useImportController(opts: ImportControllerOptions = {}): ImportC
         },
         ui: {
           setView,
-          upsertTask: (t) =>
-            upsertTask({
-              jobId: t.jobId,
-              kind: 'transcribe',
-              progress: t.progress,
-              status: t.status
-            }),
-          clearTask
+          beginTask: (t) => {
+            beginTask({
+              id: t.id,
+              kind: 'import',
+              label: t.label,
+              stages: t.stages,
+              cancel: t.cancel,
+              retry: t.retry
+            })
+          },
+          updateTask,
+          settleTask
         },
         // Read the transcription language lazily at import time (Part I) so the
         // latest Settings value applies without rebuilding the controller.

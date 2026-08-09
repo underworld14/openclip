@@ -1,8 +1,8 @@
 /**
  * exportSlice — export composition + history within projectStore (EXPORT spine,
  * plan E.5 / E.4 slice pattern; PRD §6.9). Thin actions; the live FFmpeg
- * progress stream is driven by `useJob('export')` in ExportPanel (a MessagePort
- * cannot live in the store), while THIS slice owns the pure, testable pieces:
+ * progress stream is driven by `runExport` in ExportPanel (a MessagePort cannot
+ * live in the store), while THIS slice owns the pure, testable pieces:
  *
  *   - `composeProject()` — the INTEGRATION-GAP fix (plan Gate C / task 5): build
  *     the Project to export/persist from the LIVE slice state (clipsSlice +

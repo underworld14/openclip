@@ -1,7 +1,7 @@
 ---
 id: FEAT-vh2bwz
 title: Job registry + persistent status bar (spine for EPIC-zpa1nd)
-status: doing
+status: testing
 priority: critical
 labels:
     - ux
@@ -35,18 +35,20 @@ and the new `generate-clips-run`) already take `onProgress`/`onStart`, so that i
 exactly where the activity boundary is.
 
 # Acceptance Criteria
-- [ ] `stores/jobsStore.ts` holds every running activity keyed by task id, with
+- [x] `stores/jobsStore.ts` holds every running activity keyed by task id, with
       `beginTask`/`updateTask`/`settleTask`/`dismissTask`, `activeTasks()`,
       `hasActiveKind()` and a `trackTask(spec, run)` wrapper
-- [ ] `components/jobStatus.ts` is a PURE view-model (STAGE_LABELS, describeTask,
+- [x] `components/jobStatus.ts` is a PURE view-model (STAGE_LABELS, describeTask,
       estimateEta, selectPrimaryTask) unit-tested in the node env with no DOM
-- [ ] `components/JobStatusBar.tsx` is mounted in App.tsx between the title bar and
+- [x] `components/JobStatusBar.tsx` is mounted in App.tsx between the title bar and
       the body, so it renders in BOTH the Welcome and editor layouts
-- [ ] import / single export / batch export / model download all register a task
-- [ ] every task exposes a working per-task Cancel
-- [ ] `uiStore.tasks`, `upsertTask`, `clearTask` and the unused `useJob` hook are
+- [x] import / single export / batch export / model download all register a task
+- [x] every task exposes a working per-task Cancel
+- [x] `uiStore.tasks`, `upsertTask`, `clearTask` and the unused `useJob` hook are
       deleted; `jobEvents` + `drainJob` are untouched
-- [ ] `npm run typecheck && npm run lint && npm test` green
+- [x] `npm run typecheck && npm run lint && npm test` green (896 passed, 1 skipped)
+- [ ] seen working in the real app — deferred to FEAT-ky1jfw, which is the slice
+      that actually puts a long job on screen
 
 # Implementation Plan
 
@@ -65,6 +67,24 @@ exactly where the activity boundary is.
 ETA is derived renderer-side from `(now - startedAt) / pct` in `jobStatus.ts` — one
 implementation for every kind, rather than threading the (never-set) optional
 `JobEvent.etaMs` out of five separate runners.
+
+Two behaviours worth not "fixing" later without reading why:
+
+- A SUCCESS auto-dismisses after `DONE_DISMISS_MS`; a FAILURE or CANCELLATION stays
+  until the user dismisses or retries it. An error that clears itself on a timer is
+  the silent-failure bug this epic exists to kill, just slower.
+- `trackTask(...).abandon()` drops the row instead of settling it, for work that
+  turned out never to have started — an export whose save dialog was dismissed did
+  not succeed and did not fail, and "clip.mp4 finished" for a file that was never
+  written is the worse of the two lies.
+
+## Commit provenance (bookkeeping)
+
+`jobStatus.ts` and `jobsStore.ts` were first committed in `c297147`
+("fix(ai): exclusion-only OpenAI filter, honest test-connection, chip tooltips")
+by a CONCURRENT session working in the same worktree, which swept them up while
+they were still uncommitted here. The code is this ticket's; only that commit's
+subject is misleading. `git log --follow` on either file will land there first.
 
 # Related Files
 

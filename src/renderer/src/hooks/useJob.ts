@@ -8,23 +8,18 @@
  * blocker fix). This module turns that port into:
  *   - `jobEvents(port)` — a pure `AsyncIterable` of typed events, terminating
  *     after the first `done|error` (the job-termination invariant, PRD §10.2);
- *   - `useJob(kind)` — a React hook exposing `{ start, cancel, progress, stage,
- *     status, result, error }`, feeding the `uiStore.tasks` map as it streams.
+ *   - `drainJob(...)` — the single consumer loop every orchestrator drives.
  *
- * `jobEvents` is deliberately framework-free so it can be unit-tested over a
- * real Node `MessageChannel` driven by the fake-utilityProcess harness (Gate A:
- * "a scripted job over a real MessagePort drives useJob to a 'done' event").
+ * The `useJob` React hook this file is NAMED for is gone (see the note further
+ * down); the filename is kept because every orchestrator imports `drainJob`
+ * from it and a rename would be churn for its own sake.
+ *
+ * Both are deliberately framework-free so they can be unit-tested over a real
+ * Node `MessageChannel` driven by the fake-utilityProcess harness (Gate A:
+ * "a scripted job over a real MessagePort drives a job to a 'done' event").
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import type {
-  JobKind,
-  JobParams,
-  JobResult,
-  JobPartial,
-  JobEventFor,
-  JobErrorCode
-} from '@shared/jobs'
+import type { JobKind, JobParams, JobResult, JobPartial, JobEventFor } from '@shared/jobs'
 import { acquireJobPort } from './jobPort'
 
 // ============================================================================
@@ -170,123 +165,18 @@ export async function drainJob<K extends JobKind>(
 }
 
 // ============================================================================
-// useJob — React hook around jobEvents, wired to the bridge + uiStore tasks.
+// Job status vocabulary
 // ============================================================================
 
+/**
+ * The `useJob` React hook that used to live here has been REMOVED (EPIC-zpa1nd),
+ * as its own doc note anticipated: it existed to feed `uiStore.tasks` for a
+ * global job-queue UI that did not exist, and it had zero call sites — every
+ * shipping surface drives jobs through `drainJob` above. That UI now exists
+ * (`JobStatusBar` over `stores/jobsStore`), and it tracks at the ORCHESTRATOR
+ * level rather than per-job, because one user-visible activity (an import) spans
+ * several jobs and invokes. A per-job React hook was the wrong seam for it.
+ *
+ * This type survives the hook: `jobsStore` reuses the same vocabulary.
+ */
 export type JobStatus = 'idle' | 'queued' | 'running' | 'done' | 'error'
-
-export interface UseJobState<K extends JobKind> {
-  /** Start the job; streams progress/partial then resolves on done|error. */
-  start: (params: JobParams[K]) => Promise<void>
-  /** Cooperatively cancel the in-flight job. */
-  cancel: () => Promise<void>
-  jobId: string | null
-  status: JobStatus
-  progress: number
-  stage: string
-  result: JobResult[K] | null
-  error: { code: JobErrorCode; message: string; retriable: boolean } | null
-}
-
-/**
- * Optional hooks for the caller / store, so `uiStore` can be fed the task map
- * (plan: `tasks: Record<jobId,{kind,progress,status}>` fed by job ports).
- */
-export interface UseJobOptions<K extends JobKind> {
-  onPartial?: (data: Extract<JobEventFor<K>, { t: 'partial' }>['data']) => void
-  onTask?: (task: { jobId: string; kind: K; progress: number; status: JobStatus }) => void
-}
-
-/**
- * RESERVED, NOT YET WIRED (audit note openclip-dz5). The shipping components drive
- * jobs through the pure `jobEvents()` generator directly (import-pipeline, export-run,
- * model-download); this React hook + its `onTask` seam feed `uiStore.tasks`, which is
- * currently WRITTEN but never READ by any component — the global job-queue/progress UI
- * it was designed for doesn't exist yet. Kept as a deliberate trunk seam for that
- * future UI; do not mistake it for live runtime plumbing. Delete this + the
- * `uiStore.tasks` map if the queue UI is dropped from the roadmap.
- */
-export function useJob<K extends JobKind>(kind: K, options: UseJobOptions<K> = {}): UseJobState<K> {
-  const [jobId, setJobId] = useState<string | null>(null)
-  const [status, setStatus] = useState<JobStatus>('idle')
-  const [progress, setProgress] = useState(0)
-  const [stage, setStage] = useState('')
-  const [result, setResult] = useState<JobResult[K] | null>(null)
-  const [error, setError] = useState<UseJobState<K>['error']>(null)
-  const jobIdRef = useRef<string | null>(null)
-  const progressRef = useRef(0)
-  const optionsRef = useRef(options)
-  // Keep the latest options/progress reachable from the streaming loop without
-  // writing refs during render (react-hooks: no ref access in render body).
-  useEffect(() => {
-    optionsRef.current = options
-  }, [options])
-  useEffect(() => {
-    progressRef.current = progress
-  }, [progress])
-
-  const start = useCallback(
-    async (params: JobParams[K]): Promise<void> => {
-      setStatus('running')
-      setError(null)
-      setResult(null)
-      let id: string
-      let port: MessagePortLike
-      try {
-        id = (await window.openclip.jobs.start(kind, params)).jobId
-        setJobId(id)
-        jobIdRef.current = id
-        // Acquire the LIVE per-job port (delivered out-of-band, keyed by jobId).
-        port = await acquireJobPort(id)
-      } catch (e) {
-        // jobs.start() / acquireJobPort() rejected (e.g. the per-job port never arrived,
-        // openclip-ki6) — surface a terminal error instead of leaving status stuck on
-        // 'running' forever (audit fix openclip-73y).
-        setStatus('error')
-        setError({
-          code: 'SIDECAR_CRASH',
-          message: e instanceof Error ? e.message : String(e),
-          retriable: true
-        })
-        return
-      }
-      const emitTask = (s: JobStatus, p: number): void =>
-        optionsRef.current.onTask?.({ jobId: id, kind, progress: p, status: s })
-
-      for await (const ev of jobEvents<K>(port)) {
-        switch (ev.t) {
-          case 'progress': {
-            const s: JobStatus = ev.stage === 'queued' ? 'queued' : 'running'
-            setStatus(s)
-            setProgress(ev.pct)
-            setStage(ev.stage)
-            emitTask(s, ev.pct)
-            break
-          }
-          case 'partial':
-            optionsRef.current.onPartial?.((ev as Extract<JobEventFor<K>, { t: 'partial' }>).data)
-            break
-          case 'done':
-            setStatus('done')
-            setProgress(100)
-            setResult((ev as Extract<JobEventFor<K>, { t: 'done' }>).result)
-            emitTask('done', 100)
-            break
-          case 'error':
-            setStatus('error')
-            setError({ code: ev.code, message: ev.message, retriable: ev.retriable })
-            emitTask('error', progressRef.current)
-            break
-        }
-      }
-    },
-    [kind]
-  )
-
-  const cancel = useCallback(async (): Promise<void> => {
-    const id = jobIdRef.current
-    if (id) await window.openclip.jobs.cancel(id)
-  }, [])
-
-  return { start, cancel, jobId, status, progress, stage, result, error }
-}

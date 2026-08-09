@@ -277,6 +277,18 @@ export function describeTask(task: JobTask, now: number): TaskDescription {
   }
 }
 
+/**
+ * `drainJob` reports a terminal job error as
+ * `` `${kind} failed [${code}]: ${message}` `` (hooks/useJob.ts), and the
+ * sidecar emits `CANCELLED` for a user cancel, an app quit and a renderer
+ * port-close alike. A cancellation is not a failure and must not be presented
+ * as one — hence sniffing the code rather than surfacing the raw string.
+ */
+export function isCancellation(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err)
+  return /\[CANCELLED\]/.test(message)
+}
+
 /** Running/queued work, most recent first; children excluded (they nest). */
 export function activeTasks(tasks: Record<string, JobTask>): JobTask[] {
   return Object.values(tasks)

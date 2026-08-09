@@ -17,6 +17,7 @@
  * HANDLER_REGISTRARS rather than growing that one further.
  */
 
+import { app, Notification } from 'electron'
 import { IPCChannels } from '@shared/channels'
 import type { PreflightResult, PreflightTool } from '@shared/channels'
 import { ffmpegPath, ffprobePath, whisperCliPath, ytDlpPath } from '@main/utils/paths'
@@ -42,5 +43,35 @@ export function registerSystemPreflightHandler(ctx: IpcContext): void {
       whisperCli: probe(whisperCliPath),
       ytDlp: probe(ytDlpPath)
     })
+  )
+
+  /**
+   * Tell the OS a long job finished (EPIC-zpa1nd / FEAT-ckxz8d), so the user can
+   * genuinely walk away from a ten-minute transcription or a batch export.
+   *
+   * SUPPRESSED WHEN FOCUSED, decided here rather than in the renderer: the main
+   * process is the only side that actually knows whether the window has focus,
+   * and notifying someone who is watching the progress bar finish is noise.
+   *
+   * The dock badge is macOS-only (`app.dock` is undefined elsewhere) and is
+   * cleared the next time the window is focused — a badge that outlives the
+   * user's attention is just a stuck dot.
+   */
+  ctx.ipcMain.handle(
+    IPCChannels.SYSTEM_NOTIFY,
+    (_e, req: { title: string; body: string }): { delivered: boolean } => {
+      const win = ctx.getMainWindow()
+      if (win?.isFocused()) return { delivered: false }
+      if (!Notification.isSupported()) return { delivered: false }
+
+      new Notification({ title: req.title, body: req.body }).show()
+
+      const dock = app.dock
+      if (dock) {
+        dock.setBadge('•')
+        win?.once('focus', () => dock.setBadge(''))
+      }
+      return { delivered: true }
+    }
   )
 }

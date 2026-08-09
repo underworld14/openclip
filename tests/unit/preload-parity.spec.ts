@@ -110,6 +110,7 @@ describe('preload parity: real bridge method-set === mock method-set', () => {
       'checkUpdate',
       'directoryDialog',
       'imageDialog',
+      'notify',
       'openDialog',
       'openFolder',
       'preflight',

@@ -113,6 +113,15 @@ export enum IPCChannels {
   SHOW_IMAGE_DIALOG = 'system:image-dialog',
   CHECK_UPDATE = 'system:check-update',
   /**
+   * Native completion notification + dock badge (EPIC-zpa1nd / FEAT-ckxz8d).
+   *
+   * A transcription or a batch export runs for minutes; the desktop-native
+   * equivalent of OpusClip's "we'll email you" is telling the OS. Suppressed
+   * MAIN-SIDE when the window is already focused — notifying someone who is
+   * watching the progress bar is just noise.
+   */
+  SYSTEM_NOTIFY = 'system:notify',
+  /**
    * Report which sidecar binaries actually resolved (EPIC-xzzpty / FEAT-c5a15c).
    * `utils/paths.ts` has always resolved ffmpeg/ffprobe/whisper-cli/yt-dlp — it
    * just never told the renderer, so a missing binary surfaced as a raw spawn
@@ -379,6 +388,12 @@ export interface ChannelMap {
     { canceled: boolean; filePaths: string[] }
   >
   [IPCChannels.CHECK_UPDATE]: ChannelPayload<void, UpdateStatus>
+  // Fire-and-forget: `delivered` reports whether the OS was actually told, so a
+  // caller can tell "suppressed because you're looking at it" from "sent".
+  [IPCChannels.SYSTEM_NOTIFY]: ChannelPayload<
+    { title: string; body: string },
+    { delivered: boolean }
+  >
   [IPCChannels.SYSTEM_PREFLIGHT]: ChannelPayload<void, PreflightResult>
   // Renderer→main ACK that the pending autosave was flushed at quit (openclip-49y) →
   // `system.autosaveFlushed()`. main resolves its before-quit wait and proceeds.

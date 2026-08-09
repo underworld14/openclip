@@ -42,6 +42,7 @@ import { createGenerateClipsHandler } from '@renderer/components/generateClips'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { installAutosave } from '@renderer/stores/projectStore/autosave'
+import { installJobNotifications } from '@renderer/stores/jobNotifications'
 import { useImportController } from '@renderer/hooks/useImportController'
 import { useReadiness } from '@renderer/hooks/useReadiness'
 import { ReadinessBar } from '@renderer/components/ReadinessBar'
@@ -93,6 +94,9 @@ function App(): React.JSX.Element {
   // Wire the debounced autosave subscriber (Wave-1 integration) once for the app
   // lifetime; tears down on unmount.
   useEffect(() => installAutosave(), [])
+  // Announce finished/failed jobs to the OS + a toast on failure, so a long
+  // transcription or batch export is genuinely walk-away-able (FEAT-ckxz8d).
+  useEffect(() => installJobNotifications(), [])
   // Hydrate Settings from disk at boot. `settingsStore.load()` previously had NO
   // caller anywhere in the renderer — SettingsPanel called it, but it only mounts
   // when the user opens the Settings dialog. So the store held DEFAULT_SETTINGS

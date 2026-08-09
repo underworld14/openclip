@@ -1,16 +1,16 @@
 ---
 id: FEAT-ckxz8d
 title: No global job surface — once a modal closes, running work is invisible and unreachable
-status: todo
+status: testing
 priority: high
 labels:
     - ux
     - jobs
-parent: EPIC-zpa1nd
 deps:
     - FEAT-vh2bwz
+parent: EPIC-zpa1nd
 created: "2026-08-08T15:56:46Z"
-updated: "2026-08-08T15:56:46Z"
+updated: "2026-08-09T03:50:18Z"
 ---
 
 ## Current behavior
@@ -36,3 +36,38 @@ Impact: **high** · Effort: **medium**
 ## Provenance
 
 Found by a multi-agent sweep of the codebase cross-referenced against OpusClip, Kapwing AI Clip Maker, LokaClip, yt-short-clipper and SupoClip. Every `file:line` above was read directly from the source tree.
+
+## Done
+
+The registry + the persistent bar landed with FEAT-vh2bwz (the spine). This
+ticket finished the surface.
+
+**Batch export has rows again.** `onClipProgress` had existed on
+`runBatchExport` since it was written and was never passed. Each clip is now a
+child task under the batch parent, so ten concurrent encodes show per-clip
+progress and — the part that mattered — the per-clip FAILURE MESSAGE. "3 failed"
+cannot be acted on; "clip-4: No space left on device" can. The parent settles
+with a Reveal pointed at the first exported FILE rather than the folder, because
+the main handler reveals a path inside its parent and handing it the directory
+would open the directory's parent.
+
+**Native completion delivery.** New `SYSTEM_NOTIFY` channel (additive to the
+frozen `channels.ts`; `buildNamespace('system')` derives
+`window.openclip.system.notify` at both type and runtime level, and
+`preload-parity.spec` caught it immediately, which is the drift test doing its
+job). The handler raises an Electron `Notification` and a dock badge.
+
+Suppression is decided MAIN-SIDE, deliberately: only the main process knows
+whether the window has focus, and notifying someone who is watching the bar
+finish is noise. The dock badge clears on the next window focus — a badge that
+outlives the user's attention is a stuck dot.
+
+**Failures also toast.** `installJobNotifications` subscribes terminal
+transitions and raises a `sonner` toast with a Retry action on failure. Successes
+do NOT toast: the bar already showed them, and a toast per finished job is how
+notification fatigue starts. Cancellations announce nothing at all — the user did
+that themselves, seconds ago.
+
+An id-keyed guard means a task announces once: settled tasks stay in the map
+until dismissed, so without it every later store tick would re-fire. Child rows
+are skipped so a batch announces once rather than once per clip.

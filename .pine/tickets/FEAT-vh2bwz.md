@@ -1,14 +1,14 @@
 ---
 id: FEAT-vh2bwz
 title: Job registry + persistent status bar (spine for EPIC-zpa1nd)
-status: testing
+status: done
 priority: critical
 labels:
     - ux
     - jobs
 parent: EPIC-zpa1nd
 created: "2026-08-08T18:19:42Z"
-updated: "2026-08-08T18:19:58Z"
+updated: "2026-08-09T03:57:41Z"
 ---
 
 # Description
@@ -96,3 +96,85 @@ subject is misleading. `git log --follow` on either file will land there first.
 - src/renderer/src/App.tsx
 
 # Attachments
+
+## Work Evidence
+
+Closed by `pine close --evidence` on 2026-08-09.
+
+- Base: `fadd41eb` (last commit at or before ticket created 2026-08-08)
+- Commits (2):
+  - `0a9d3058` — feat(jobs): a job surface that outlives the panel that started it (FEAT-vh2bwz)
+  - `eb1be422` — fix(onboarding): address code review — two regressions plus readiness correctness
+- Files changed (base → working tree):
+
+```
+ .pine/tickets/FEAT-26tkya.md                       |  44 +++
+ .pine/tickets/FEAT-8559h1.md                       |  40 ++-
+ .pine/tickets/FEAT-azqfsv.md                       |  33 +++
+ .pine/tickets/FEAT-c0zn3j.md                       |  55 +++-
+ .pine/tickets/FEAT-ckxz8d.md                       |  41 ++-
+ .pine/tickets/FEAT-ky1jfw.md                       |  45 ++-
+ .pine/tickets/FEAT-vh2bwz.md                       |  98 +++++++
+ src/main/index.ts                                  |   9 +
+ src/main/ipc/ai.ts                                 |  36 ++-
+ src/main/ipc/job-start-validation.ts               |  15 +-
+ src/main/ipc/model.ts                              |  20 +-
+ src/main/ipc/system.ts                             |  31 ++
+ src/main/services/ai-client.ts                     | 216 +++++++++++---
+ src/main/services/jobs/export-runner.ts            |  25 +-
+ src/main/services/jobs/generate-clips-runner.ts    | 133 +++++++++
+ src/main/services/provider-models.ts               |  41 +--
+ src/main/services/reframe-detect.ts                |  22 +-
+ src/main/services/sidecar-manager.ts               |   5 +
+ src/renderer/src/App.tsx                           |  62 +++-
+ src/renderer/src/components/ClipSidebar.tsx        |  51 +++-
+ src/renderer/src/components/ExportPanel.tsx        | 120 ++++++--
+ src/renderer/src/components/ImportPanel.tsx        |   6 +-
+ src/renderer/src/components/JobStatusBar.tsx       | 256 ++++++++++++++++
+ .../src/components/ModelDownloadDialog.tsx         |  43 ++-
+ src/renderer/src/components/ReadinessBar.tsx       |   6 +-
+ src/renderer/src/components/SettingsPanel.tsx      |  34 ++-
+ .../src/components/TranscriptionSettings.tsx       |  30 +-
+ src/renderer/src/components/export-run.ts          |  14 +-
+ src/renderer/src/components/generate-clips-run.ts  |  54 ++++
+ src/renderer/src/components/import-pipeline.ts     |  42 ++-
+ src/renderer/src/components/jobStatus.ts           | 322 +++++++++++++++++++++
+ src/renderer/src/components/readinessView.ts       |  38 ++-
+ src/renderer/src/components/settingsView.ts        |  30 +-
+ src/renderer/src/hooks/import-controller.ts        | 160 +++++++---
+ src/renderer/src/hooks/importControllerHost.ts     |  42 +++
+ src/renderer/src/hooks/useImportController.ts      |  39 ++-
+ src/renderer/src/hooks/useJob.ts                   | 150 ++--------
+ src/renderer/src/hooks/useReadiness.ts             |   4 +-
+ src/renderer/src/main.tsx                          |   8 +
+ src/renderer/src/stores/jobNotifications.ts        |  90 ++++++
+ src/renderer/src/stores/jobsStore.ts               | 249 ++++++++++++++++
+ src/renderer/src/stores/projectStore/autosave.ts   |  61 +++-
+ src/renderer/src/stores/projectStore/clipsSlice.ts |  88 +++++-
+ .../src/stores/projectStore/exportSlice.ts         |   4 +-
+ src/renderer/src/stores/uiStore.ts                 |  37 +--
+ src/shared/channels.ts                             |  49 ++--
+ src/shared/jobs.ts                                 |  83 +++++-
+ tests/e2e/integration-wave1.e2e.spec.ts            |  31 +-
+ tests/e2e/job-status-bar.e2e.spec.ts               | 127 ++++++++
+ tests/e2e/model-gate.e2e.spec.ts                   |  53 ++++
+ tests/e2e/ping.e2e.spec.ts                         |   9 +-
+ tests/mocks/openclip.ts                            |  16 +
+ tests/unit/ai-components.spec.ts                   |  20 +-
+ tests/unit/ai-mapreduce.spec.ts                    | 112 +++++++
+ tests/unit/ai-stores.spec.ts                       | 162 ++++++++---
+ tests/unit/autosave-subscriber.spec.ts             |  73 +++++
+ tests/unit/export-runner.spec.ts                   |  67 ++++-
+ tests/unit/generate-clips-runner.spec.ts           | 188 ++++++++++++
+ tests/unit/import-controller-host.spec.ts          |  56 ++++
+ tests/unit/import-controller.spec.ts               |  72 +++++
+ tests/unit/import-url.spec.ts                      |  21 ++
+ tests/unit/job-notifications.spec.ts               | 131 +++++++++
+ tests/unit/job-status.spec.ts                      | 220 ++++++++++++++
+ tests/unit/jobs-store.spec.ts                      | 208 +++++++++++++
+ tests/unit/preload-parity.spec.ts                  |   8 +-
+ tests/unit/provider-models.spec.ts                 |  21 ++
+ tests/unit/readiness-view.spec.ts                  |  29 ++
+ tests/unit/system-notify.spec.ts                   | 133 +++++++++
+ 68 files changed, 4375 insertions(+), 463 deletions(-)
+```

@@ -1,17 +1,17 @@
 ---
 id: FEAT-c0zn3j
 title: '''Auto Generate Clips'' is a blocking invoke with no progress, no cancel, and no timeout — 2-6 minutes of a frozen button'
-status: todo
+status: testing
 priority: critical
 labels:
     - ux
     - jobs
     - ai
-parent: EPIC-zpa1nd
 deps:
     - FEAT-vh2bwz
+parent: EPIC-zpa1nd
 created: "2026-08-08T15:56:46Z"
-updated: "2026-08-08T15:56:46Z"
+updated: "2026-08-09T03:38:14Z"
 ---
 
 ## Current behavior
@@ -57,3 +57,52 @@ Concrete asks this evidence adds:
 - A cancel path — ideally by moving GENERATE_CLIPS onto the streaming-job plane,
   which already guarantees `done` xor `error`, rather than leaving it an invoke.
 - Per-chunk progress, since map-reduce already knows the chunk count.
+
+## Done
+
+All three asks, plus the streaming partials.
+
+**Contract.** `'generate-clips'` joins `JobKind` with params/result/partial in
+`jobs.ts`. `GenerateClipsRequest` in `channels.ts` is now an ALIAS of
+`JobParams['generate-clips']` rather than a second hand-maintained copy — the
+direction is forced, since channels.ts already imports jobs.ts. `concurrencyFor`
+returns 1 for it: it is network-bound, but each run is a paid BYOK request per
+chunk and letting a user stack generations multiplies their bill invisibly.
+
+**Deadline + abort.** `RawTransport` gained an optional second `{signal}` arg —
+optional so every existing one-argument fake in the specs still typechecks. The
+OpenAI and Anthropic transports pass it as the SDK's per-request `signal`;
+Ollama has no such option, so it races the promise and calls `client.abort()`.
+The SDK clients are now constructed with `timeout: AI_REQUEST_TIMEOUT_MS`
+(120s) — they previously carried **no deadline at all**, which is why the
+reproduced hang could last forever. `mapReduceGenerate` checks the signal
+between chunks so a cancel stops buying the remaining ones.
+
+**Two abort sources, two meanings.** The runner composes
+`AbortSignal.any([ctx.signal, AbortSignal.timeout(...)])` but keeps the deadline
+signal separate, because "you cancelled" and "the provider never answered" are
+different events: the former takes the manager's CANCELLED path, the latter
+raises a typed retriable `TIMEOUT` naming the model so the user knows what to
+change.
+
+**Renderer.** `clipsSlice.generateClips` drives `runGenerateClips` (a `drainJob`
+wrapper mirroring `export-run.ts`) and gained `generatePct` / `generateChunk` /
+`generateJobId` / `cancelGenerate`. ClipSidebar's bare "Generating clips…" is
+now a bar, "Analyzing chunk 2 of 6", and a Cancel button.
+
+### Two decisions worth keeping
+
+- **Provisional clips live in their own `provisionalClips` array**, never in
+  `clips`. `clips` is one of the four refs the autosave subscriber watches, so
+  streaming per-chunk candidates into it would write unranked, un-deduped
+  guesses into the `.ocproj` as though the user had accepted them. The sidebar
+  shows provisional cards *instead of* the previous run's results while a
+  generation is in flight, and the terminal result replaces them wholesale —
+  appending would surface cross-chunk duplicates of the same moment.
+- **A failed or cancelled regeneration keeps the previous clips.** They may have
+  been about to be exported. A cancel also sets no `generateError`: showing
+  someone their own click back as a failure is noise.
+
+`generate-clips-button.e2e` exercises the whole new path — click → job → real
+main process → registered runner → fake transport → cards — so this is proven
+end to end, not just at the seams.

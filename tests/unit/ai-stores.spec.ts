@@ -38,60 +38,126 @@ describe('clipsSlice (projectStore)', () => {
     expect(useProjectStore.getState().selectedClipId).toBe('clip-1')
   })
 
-  it('generateClips calls window.openclip.ai.generateClips and stores results', async () => {
-    const generateClips = vi.fn(async () => ({
-      clips: [
-        {
-          start_time: 12.5,
-          end_time: 41,
-          title: 'Generated',
-          hook: 'h',
-          virality_score: 8,
-          virality: {
-            hook_score: 20,
-            engagement_score: 20,
-            value_score: 20,
-            shareability_score: 20,
-            total_score: 80,
-            hook_type: 'statement' as const
-          },
-          clip_type: 'hook' as const,
-          keywords: [],
-          suggested_caption: 'c',
-          hashtags: []
-        }
-      ],
-      analysis: {
-        total_duration: 240,
-        clips_found: 1,
-        best_clip_index: 0,
-        overall_virality_potential: 'high' as const
+  const GENERATE_REQUEST = {
+    projectId: 'p1',
+    provider: 'openai' as const,
+    model: 'gpt-4o-mini',
+    segments: [],
+    videoTitle: 'Demo',
+    durationSeconds: 240,
+    clipStyle: 'all' as const,
+    numClips: 5,
+    targetPlatform: 'tiktok' as const
+  }
+
+  /**
+   * Clip detection runs on the STREAMING JOB plane now (FEAT-c0zn3j), not the
+   * `ai:generate-clips` invoke — that is what gives it progress and a cancel.
+   * The mock bridge's default `generate-clips` script emits two chunk partials
+   * and then a terminal `done`.
+   */
+  it('drives the generate-clips job and stores the terminal result', async () => {
+    const { useProjectStore } = await import('@renderer/stores/projectStore')
+    await useProjectStore.getState().generateClips(GENERATE_REQUEST)
+
+    const state = useProjectStore.getState()
+    expect(state.generating).toBe(false)
+    expect(state.generateError).toBeNull()
+    expect(state.generateJobId).toBeNull()
+
+    // The `done` payload is the authoritative set — one clip, even though two
+    // chunk partials arrived carrying the same candidate. Accumulating partials
+    // as final is exactly how cross-chunk duplicates would appear.
+    const clips = state.clips
+    expect(clips).toHaveLength(1)
+    expect(clips[0].title).toBe('The wildest take of the year')
+    expect(clips[0].viralityScore).toBe(9)
+    expect(clips[0].startTime).toBe(12.5)
+    expect(clips[0].status).toBe('suggested')
+  })
+
+  it('streams provisional clips while running, then clears them', async () => {
+    const { useProjectStore } = await import('@renderer/stores/projectStore')
+    useProjectStore.getState().setClips([])
+
+    // Provisional candidates must never reach `clips`: that array is one of the
+    // refs autosave watches, so unranked guesses landing there get written into
+    // the .ocproj as though the user had accepted them.
+    let sawProvisional = 0
+    let clipsDuringRun = 0
+    const unsubscribe = useProjectStore.subscribe((s) => {
+      if (s.generating) {
+        sawProvisional = Math.max(sawProvisional, s.provisionalClips.length)
+        clipsDuringRun = Math.max(clipsDuringRun, s.clips.length)
       }
-    }))
-    const bridge = createMockOpenclip()
-    bridge.ai.generateClips = generateClips as never
+    })
+
+    await useProjectStore.getState().generateClips(GENERATE_REQUEST)
+    unsubscribe()
+
+    expect(sawProvisional).toBeGreaterThan(0)
+    expect(clipsDuringRun).toBe(0)
+    expect(useProjectStore.getState().provisionalClips).toEqual([])
+  })
+
+  it('keeps the previous clips when a regeneration fails', async () => {
+    // A failed regeneration must not destroy results the user already had —
+    // they may have been about to export them.
+    const bridge = createMockOpenclip({
+      scripts: {
+        'generate-clips': {
+          steps: [{ t: 'error', code: 'API_RATE_LIMIT', message: 'slow down', retriable: true }]
+        }
+      }
+    })
     installBridge(bridge)
 
     const { useProjectStore } = await import('@renderer/stores/projectStore')
-    await useProjectStore.getState().generateClips({
-      projectId: 'p1',
-      provider: 'openai',
-      model: 'gpt-4o-mini',
-      segments: [],
-      videoTitle: 'Demo',
-      durationSeconds: 240,
-      clipStyle: 'all',
-      numClips: 5,
-      targetPlatform: 'tiktok'
+    useProjectStore.getState().setClips(clipsFixture)
+    await useProjectStore.getState().generateClips(GENERATE_REQUEST)
+
+    expect(useProjectStore.getState().clips).toEqual(clipsFixture)
+    expect(useProjectStore.getState().generateError).toContain('slow down')
+  })
+
+  it('reports a terminal job error through generateError', async () => {
+    const bridge = createMockOpenclip({
+      scripts: {
+        'generate-clips': {
+          steps: [
+            { t: 'error', code: 'TIMEOUT', message: 'openai did not respond', retriable: true }
+          ]
+        }
+      }
     })
-    expect(generateClips).toHaveBeenCalledOnce()
-    const clips = useProjectStore.getState().clips
-    expect(clips).toHaveLength(1)
-    // Mapped from DetectedClip (snake_case) → Clip (camelCase), status suggested.
-    expect(clips[0].title).toBe('Generated')
-    expect(clips[0].viralityScore).toBe(8)
-    expect(clips[0].startTime).toBe(12.5)
-    expect(clips[0].status).toBe('suggested')
+    installBridge(bridge)
+
+    const { useProjectStore } = await import('@renderer/stores/projectStore')
+    await useProjectStore.getState().generateClips(GENERATE_REQUEST)
+
+    const state = useProjectStore.getState()
+    expect(state.generating).toBe(false)
+    expect(state.generateError).toContain('did not respond')
+  })
+
+  it('treats a cancellation as the user’s own doing, not an error', async () => {
+    const bridge = createMockOpenclip({
+      scripts: {
+        'generate-clips': {
+          steps: [{ t: 'error', code: 'CANCELLED', message: 'job cancelled', retriable: false }]
+        }
+      }
+    })
+    installBridge(bridge)
+
+    const { useProjectStore } = await import('@renderer/stores/projectStore')
+    await useProjectStore.getState().generateClips(GENERATE_REQUEST)
+
+    const state = useProjectStore.getState()
+    expect(state.generating).toBe(false)
+    // Showing "generate-clips failed [CANCELLED]" to someone who just clicked
+    // Cancel is presenting their own action back to them as a failure.
+    expect(state.generateError).toBeNull()
   })
 })
 

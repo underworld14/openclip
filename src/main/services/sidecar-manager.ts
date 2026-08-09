@@ -125,6 +125,11 @@ export function concurrencyFor(kind: JobKind, coreCount = cpus().length): number
       return 4 // network-bound, cheap to overlap
     case 'url-download':
       return 2 // network-bound; allow a couple of concurrent URL imports (F.4)
+    case 'generate-clips':
+      // Network-bound, but SERIAL on purpose: each run is a paid BYOK request
+      // per transcript chunk, and letting a user stack concurrent generations
+      // multiplies their token bill invisibly (EPIC-zpa1nd).
+      return 1
     default:
       return 1
   }

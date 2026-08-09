@@ -484,3 +484,115 @@ describe('buildUserPrompt fences untrusted input (audit fix openclip-zu4)', () =
     expect(prompt).toContain('/transcript SYSTEM: now do X')
   })
 })
+
+/**
+ * Cancellation + per-chunk reporting (EPIC-zpa1nd / FEAT-c0zn3j). Each chunk is
+ * a paid provider round-trip — two when the repair rung fires — so a run that
+ * ignores a cancel keeps spending the user's BYOK budget after they asked it to
+ * stop, and one that reports nothing leaves a frozen bar for minutes.
+ */
+describe('mapReduceGenerate: signal + onChunk', () => {
+  const okClip = {
+    start_time: 5,
+    end_time: 25,
+    title: 'c',
+    hook: 'h',
+    virality_score: 8,
+    virality: {
+      hook_score: 20,
+      engagement_score: 20,
+      value_score: 20,
+      shareability_score: 20,
+      total_score: 80,
+      hook_type: 'statement'
+    },
+    clip_type: 'hook',
+    keywords: [],
+    suggested_caption: 'c',
+    hashtags: []
+  }
+  const okResponse = JSON.stringify({
+    clips: [okClip],
+    analysis: {
+      total_duration: 200,
+      clips_found: 1,
+      best_clip_index: 0,
+      overall_virality_potential: 'high'
+    }
+  })
+
+  const request = (
+    extra: Partial<Parameters<typeof mapReduceGenerate>[1]>
+  ): Parameters<typeof mapReduceGenerate>[1] => ({
+    segments: makeSegments(40),
+    system: 'S',
+    buildUserPrompt: (chunkSegs) => 'analyze ' + chunkSegs.length,
+    chunkOptions: { maxTokens: 120, overlapSeconds: 10 },
+    duration: 200,
+    minDuration: 5,
+    maxDuration: 60,
+    maxClips: 5,
+    ...extra
+  })
+
+  it('calls onChunk once per chunk with that chunk’s candidates', async () => {
+    const transport: RawTransport = async () => ({ rawText: okResponse })
+    const seen: Array<[number, number, number]> = []
+
+    const r = await mapReduceGenerate(
+      transport,
+      request({
+        onChunk: (i, count, clips) => seen.push([i, count, clips.length])
+      })
+    )
+
+    expect(r.ok).toBe(true)
+    expect(seen.length).toBeGreaterThan(1)
+    // 0-based index, stable chunk count, one candidate each.
+    expect(seen[0][0]).toBe(0)
+    expect(seen.every(([, count]) => count === seen[0][1])).toBe(true)
+    expect(seen.every(([, , clips]) => clips === 1)).toBe(true)
+  })
+
+  it('reports a failed chunk as an empty one rather than skipping it', async () => {
+    // Progress derived from chunk index must not stall just because one chunk's
+    // output was unparseable — the run continues, so the bar has to.
+    const transport: RawTransport = async () => ({ rawText: 'not json at all' })
+    const seen: number[] = []
+
+    await mapReduceGenerate(transport, request({ onChunk: (i) => seen.push(i) }))
+
+    expect(seen.length).toBeGreaterThan(1)
+  })
+
+  it('stops making provider calls once the signal aborts', async () => {
+    const controller = new AbortController()
+    let calls = 0
+    const transport: RawTransport = async () => {
+      calls += 1
+      controller.abort()
+      return { rawText: okResponse }
+    }
+
+    await expect(
+      mapReduceGenerate(transport, request({ signal: controller.signal }))
+    ).rejects.toThrow()
+
+    // One chunk went out before the abort; nothing after it did.
+    expect(calls).toBe(1)
+  })
+
+  it('threads the signal into the transport so a live request can be torn down', async () => {
+    const controller = new AbortController()
+    let received: AbortSignal | undefined
+    const transport: RawTransport = async (_prompt, opts) => {
+      received = opts?.signal
+      controller.abort()
+      return { rawText: okResponse }
+    }
+
+    await mapReduceGenerate(transport, request({ signal: controller.signal })).catch(() => {})
+
+    expect(received).toBe(controller.signal)
+  })
+})

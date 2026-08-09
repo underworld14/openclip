@@ -31,7 +31,17 @@
  * A renderer crash (port close) is treated as an implicit cancel.
  */
 
-import type { CaptionStyle, Transcript, TranscriptSegment, WordTimestamp } from './schema'
+import type {
+  AIProvider,
+  CaptionStyle,
+  ClipSchema,
+  ClipStyle,
+  DetectedClip,
+  TargetPlatform,
+  Transcript,
+  TranscriptSegment,
+  WordTimestamp
+} from './schema'
 
 // ============================================================================
 // Job taxonomy
@@ -43,7 +53,22 @@ import type { CaptionStyle, Transcript, TranscriptSegment, WordTimestamp } from 
  * emitting byte/percent progress; the renderer then feeds the merged file into
  * the existing import→extract→transcribe pipeline.
  */
-export type JobKind = 'transcribe' | 'export' | 'model-download' | 'url-download'
+export type JobKind =
+  | 'transcribe'
+  | 'export'
+  | 'model-download'
+  | 'url-download'
+  /**
+   * BYOK clip detection (EPIC-zpa1nd / FEAT-c0zn3j). This was the one long
+   * operation that never made it onto the job plane: `ai:generate-clips` was a
+   * plain `invoke` running one repair-laddered LLM call per transcript chunk,
+   * strictly sequentially, with no progress, no cancel and no timeout. A slow
+   * or wedged provider meant a frozen button for minutes with no escape but
+   * quitting — reproduced against a real OpenRouter model that never returned.
+   * As a job it inherits the MessagePort progress/cancel plane and the
+   * "always terminates done xor error" invariant for free.
+   */
+  | 'generate-clips'
 
 /** Typed terminal-error codes streamed in `{t:'error'}` (PRD §10.2). */
 export type JobErrorCode =
@@ -196,6 +221,36 @@ export interface JobParams {
   'url-download': {
     url: string
   }
+  /**
+   * BYOK clip detection over the transcript (PRD §7.2/§16). SEGMENT-LEVEL TEXT
+   * ONLY — the word stream never leaves the machine, and the video never does
+   * either. The API key is NOT here and never crosses IPC: the runner decrypts
+   * it main-side from the key vault (PRD §12.2).
+   *
+   * `channels.ts` aliases its `GenerateClipsRequest` to this type, so the
+   * legacy invoke channel and the job cannot drift apart. It lives HERE rather
+   * than there because channels.ts imports from jobs.ts and not the reverse.
+   */
+  'generate-clips': {
+    projectId: string
+    provider: AIProvider
+    model: string
+    /** Segment-level only — word data stays local (PRD §16). */
+    segments: Transcript['segments']
+    videoTitle: string
+    durationSeconds: number
+    clipStyle: ClipStyle
+    numClips: number
+    targetPlatform: TargetPlatform
+    /**
+     * Clip-length bounds in seconds (audit fix openclip-t0v). When present they
+     * drive the prompt's "each clip must be between X and Y seconds" line AND
+     * the in-code clamp; the renderer populates them from project settings so a
+     * user's min/max duration is honoured instead of a hard-coded 15/90.
+     */
+    minDuration?: number
+    maxDuration?: number
+  }
 }
 
 // ============================================================================
@@ -230,6 +285,13 @@ export interface JobResult {
     /** Final on-disk size of the downloaded file. */
     bytes: number
   }
+  /**
+   * The AUTHORITATIVE clip set: repaired, reconciled, clamped to the source
+   * duration and the user's min/max, de-overlapped and ranked to `numClips`.
+   * Identical to what the `ai:generate-clips` invoke returns — the two entry
+   * points share one `runGenerate` core.
+   */
+  'generate-clips': ClipSchema
 }
 
 // ============================================================================
@@ -267,6 +329,23 @@ export interface JobPartial {
     downloadedBytes: number
     totalBytes: number
     pct: number
+  }
+  /**
+   * One chunk's surviving candidates, emitted as map-reduce walks the
+   * transcript, so cards stream in instead of all appearing at the end.
+   *
+   * PROVISIONAL, and the renderer must treat them as such: these clips are
+   * reconciled but NOT yet de-overlapped across chunks, ranked, or clamped to
+   * `numClips` — that only happens in the reduce step. Append them for preview
+   * if you like, but REPLACE the whole list with the `done` result, which is
+   * the authoritative set. Accumulating partials as final would surface
+   * cross-chunk duplicates.
+   */
+  'generate-clips': {
+    clips: DetectedClip[]
+    /** 0-based. */
+    chunkIndex: number
+    chunkCount: number
   }
 }
 

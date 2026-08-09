@@ -177,6 +177,17 @@ const DEFAULT_SCRIPTS: { [K in JobKind]: JobScript<K> } = {
         }
       }
     ]
+  },
+  // Two chunks, so a consumer that mishandles partials (accumulating them as
+  // final rather than replacing on `done`) shows up as duplicated clips.
+  'generate-clips': {
+    steps: [
+      { t: 'progress', pct: 50, stage: 'analyzing' },
+      { t: 'partial', data: { clips: clipSchemaFixture.clips, chunkIndex: 0, chunkCount: 2 } },
+      { t: 'progress', pct: 100, stage: 'analyzing' },
+      { t: 'partial', data: { clips: clipSchemaFixture.clips, chunkIndex: 1, chunkCount: 2 } },
+      { t: 'done', result: clipSchemaFixture }
+    ]
   }
 }
 

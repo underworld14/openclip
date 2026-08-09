@@ -162,8 +162,37 @@ export interface PromptPair {
   user: string
 }
 
-/** A raw, provider-agnostic completion call. Returns the model's text output. */
-export type RawTransport = (prompt: PromptPair) => Promise<{ rawText: string }>
+/** Per-request controls a transport honours where its SDK supports them. */
+export interface TransportCallOptions {
+  /**
+   * Abort the in-flight provider request. Composed by the caller from the job's
+   * cancel signal and a hard deadline (EPIC-zpa1nd / FEAT-c0zn3j): before this,
+   * nothing here could be interrupted, and a model that simply never responded
+   * — observed with a real OpenRouter model on a 406s transcript — hung the app
+   * until it was force-quit.
+   */
+  signal?: AbortSignal
+}
+
+/**
+ * A raw, provider-agnostic completion call. Returns the model's text output.
+ *
+ * `opts` is OPTIONAL on purpose: every existing single-argument fake transport
+ * in the specs stays valid, and a transport that cannot honour cancellation
+ * simply ignores it (the caller still races the deadline).
+ */
+export type RawTransport = (
+  prompt: PromptPair,
+  opts?: TransportCallOptions
+) => Promise<{ rawText: string }>
+
+/**
+ * Hard per-request deadline for a provider call. The SDK clients were
+ * constructed with NO timeout at all, so a wedged connection blocked forever.
+ * Generous enough for a large chunk on a slow reasoning model, short enough
+ * that a hung request surfaces as a typed TIMEOUT rather than a frozen UI.
+ */
+export const AI_REQUEST_TIMEOUT_MS = 120_000
 
 // ============================================================================
 // JSON Schema derivation (single source of truth = the frozen ClipSchema).
@@ -250,9 +279,10 @@ Return ONLY a corrected JSON object that is valid against the schema. No markdow
  */
 export async function runRepairLadder(
   transport: RawTransport,
-  prompt: PromptPair
+  prompt: PromptPair,
+  opts?: TransportCallOptions
 ): Promise<LadderResult> {
-  const first = await transport(prompt)
+  const first = await transport(prompt, opts)
   // An EMPTY completion is a refusal / content-filter / truncation signal, not
   // malformed JSON (audit fix openclip-46x): the transports coerce a null/empty
   // provider completion to ''. Surface it directly instead of burning a repair
@@ -272,10 +302,13 @@ export async function runRepairLadder(
   if (r1.ok) return r1
 
   // Rung 3: exactly ONE repair round-trip echoing the Zod errors.
-  const repaired = await transport({
-    system: prompt.system,
-    user: buildRepairPrompt(prompt.user, r1.rawError, first.rawText)
-  })
+  const repaired = await transport(
+    {
+      system: prompt.system,
+      user: buildRepairPrompt(prompt.user, r1.rawError, first.rawText)
+    },
+    opts
+  )
   const r2 = parseClipSchema(repaired.rawText)
   if (r2.ok) return r2
 
@@ -478,6 +511,19 @@ export interface MapReduceRequest {
   /** Optional result cache (PRD §16): keyed by `cacheKey`. */
   cache?: Map<string, unknown>
   cacheKey?: string
+  /**
+   * Cancellation for the whole run (EPIC-zpa1nd). Checked between chunks AND
+   * threaded into each provider request, so a cancel takes effect at the next
+   * chunk boundary at worst and immediately where the SDK honours it.
+   */
+  signal?: AbortSignal
+  /**
+   * Called after each chunk with that chunk's surviving candidates, so a job
+   * runner can emit progress and stream provisional cards. `clips` are NOT yet
+   * de-overlapped across chunks, ranked or clamped — that is the reduce step
+   * below, and its output is the authoritative set.
+   */
+  onChunk?: (chunkIndex: number, chunkCount: number, clips: DetectedClip[]) => void
 }
 
 /**
@@ -497,15 +543,25 @@ export async function mapReduceGenerate(
   const all: DetectedClip[] = []
   let lastError: AiError | null = null
 
-  for (const chunk of chunks) {
-    const result = await runRepairLadder(transport, {
-      system: req.system,
-      user: req.buildUserPrompt(chunk.segments)
-    })
+  for (let i = 0; i < chunks.length; i += 1) {
+    // Cooperative cancel between chunks. Each chunk is a paid round-trip (two
+    // if the repair rung fires), so a user who cancels must not silently keep
+    // buying the rest of them.
+    req.signal?.throwIfAborted()
+    const result = await runRepairLadder(
+      transport,
+      {
+        system: req.system,
+        user: req.buildUserPrompt(chunks[i].segments)
+      },
+      { signal: req.signal }
+    )
     if (result.ok) {
       all.push(...result.value.clips)
+      req.onChunk?.(i, chunks.length, result.value.clips)
     } else {
       lastError = result.error
+      req.onChunk?.(i, chunks.length, [])
     }
   }
 
@@ -555,11 +611,18 @@ function viralityBand(clips: DetectedClip[]): 'high' | 'medium' | 'low' {
 // a fake and no network runs.
 // ============================================================================
 
-/** Minimal structural slice of the OpenAI client we use. */
+/**
+ * Minimal structural slice of the OpenAI client we use. The second `options`
+ * argument is where the SDK takes a per-request `signal`; it is optional so the
+ * existing fake clients in the specs still satisfy the type.
+ */
 export interface OpenAILike {
   chat: {
     completions: {
-      create(body: unknown): Promise<{
+      create(
+        body: unknown,
+        options?: { signal?: AbortSignal }
+      ): Promise<{
         choices: Array<{ message: { content: string | null } }>
       }>
     }
@@ -568,18 +631,21 @@ export interface OpenAILike {
 
 export function buildOpenAITransport(client: OpenAILike, model: string): RawTransport {
   const schema = clipJsonSchema()
-  return async ({ system, user }) => {
-    const res = await client.chat.completions.create({
-      model,
-      messages: [
-        { role: 'system', content: system },
-        { role: 'user', content: user }
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: { name: 'clips', strict: true, schema }
-      }
-    })
+  return async ({ system, user }, opts) => {
+    const res = await client.chat.completions.create(
+      {
+        model,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user }
+        ],
+        response_format: {
+          type: 'json_schema',
+          json_schema: { name: 'clips', strict: true, schema }
+        }
+      },
+      { signal: opts?.signal }
+    )
     return { rawText: res.choices[0]?.message?.content ?? '' }
   }
 }
@@ -587,7 +653,10 @@ export function buildOpenAITransport(client: OpenAILike, model: string): RawTran
 /** Minimal structural slice of the Anthropic client we use. */
 export interface AnthropicLike {
   messages: {
-    parse(body: unknown): Promise<{
+    parse(
+      body: unknown,
+      options?: { signal?: AbortSignal }
+    ): Promise<{
       parsed_output?: unknown
       content?: Array<{ type: string; text?: string }>
     }>
@@ -615,17 +684,20 @@ export function buildAnthropicTransport(
   zodOutputFormatFn?: (schema: typeof ClipSchema) => unknown,
   maxTokens: number = ANTHROPIC_DEFAULT_MAX_TOKENS
 ): RawTransport {
-  return async ({ system, user }) => {
+  return async ({ system, user }, opts) => {
     const format = zodOutputFormatFn
       ? zodOutputFormatFn(ClipSchema)
       : await defaultZodOutputFormat()
-    const res = await client.messages.parse({
-      model,
-      max_tokens: maxTokens,
-      system,
-      messages: [{ role: 'user', content: user }],
-      output_config: { format }
-    })
+    const res = await client.messages.parse(
+      {
+        model,
+        max_tokens: maxTokens,
+        system,
+        messages: [{ role: 'user', content: user }],
+        output_config: { format }
+      },
+      { signal: opts?.signal }
+    )
     if (res.parsed_output != null) return { rawText: JSON.stringify(res.parsed_output) }
     const text = (res.content ?? [])
       .filter((b) => b.type === 'text')
@@ -640,15 +712,21 @@ async function defaultZodOutputFormat(): Promise<unknown> {
   return zodOutputFormat(ClipSchema)
 }
 
-/** Minimal structural slice of the Ollama client we use. */
+/**
+ * Minimal structural slice of the Ollama client we use. Unlike the OpenAI and
+ * Anthropic SDKs it takes no per-request `signal`; cancellation is a
+ * client-level `abort()`, so that is what we call.
+ */
 export interface OllamaLike {
   chat(body: unknown): Promise<{ message: { content: string } }>
+  /** Aborts any request in flight on this client. Optional: fakes omit it. */
+  abort?(): void
 }
 
 export function buildOllamaTransport(client: OllamaLike, model: string): RawTransport {
   const format = clipJsonSchema()
-  return async ({ system, user }) => {
-    const res = await client.chat({
+  return async ({ system, user }, opts) => {
+    const pending = client.chat({
       model,
       stream: false,
       format,
@@ -657,7 +735,44 @@ export function buildOllamaTransport(client: OllamaLike, model: string): RawTran
         { role: 'user', content: user }
       ]
     })
+    const res = await withAbort(pending, opts?.signal, () => client.abort?.())
     return { rawText: res.message?.content ?? '' }
+  }
+}
+
+/**
+ * Reject as soon as `signal` aborts, running `onAbort` to tear down the
+ * underlying request where the client supports it.
+ *
+ * The race matters even when `onAbort` cannot stop the work: the caller's job
+ * must terminate promptly on cancel rather than waiting out a request that may
+ * never return. The listener is always removed, so a settled call cannot leak
+ * one onto a long-lived signal.
+ */
+async function withAbort<T>(
+  pending: Promise<T>,
+  signal: AbortSignal | undefined,
+  onAbort: () => void
+): Promise<T> {
+  if (!signal) return pending
+  if (signal.aborted) {
+    onAbort()
+    throw signal.reason ?? new Error('aborted')
+  }
+  let onSignalAbort: (() => void) | undefined
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_resolve, reject) => {
+        onSignalAbort = (): void => {
+          onAbort()
+          reject(signal.reason ?? new Error('aborted'))
+        }
+        signal.addEventListener('abort', onSignalAbort, { once: true })
+      })
+    ])
+  } finally {
+    if (onSignalAbort) signal.removeEventListener('abort', onSignalAbort)
   }
 }
 
@@ -687,7 +802,14 @@ export async function createTransport(args: TransportFactoryArgs): Promise<RawTr
   switch (args.provider) {
     case 'openai': {
       const { default: OpenAI } = await import('openai')
-      const client = new OpenAI({ apiKey: args.apiKey ?? '', baseURL: args.baseUrl })
+      // `timeout` matters as much as the per-request signal: it is the backstop
+      // for a connection that neither responds nor errors (EPIC-zpa1nd). These
+      // clients previously carried no deadline whatsoever.
+      const client = new OpenAI({
+        apiKey: args.apiKey ?? '',
+        baseURL: args.baseUrl,
+        timeout: AI_REQUEST_TIMEOUT_MS
+      })
       return buildOpenAITransport(client as unknown as OpenAILike, args.model)
     }
     case 'openrouter': {
@@ -699,13 +821,17 @@ export async function createTransport(args: TransportFactoryArgs): Promise<RawTr
       const client = new OpenAI({
         apiKey: args.apiKey ?? '',
         baseURL: args.baseUrl ?? OPENROUTER_BASE_URL,
-        defaultHeaders: { 'HTTP-Referer': OPENROUTER_APP_URL, 'X-Title': OPENROUTER_APP_TITLE }
+        defaultHeaders: { 'HTTP-Referer': OPENROUTER_APP_URL, 'X-Title': OPENROUTER_APP_TITLE },
+        timeout: AI_REQUEST_TIMEOUT_MS
       })
       return buildOpenAITransport(client as unknown as OpenAILike, args.model)
     }
     case 'anthropic': {
       const { default: Anthropic } = await import('@anthropic-ai/sdk')
-      const client = new Anthropic({ apiKey: args.apiKey ?? '' })
+      const client = new Anthropic({
+        apiKey: args.apiKey ?? '',
+        timeout: AI_REQUEST_TIMEOUT_MS
+      })
       return buildAnthropicTransport(client as unknown as AnthropicLike, args.model)
     }
     case 'ollama': {
@@ -739,6 +865,10 @@ export interface GenerateClipsArgs {
   maxDuration: number
   model: string
   cache?: Map<string, unknown>
+  /** Cancellation for the whole run (EPIC-zpa1nd) — see MapReduceRequest. */
+  signal?: AbortSignal
+  /** Per-chunk callback so a job runner can stream progress + provisional clips. */
+  onChunk?: MapReduceRequest['onChunk']
 }
 
 /**
@@ -795,6 +925,8 @@ export function generateClips(args: GenerateClipsArgs): Promise<LadderResult> {
     maxDuration: args.maxDuration,
     maxClips: args.numClips,
     cache: args.cache,
+    signal: args.signal,
+    onChunk: args.onChunk,
     cacheKey: clipCacheKey({
       segments: args.segments,
       model: args.model,

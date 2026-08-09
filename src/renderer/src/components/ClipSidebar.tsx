@@ -11,15 +11,23 @@ import { useMemo } from 'react'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { ClipCard } from '@renderer/components/ClipCard'
 import { sortClipsForSidebar } from '@renderer/components/clipView'
+import { Button } from '@renderer/components/ui/button'
+import { Progress } from '@renderer/components/ui/progress'
 
 export function ClipSidebar(): React.JSX.Element {
   const clips = useProjectStore((s) => s.clips)
   const generating = useProjectStore((s) => s.generating)
   const generateError = useProjectStore((s) => s.generateError)
+  const generatePct = useProjectStore((s) => s.generatePct)
+  const generateChunk = useProjectStore((s) => s.generateChunk)
+  const provisionalClips = useProjectStore((s) => s.provisionalClips)
+  const cancelGenerate = useProjectStore((s) => s.cancelGenerate)
 
   // Memoize the sort so it only re-runs when the clips array changes — not on every
   // selection/approval re-render (audit fix openclip-don).
   const ordered = useMemo(() => sortClipsForSidebar(clips), [clips])
+  const provisional = useMemo(() => sortClipsForSidebar(provisionalClips), [provisionalClips])
+  const showProvisional = generating && provisional.length > 0
 
   return (
     <div data-testid="clip-sidebar" className="flex h-full flex-col gap-2 p-3">
@@ -27,9 +35,33 @@ export function ClipSidebar(): React.JSX.Element {
         Clips {clips.length > 0 && <span className="text-foreground">({clips.length})</span>}
       </h2>
 
-      {generating && <p className="text-sm text-muted-foreground">Generating clips…</p>}
+      {/* Was the bare text "Generating clips…" for a 2-6 minute operation with no
+          way out (FEAT-c0zn3j). Map-reduce always knew its chunk count; nothing
+          had ever asked it. */}
+      {generating && (
+        <div className="flex flex-col gap-1.5" data-testid="generate-progress">
+          <Progress value={generatePct} className="h-1" />
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs text-muted-foreground" data-testid="generate-stage">
+              {generateChunk
+                ? `Analyzing chunk ${generateChunk.index + 1} of ${generateChunk.count}`
+                : 'Analyzing transcript…'}
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-[11px]"
+              data-testid="generate-cancel"
+              onClick={() => void cancelGenerate()}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
       {generateError && (
-        <p className="text-sm text-destructive" role="alert">
+        <p className="text-sm text-destructive" role="alert" data-testid="generate-error">
           {generateError}
         </p>
       )}
@@ -38,9 +70,18 @@ export function ClipSidebar(): React.JSX.Element {
         <p className="text-sm text-muted-foreground">No clips yet — run “Auto Generate Clips”.</p>
       )}
 
-      {ordered.map((clip) => (
-        <ClipCard key={clip.id} clip={clip} />
-      ))}
+      {/* While a run is producing candidates, show THOSE rather than the previous
+          run's results — a list mixing last time's ranked clips with this time's
+          unranked ones is unreadable. The old clips are not discarded: they stay
+          in the store and come back if this run fails or is cancelled, so a
+          regeneration can never lose what the user already had. */}
+      {showProvisional
+        ? provisional.map((clip) => (
+            <div key={clip.id} className="opacity-60" data-testid="provisional-clip">
+              <ClipCard clip={clip} />
+            </div>
+          ))
+        : ordered.map((clip) => <ClipCard key={clip.id} clip={clip} />)}
     </div>
   )
 }

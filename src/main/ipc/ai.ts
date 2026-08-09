@@ -29,6 +29,8 @@ import {
   type RawTransport
 } from '@main/services/ai-client'
 import { suggestEmoji } from '@main/services/ai-emoji'
+import { createGenerateClipsRunner } from '@main/services/jobs/generate-clips-runner'
+import { registerRunner, hasRunner } from '@main/services/sidecar-manager'
 import { fetchProviderModels } from '@main/services/provider-models'
 import type { CatalogueFetcher } from '@main/services/provider-models'
 import {
@@ -145,6 +147,31 @@ const fakeEmojiTransport: RawTransport = async () => ({
 const clipCache = new Map<string, unknown>()
 
 export function registerAiHandlers(ctx: IpcContext): void {
+  // Clip detection ALSO runs as a streaming job (EPIC-zpa1nd / FEAT-c0zn3j),
+  // which is how the app itself now calls it: the job plane gives it progress,
+  // cancel and the done-xor-error invariant that the invoke below cannot have.
+  // Both entry points delegate to the same `runGenerate` core and share
+  // `clipCache`, so there is one implementation and no second code path.
+  //
+  // Registered HERE rather than at module scope because the runner needs
+  // `ctx.keyVault` — the key is decrypted main-side and never crosses IPC. The
+  // `hasRunner` guard matches ipc/video.ts:35 and ipc/model.ts:29: registrars
+  // run once per app, but repeatedly across specs, and re-registering throws.
+  if (!hasRunner('generate-clips')) {
+    registerRunner(
+      'generate-clips',
+      createGenerateClipsRunner({
+        getKey: (provider) => ctx.keyVault.getKey(provider),
+        createTransport: (args) =>
+          (
+            transportFactoryOverride ??
+            (process.env.OPENCLIP_FAKE_TRANSCRIBE ? () => fakeTransport : createTransport)
+          )(args),
+        cache: clipCache
+      })
+    )
+  }
+
   ctx.ipcMain.handle(IPCChannels.GENERATE_CLIPS, async (_e, req: GenerateClipsRequest) => {
     // Decrypt the BYOK key MAIN-SIDE only (never returned to the renderer).
     const apiKey = ctx.keyVault.getKey(req.provider)

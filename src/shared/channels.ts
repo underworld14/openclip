@@ -22,11 +22,8 @@ import type {
   Project,
   Settings,
   AIProvider,
-  ClipStyle,
   ClipSchema,
   SourceVideo,
-  Transcript,
-  TargetPlatform,
   BrandTemplate,
   // AI title/caption outputs — inferred from their z.strictObject schemas (openclip-xgk).
   GenerateTitlesResult,
@@ -143,27 +140,16 @@ export interface ImportVideoResult {
 }
 
 /** AI clip-generation request: segment-level transcript + style knobs (PRD §6.3/§16). */
-export interface GenerateClipsRequest {
-  projectId: string
-  provider: AIProvider
-  model: string
-  segments: Transcript['segments'] // segment-level only (word data stays local)
-  videoTitle: string
-  durationSeconds: number
-  clipStyle: ClipStyle
-  numClips: number
-  // Derived from the schema enum, not a hand-typed duplicate (audit fix openclip-z2q):
-  // if TargetPlatform gains/renames a member the two can no longer silently drift.
-  targetPlatform: TargetPlatform
-  /**
-   * Clip-length bounds in seconds (audit fix openclip-t0v). When present they drive
-   * the prompt's "each clip must be between X and Y seconds" line AND the in-code
-   * clamp; the renderer populates them from project settings so a user's min/max
-   * duration is honoured instead of the handler's old hard-coded 15/90.
-   */
-  minDuration?: number
-  maxDuration?: number
-}
+/**
+ * Clip-detection request. DEFINED IN `jobs.ts` and aliased here (EPIC-zpa1nd):
+ * clip generation now also runs as the `generate-clips` streaming job, so this
+ * channel and that job carry the SAME payload by construction rather than by
+ * two hand-maintained copies that would drift on the next field.
+ *
+ * The direction is forced: `channels.ts` already imports from `jobs.ts`, so the
+ * shared shape has to live there to avoid a cycle.
+ */
+export type GenerateClipsRequest = JobParams['generate-clips']
 
 /** AI title/hook generation (PRD §7.4). */
 export interface GenerateTitlesRequest {

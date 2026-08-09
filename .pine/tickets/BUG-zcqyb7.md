@@ -85,3 +85,39 @@ Local verification before push (all on darwin-arm64):
 | `npm run test:smoke` (**what the macos job runs**) | 934 passed, 0 skipped |
 | `npm run build` | pass |
 | `npm run test:e2e` | 12 passed, 1 skipped (network-gated) |
+
+## Round 2 — macos runner, `-12903`
+
+Fixing the above got the macos job past `npm ci` and into steps that had NEVER run, which
+surfaced a second, unrelated environmental limit: GitHub's macos-14 runners are **VMs with
+no hardware video-encode session**. `h264_videotoolbox` is LISTED by `ffmpeg -encoders`
+there and then fails to open — `cannot create compression session: -12903`. So the
+grep-the-encoder-list guard answered "available" and the GPU smokes ran and died anyway.
+
+Listing a codec ≠ being able to use it. `videotoolboxAvailable()` now runs a **one-frame
+encode** and reports whether it actually succeeded — one definition of "can this machine
+encode", shared by the @serial smokes AND the E2E specs (two definitions is exactly what
+let this through twice). The strict guard is scoped to non-CI darwin: no change here can
+give a VM a HW encoder, so requiring one on CI would pin the job red forever, while on a
+dev/release Mac it stays loud.
+
+Round 3: the same `-12903` then surfaced in Playwright — `export.e2e.spec.ts` and
+`timeline.e2e.spec.ts:67` drive a REAL export through the app. Same guard applied. The
+honest CPU-fallback fix (thread `forceCpu`, keep export E2E on CI) is filed as
+**BUG-jt3d62** — it changes the FROZEN `jobs.ts` contract, so it is deliberately not
+folded in here.
+
+**Known coverage cost:** the HW-encode path is not exercised on CI. The libx264/`forceCpu`
+specs still cover export, caption-burn, split and jump-cut there, and the GPU path runs on
+any real Mac — but CI alone will not catch a VideoToolbox-specific regression until
+BUG-jt3d62 lands.
+
+Each environment was verified by wrapping the real ffmpeg to reproduce its exact failure:
+
+| emulated environment | result |
+|---|---|
+| macos-VM (`CI=true`, encoder listed, `-12903` on use) + `test:smoke` | 931 passed, 3 skipped, 0 failed |
+| macos-VM + `test:e2e` | 10 passed, 3 skipped, 0 failed (the 2 export specs skip) |
+| linux gates (`Unknown encoder`) + `npm test` | 930 passed, 4 skipped, 0 failed |
+| dev Mac, strict | 934 passed, **0 skipped** — GPU specs + strict assertion both run |
+| dev Mac, `test:e2e` | 12 passed, 1 skipped — both export specs run |

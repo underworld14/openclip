@@ -16,7 +16,12 @@
  * Also drives the live DOM Timeline (handles render + keyboard mark-in/out) to
  * prove the component is wired, not just the store.
  *
- * Skips gracefully if ffmpeg-static is unavailable.
+ * Skips gracefully if ffmpeg-static is unavailable — and the RE-EXPORT case also
+ * skips where ffmpeg cannot encode with h264_videotoolbox, which the production
+ * export path uses unconditionally (no `forceCpu` in `JobParams['export']` — see
+ * BUG-jt3d62). GitHub's macos-14 runners are VMs whose VideoToolbox session fails
+ * to open: `cannot create compression session: -12903` (run 31294445970). The
+ * keyboard mark-in/out case needs no encoder and always runs.
  */
 
 import { test, expect, _electron as electron } from '@playwright/test'
@@ -24,6 +29,7 @@ import { join } from 'node:path'
 import { mkdtempSync, existsSync, statSync } from 'node:fs'
 import { spawnSync, execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
+import { videotoolboxAvailable } from '../harness/fixtures'
 
 function ffmpegStatic(): string | null {
   try {
@@ -60,6 +66,12 @@ const SRC_FPS = 30
 
 test('Timeline P6: drag-handle retrim → re-export reflects the new bounds (±1 frame, ffprobe)', async () => {
   test.skip(!FFMPEG, 'ffmpeg-static not available')
+  // This case re-exports for real, so it needs a usable GPU encoder — see the header.
+  // The keyboard mark-in/out case below touches only the store + DOM and stays portable.
+  test.skip(
+    !!FFMPEG && !videotoolboxAvailable(),
+    'ffmpeg cannot encode with h264_videotoolbox here (absent off macOS; unusable on a VM runner)'
+  )
 
   const work = mkdtempSync(join(tmpdir(), 'openclip-timeline-e2e-'))
   const src = join(work, 'src.mp4')

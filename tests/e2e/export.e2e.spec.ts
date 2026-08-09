@@ -5,8 +5,7 @@
  * Drives the FULL export path against the REAL built Electron app: the renderer
  * `runExport` orchestration → real `jobs.start('export')` over the IPC →
  * out-of-band transferred MessagePort → real `SidecarManager` → the real
- * `export` runner → the REAL ffmpeg (ffmpeg-static, which HAS h264_videotoolbox)
- * on a synthetic fixture. Asserts:
+ * `export` runner → the REAL ffmpeg on a synthetic fixture. Asserts:
  *   - the streamed progress events reach the renderer (≥1 progress, ending 100),
  *   - the export `done` result is 1080×1920,
  *   - a NON-EMPTY mp4 file is written to the chosen output path.
@@ -15,6 +14,15 @@
  * is passed to the app so the production-NODE_ENV main process resolves the same
  * binary (it would otherwise look under process.resourcesPath). Skips gracefully
  * if ffmpeg-static is unavailable.
+ *
+ * Also skips where ffmpeg cannot ENCODE with h264_videotoolbox. The production
+ * export path has no CPU fallback wired (`JobParams['export']` carries no
+ * `forceCpu` — see BUG-jt3d62), so this drives the GPU encoder by construction,
+ * and GitHub's macos-14 runners are VMs with no hardware encode session: the
+ * encoder is listed and then fails with `cannot create compression session:
+ * -12903` (run 31294445970). Same probe as the @serial GPU smokes — deliberately
+ * ONE definition of "can this machine encode", since two of them is what let this
+ * failure through twice.
  */
 
 import { test, expect, _electron as electron } from '@playwright/test'
@@ -22,6 +30,7 @@ import { join } from 'node:path'
 import { mkdtempSync, existsSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
+import { videotoolboxAvailable } from '../harness/fixtures'
 
 function ffmpegStatic(): string | null {
   try {
@@ -37,6 +46,10 @@ const FFMPEG = ffmpegStatic()
 
 test('Export P3: a clip exports to a non-empty 1080×1920 mp4 with streamed progress', async () => {
   test.skip(!FFMPEG, 'ffmpeg-static not available')
+  test.skip(
+    !!FFMPEG && !videotoolboxAvailable(),
+    'ffmpeg cannot encode with h264_videotoolbox here (absent off macOS; unusable on a VM runner)'
+  )
 
   const work = mkdtempSync(join(tmpdir(), 'openclip-export-e2e-'))
   const src = join(work, 'src.mp4')

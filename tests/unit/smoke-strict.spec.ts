@@ -29,20 +29,25 @@ describe.skipIf(!STRICT)(
       ).toBe(true)
     })
 
-    // The GPU-path smokes (ffmpeg-export / ass-captions burn) now guard on the
-    // h264_videotoolbox CAPABILITY rather than on ffmpeg merely being invokable, so
-    // they self-skip on Linux instead of dying with "Unknown encoder". That guard is
-    // itself a silent-skip risk on the one platform that MUST exercise it: a macOS
-    // runner resolving a videotoolbox-less ffmpeg would quietly lose the whole
-    // default-encoder layer. Fail loudly there instead.
-    it.skipIf(process.platform !== 'darwin')(
-      'the resolved ffmpeg has h264_videotoolbox so the GPU-path @serial smokes do NOT skip',
+    // The GPU-path smokes (ffmpeg-export / ass-captions burn) guard on whether ffmpeg can
+    // actually ENCODE with h264_videotoolbox, so they self-skip instead of dying where it
+    // is missing or unusable. That guard is itself a silent-skip risk on the platform that
+    // ships the HW-encode path: a Mac whose ffmpeg lost VideoToolbox would quietly drop
+    // the whole default-encoder layer. So assert it — but NOT on CI.
+    //
+    // GitHub's macos-14 runners are VMs with no hardware video-encode session: the encoder
+    // is listed and then fails to open with `cannot create compression session: -12903`
+    // (run 31294181503). No change in this repo can give a VM a HW encoder, so requiring
+    // it there would pin CI red forever. On a developer's or a release Mac — where losing
+    // VideoToolbox IS a real, fixable regression — this stays loud.
+    it.skipIf(process.platform !== 'darwin' || !!process.env.CI)(
+      'this Mac can encode with h264_videotoolbox so the GPU-path @serial smokes do NOT skip',
       () => {
         expect(
           videotoolboxAvailable(),
-          'The resolved ffmpeg has no h264_videotoolbox encoder → the default (non-forceCpu) ' +
-            'export + caption-burn @serial smokes would silently SKIP on macOS, leaving the ' +
-            'shipped HW-encode path untested. Check OPENCLIP_FFMPEG / the ffmpeg-static build.'
+          'This Mac cannot encode with h264_videotoolbox → the default (non-forceCpu) export ' +
+            '+ caption-burn @serial smokes silently SKIP, leaving the shipped HW-encode path ' +
+            'untested. Check OPENCLIP_FFMPEG / the ffmpeg-static build.'
         ).toBe(true)
       }
     )

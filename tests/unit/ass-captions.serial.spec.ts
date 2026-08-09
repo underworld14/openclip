@@ -14,9 +14,10 @@
  * @serial — runs single-file (machine-global lock): spawns the real binary and
  * may use the Metal/VideoToolbox encoder (plan E.7). SKIPS gracefully when
  * ffmpeg is unavailable so the bulk mocked suite stays green — and the burn case
- * goes through `exportClip` WITHOUT `forceCpu`, so it additionally skips when the
- * resolved ffmpeg has no `h264_videotoolbox` (a macOS-only encoder). The fontsdir
- * case below drives ffmpeg directly with libx264 and stays portable.
+ * goes through `exportClip` WITHOUT `forceCpu`, so it additionally skips wherever
+ * ffmpeg cannot actually encode with `h264_videotoolbox` (absent off macOS, present
+ * but unusable on a virtualised macOS CI runner). The fontsdir case below drives
+ * ffmpeg directly with libx264 and stays portable.
  */
 
 import { execFileSync, spawnSync } from 'node:child_process'
@@ -35,7 +36,7 @@ import {
 } from '../harness/fixtures'
 
 const HAVE_FFMPEG = ffmpegAvailable()
-/** The burn case exports without `forceCpu` → h264_videotoolbox → macOS only. */
+/** The burn case exports without `forceCpu` → h264_videotoolbox → see the probe. */
 const HAVE_GPU_ENCODER = HAVE_FFMPEG && videotoolboxAvailable()
 
 /** The repo's bundled libass font dir (build/fonts/DejaVuSans.ttf — PRD §13/fix M3). */

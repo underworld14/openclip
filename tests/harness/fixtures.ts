@@ -124,22 +124,47 @@ export function ffmpegAvailable(): boolean {
 }
 
 /**
- * Whether the resolved FFmpeg can actually encode with `h264_videotoolbox` — the
- * macOS HW encoder `codecArgs()` picks whenever an export does NOT set `forceCpu`
- * (ffmpeg-export.ts). VideoToolbox is a macOS framework, so a Linux build of the
- * very same ffmpeg version simply does not carry the encoder.
+ * Whether the resolved FFmpeg can actually ENCODE with `h264_videotoolbox` — the macOS
+ * HW encoder `codecArgs()` picks whenever an export does NOT set `forceCpu`
+ * (ffmpeg-export.ts). Guard every GPU-path @serial smoke on this; the `forceCpu`
+ * (libx264) ones are portable and need only `ffmpegAvailable()`.
  *
- * `ffmpegAvailable()` is too weak a guard for the GPU-path smokes: `ffmpeg-static`
- * is a devDependency, so on a Linux CI runner ffmpeg IS invokable, the smokes ran,
- * and ffmpeg died with `Unknown encoder 'h264_videotoolbox'` (exit 8) — CI run
- * 31293580008. A smoke must guard on the CAPABILITY it exercises, not merely on the
- * binary existing; otherwise "the binary is here" silently promises a macOS build.
+ * This probe really runs a one-frame encode, because the two cheaper guards each let a
+ * broken environment through and both cost a red CI run to learn:
+ *
+ *   1. `ffmpegAvailable()` — too weak. `ffmpeg-static` is a devDependency, so ffmpeg is
+ *      invokable on a LINUX runner too, where VideoToolbox (a macOS framework) does not
+ *      exist: the smokes ran and died with `Unknown encoder` (exit 8), run 31293580008.
+ *   2. Grepping `ffmpeg -encoders` — still too weak. On a GitHub `macos-14` runner the
+ *      encoder IS listed, then fails to open: `cannot create compression session: -12903`
+ *      (run 31294181503). Those runners are VMs with no HW video-encode session.
+ *
+ * Listing a codec is not the same as being able to use it, so ask the question the specs
+ * actually ask. ~1 spawn per spec file; `-f null` discards the muxed output.
  */
 export function videotoolboxAvailable(): boolean {
   try {
-    const r = spawnSync(resolveFfmpeg(), ['-hide_banner', '-encoders'], { encoding: 'utf8' })
-    if (r.status !== 0) return false
-    return /h264_videotoolbox/.test(`${r.stdout ?? ''}${r.stderr ?? ''}`)
+    const r = spawnSync(
+      resolveFfmpeg(),
+      [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-f',
+        'lavfi',
+        '-i',
+        'testsrc2=size=320x240:rate=5:duration=0.2',
+        '-c:v',
+        'h264_videotoolbox',
+        '-frames:v',
+        '1',
+        '-f',
+        'null',
+        '-'
+      ],
+      { encoding: 'utf8' }
+    )
+    return r.status === 0
   } catch {
     return false
   }

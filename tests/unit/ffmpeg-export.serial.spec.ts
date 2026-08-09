@@ -11,9 +11,10 @@
  * @serial — runs single-file (machine-global lock): it spawns the real binary
  * and may use the Metal/VideoToolbox encoder (plan E.7). It SKIPS gracefully
  * when ffmpeg is unavailable so the bulk mocked suite stays green — and the one
- * case that exercises the DEFAULT (GPU) encoder additionally skips when the
- * resolved ffmpeg has no `h264_videotoolbox`, since that encoder only exists on
- * macOS. The `forceCpu` (libx264) cases below stay portable and always run.
+ * case that exercises the DEFAULT (GPU) encoder additionally skips wherever ffmpeg
+ * cannot actually encode with `h264_videotoolbox`: it does not exist off macOS, and
+ * it exists-but-cannot-open on a virtualised macOS CI runner. The `forceCpu`
+ * (libx264) cases below stay portable and always run.
  */
 
 import { execFileSync } from 'node:child_process'
@@ -30,7 +31,7 @@ import {
 } from '../harness/fixtures'
 
 const HAVE_FFMPEG = ffmpegAvailable()
-/** The default (non-forceCpu) export path encodes with h264_videotoolbox — macOS only. */
+/** The default (non-forceCpu) export path encodes with h264_videotoolbox — see the probe. */
 const HAVE_GPU_ENCODER = HAVE_FFMPEG && videotoolboxAvailable()
 
 function ffprobeBin(): string {

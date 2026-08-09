@@ -148,7 +148,12 @@ export const useJobsStore = create<JobsStore>()((set, get) => ({
       }
     })
     if (status === 'done') {
-      setTimeout(() => get().dismissTask(id), DONE_DISMISS_MS)
+      // `unref` where the runtime has it (node/tests) so a pending dismissal
+      // cannot hold the process open past a spec — same treatment the sidecar
+      // manager gives its SIGKILL escalation timer. Browsers return a number
+      // with no `unref`, hence the optional call.
+      const timer = setTimeout(() => get().dismissTask(id), DONE_DISMISS_MS)
+      ;(timer as unknown as { unref?: () => void }).unref?.()
     }
   },
 

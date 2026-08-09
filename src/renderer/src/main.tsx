@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client'
 import App from './App'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { useProjectStore } from './stores/projectStore'
+import { useJobsStore } from './stores/jobsStore'
 import { runImportPipeline, runUrlDownload } from './components/import-pipeline'
 import { acquireJobPort } from './hooks/jobPort'
 import { projectActions } from './hooks/useProject'
@@ -24,6 +25,12 @@ declare global {
       store: typeof useProjectStore
       /** Settings store — E2E needs it to satisfy the readiness gate (FEAT-c5a15c). */
       settingsStore: typeof useSettingsStore
+      /**
+       * The live job registry (EPIC-zpa1nd). Exposed so an E2E can assert the
+       * persistent status bar renders running work and SURVIVES the
+       * Welcome→editor swap — the regression FEAT-ky1jfw is about.
+       */
+      jobsStore: typeof useJobsStore
       runImportPipeline: typeof runImportPipeline
       runUrlDownload: typeof runUrlDownload
       acquireJobPort: typeof acquireJobPort
@@ -38,6 +45,7 @@ declare global {
 window.__openclipTest = {
   store: useProjectStore,
   settingsStore: useSettingsStore,
+  jobsStore: useJobsStore,
   runImportPipeline,
   runUrlDownload,
   acquireJobPort,

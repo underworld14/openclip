@@ -94,9 +94,14 @@ function build(overrides: Partial<ImportControllerDeps> = {}): {
   const runImportPipeline = vi.fn(
     async (o: {
       onProgress?: (p: number, s: string) => void
+      onProbed?: (sv: typeof SOURCE) => void | Promise<void>
       onTranscript?: (t: unknown) => void
     }) => {
       o.onProgress?.(0, 'probing')
+      // The real pipeline hands the probe over and AWAITS it before extracting;
+      // the controller commits the project there (FEAT-ky1jfw), so a fake that
+      // skips this step exercises a flow that no longer exists.
+      await o.onProbed?.(SOURCE)
       o.onProgress?.(100, 'done')
       o.onTranscript?.({ language: 'en', segments: [], words: [] })
       return {
@@ -288,6 +293,73 @@ describe('import-controller: re-import data integrity (G.3)', () => {
     await ctl.importFile('/movies/first.mp4')
     expect(saveProject).not.toHaveBeenCalled()
     expect(setCurrentProject).toHaveBeenCalledWith(expect.objectContaining({ id: 'PID' }))
+  })
+})
+
+/**
+ * FEAT-ky1jfw. The project used to be committed only after `runImportPipeline`
+ * resolved — i.e. after a transcription that can take ten minutes — so the app
+ * held a fully probed video it refused to show. Meanwhile `App.showEditor`
+ * counted streamed transcript segments, so the layout swapped anyway on the
+ * first closed sentence and destroyed the progress bar, Cancel and the only
+ * error surface. Committing at probe time is what makes both problems go away.
+ */
+describe('import-controller: the project is committed at PROBE time', () => {
+  it('hydrates the project before the pipeline extracts or transcribes', async () => {
+    const order: string[] = []
+    const { ctl, setCurrentProject } = build({
+      runImportPipeline: vi.fn(
+        async (o: {
+          onProbed?: (sv: unknown) => void | Promise<void>
+          onPartial?: (p: unknown) => void
+          onTranscript?: (t: unknown) => void
+        }) => {
+          order.push('probe')
+          await o.onProbed?.({
+            path: '/Users/me/Movies/original.mp4',
+            duration: 10,
+            resolution: { width: 1920, height: 1080 },
+            fps: 30,
+            codec: 'h264',
+            fileSize: 1,
+            format: 'mp4'
+          })
+          order.push('extract')
+          o.onPartial?.({ words: [], segments: [] })
+          order.push('partial')
+          o.onTranscript?.({ language: 'en', segments: [], words: [] })
+          return {
+            sourceVideo: SOURCE,
+            wavPath: '/w.wav',
+            transcript: { language: 'en', segments: [], words: [] }
+          }
+        }
+      ) as unknown as ImportControllerDeps['runImportPipeline']
+    })
+
+    await ctl.importFile('/Users/me/Movies/original.mp4')
+
+    // Committed at the probe, before any transcript data existed.
+    expect(setCurrentProject).toHaveBeenCalled()
+    expect(order).toEqual(['probe', 'extract', 'partial'])
+  })
+
+  it('leaves the project standing when transcription fails after the commit', async () => {
+    // The honest outcome: the import DID happen and the video is real — only
+    // the transcript is missing. Tearing the project down would throw away work
+    // the user can see, and the media reclaim must not fire either.
+    const { ctl, setCurrentProject, reclaimMedia } = build({
+      runImportPipeline: vi.fn(async (o: { onProbed?: (sv: unknown) => void | Promise<void> }) => {
+        await o.onProbed?.(SOURCE)
+        throw new Error('transcribe failed [SIDECAR_CRASH]: whisper died')
+      }) as unknown as ImportControllerDeps['runImportPipeline']
+    })
+
+    await ctl.importFile('/Users/me/Movies/original.mp4')
+
+    expect(setCurrentProject).toHaveBeenCalled()
+    expect(reclaimMedia).not.toHaveBeenCalled()
+    expect(ctl.getState().error).toContain('whisper died')
   })
 })
 

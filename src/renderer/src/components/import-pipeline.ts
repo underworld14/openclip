@@ -25,6 +25,17 @@ export interface ImportPipelineOptions {
   language?: string
   /** 0..100 progress across the whole pipeline + the current stage label. */
   onProgress?: (pct: number, stage: string) => void
+  /**
+   * The probed source video, as soon as ffprobe returns and BEFORE the
+   * minutes-long extract + transcribe (FEAT-ky1jfw). AWAITED, so a caller can
+   * commit the project — and flush-save the outgoing one — before this pipeline
+   * starts writing transcript partials into the store.
+   *
+   * This callback is why the editor can appear a second into an import instead
+   * of at the end of it: the app has everything it needs to show the video the
+   * moment the probe lands, and used to sit on it until transcription finished.
+   */
+  onProbed?: (sourceVideo: SourceVideo) => void | Promise<void>
   /** Live transcript partials as whisper decodes (PRD §6.2 sidebar). */
   onPartial?: (partial: JobPartial['transcribe']) => void
   /** The finalized transcript (the transcribe `done` result). */
@@ -54,6 +65,9 @@ export async function runImportPipeline(
   report(2, 'probing')
   const { sourceVideo } = await bridge.video.import({ filePath })
   report(10, 'probing')
+  // Hand the probe to the caller and WAIT: it commits the project here, so the
+  // transcript partials below stream into a project the user can already see.
+  await opts.onProbed?.(sourceVideo)
 
   // 2) Extract 16kHz mono WAV (PRD §6.1).
   report(12, 'extracting')

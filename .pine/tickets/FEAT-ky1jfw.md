@@ -1,17 +1,17 @@
 ---
 id: FEAT-ky1jfw
 title: Mid-transcribe the whole screen swaps, destroying the progress bar, Cancel, and the only error surface
-status: todo
+status: testing
 priority: critical
 labels:
     - ux
     - jobs
     - bug
-parent: EPIC-zpa1nd
 deps:
     - FEAT-vh2bwz
+parent: EPIC-zpa1nd
 created: "2026-08-08T15:56:46Z"
-updated: "2026-08-08T15:56:46Z"
+updated: "2026-08-09T01:30:38Z"
 ---
 
 ## Current behavior
@@ -41,6 +41,45 @@ failure at 80% sets an error nobody renders. **The failure is completely silent.
 ## Implementation sketch
 
 Two-part. (1) Change App.tsx:56 to `const showEditor = (hasSource || hasClips) && !importBusy` — or gate on an explicit `importComplete` flag the controller sets after `stage:'done'` (import-controller.ts sets `set({stage:'done'})` at the end of importFile). (2) Promote the import controller out of `useImportController`'s `useMemo` into a module-level singleton (or a Zustand slice) so state survives unmount, and render the progress/cancel/error row from App.tsx so it is present in both layouts. This also unblocks Gap #13 (global job surface).
+
+## What was actually done
+
+The sketch's part (2) — promoting the controller to a module singleton — had already
+landed separately, so the in-flight state did survive unmount. What was still missing
+was anything RENDERING it, and a layout rule that stopped fighting the import.
+
+Rather than the sketch's `&& !importBusy` (which keeps the user staring at a Welcome
+screen for ten minutes), the project is now committed at **probe** time:
+
+1. `runImportPipeline` gained an awaited `onProbed(sourceVideo)`, fired right after
+   ffprobe and before audio extraction.
+2. The controller's commit block — flush-save the outgoing project, `hydrateProject`,
+   `markCommitted`, `setView('editor')` — moved into that callback, unchanged in
+   order. It used to run after `runImport` resolved, i.e. after transcription.
+3. `App.showEditor` dropped `hasTranscript`. `hasSource` now flips about a second
+   into an import (EARLIER than the old predicate, not later) and flips exactly once,
+   on a real event, instead of mid-stream on a streamed partial.
+4. Progress / stage / Cancel / error live in `JobStatusBar` (FEAT-vh2bwz), which is
+   mounted between the title bar and the body and belongs to neither layout.
+
+The user now watches the video and the transcript filling in live, instead of a bar.
+
+### Consequences handled
+
+- **Autosave storm.** `currentProject` used to be null during transcription, so the
+  autosave subscriber short-circuited. With an early commit, every streamed partial
+  changes the `transcript` ref — a full `.ocproj` write every debounce window for the
+  whole transcription. `startAutosave` gained `isSuspended` + `resume()`;
+  `installAutosave` suspends while `hasActiveKind('import')` and writes once when the
+  import settles, so the terminal `hydrateTranscript` still reaches disk.
+- **A cancelled/failed transcription now leaves a real project** holding a real video.
+  That is the honest outcome — the import DID happen — and the media reclaim correctly
+  does not fire, since the user can see the project.
+- **`integration-wave1.e2e`** drove `runImportPipeline` directly and never committed a
+  project, so it relied on the buggy `hasTranscript` gate; it now commits in `onProbed`
+  like the controller does. Its `getByText('Hello world!')` also had to be scoped to
+  the transcript list: the preview player is live during the import now, so the same
+  words legitimately appear in the karaoke overlay too.
 
 ## Sizing
 

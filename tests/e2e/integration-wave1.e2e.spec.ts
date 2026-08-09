@@ -40,11 +40,36 @@ test('Wave-1 spine: import → transcribe → clips → save → reload → load
   const imported = await win.evaluate(async () => {
     const h = window.__openclipTest!
     const store = h.store
+    const now = Date.now()
     const result = await h.runImportPipeline({
       bridge: window.openclip,
       filePath: '/tmp/sample.mp4',
       projectId: 'p1',
       model: 'base',
+      // Commit the project at the probe, exactly as the real import controller
+      // does (FEAT-ky1jfw). This spec drives the pipeline directly rather than
+      // through the controller, so it has to do the controller's job — and the
+      // editor is now gated on a committed SOURCE, not on streamed transcript
+      // segments, precisely so a layout swap can't happen mid-transcribe.
+      onProbed: (sourceVideo) =>
+        store.getState().setCurrentProject({
+          id: 'p1',
+          name: 'Integration Wave-1',
+          createdAt: now,
+          updatedAt: now,
+          sourceVideo,
+          transcript: { language: '', segments: [], words: [] },
+          clips: [],
+          settings: {
+            targetPlatform: 'tiktok',
+            aspectRatio: '9:16',
+            clipStyle: 'all',
+            maxClips: 3,
+            minDuration: 5,
+            maxDuration: 60
+          },
+          exportHistory: []
+        }),
       onPartial: (partial) => store.getState().appendTranscriptPartial(partial),
       onTranscript: (t) => store.getState().hydrateTranscript(t)
     })
@@ -64,7 +89,11 @@ test('Wave-1 spine: import → transcribe → clips → save → reload → load
   await expect(win.getByTestId('transcript-panel')).toBeVisible()
   const segLocator = win.getByTestId('transcript-segment')
   await expect(segLocator.first()).toBeVisible()
-  await expect(win.getByText('Hello world!')).toBeVisible()
+  // Scoped to the transcript list on purpose. Now that the project is committed
+  // at probe time (FEAT-ky1jfw) the preview player is live during the import, so
+  // the same words also appear in its karaoke caption overlay — a page-wide text
+  // match would resolve to two elements and say nothing about the transcript.
+  await expect(win.getByTestId('transcript-segments').getByText('Hello world!')).toBeVisible()
 
   // ── 2) Generate clips via the REAL ai:generate-clips handler (fake transport).
   //       The clips slice maps DetectedClip → Clip and seeds the sidebar. ──

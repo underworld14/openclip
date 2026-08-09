@@ -31,6 +31,7 @@
 import { toast } from 'sonner'
 import { createAutosave } from '@shared/autosave'
 import type { Project } from '@shared/schema'
+import { hasActiveKind, useJobsStore } from '@renderer/stores/jobsStore'
 import { useProjectStore, type ProjectStore } from './index'
 
 /** The minimal zustand store surface the autosave subscriber needs. */
@@ -54,6 +55,28 @@ export interface StopAutosaveWithFlush {
   (): void
   /** Save the pending debounced project immediately (no-op when nothing pending). */
   flush: () => Promise<void>
+  /**
+   * Lift a suspension: if edits were swallowed while `isSuspended` was true,
+   * schedule exactly one save for the latest state. No-op when nothing was
+   * swallowed.
+   */
+  resume: () => void
+}
+
+export interface AutosaveOptions {
+  /**
+   * While this returns true, edits are COALESCED rather than scheduled — one
+   * `resume()` later writes the final state once.
+   *
+   * This exists because the project is now committed at probe time
+   * (FEAT-ky1jfw), so a running transcription streams partials into an OPEN
+   * project. `transcript` is one of the four refs that trigger a save, and
+   * whisper emits a partial every few words, so a ten-minute transcription
+   * would otherwise serialize and write the whole (growing) `.ocproj` every
+   * 800ms — hundreds of writes of data that is about to be replaced wholesale
+   * by the terminal `hydrateTranscript`.
+   */
+  isSuspended?: () => boolean
 }
 
 /**
@@ -75,7 +98,8 @@ export function startAutosave(
   store: AutosaveStoreApi,
   save: (project: Project) => Promise<void> | void,
   delayMs?: number,
-  onError?: (err: unknown) => void
+  onError?: (err: unknown) => void,
+  opts: AutosaveOptions = {}
 ): StopAutosaveWithFlush {
   // Wrap `save` so a rejection routes to `onError` instead of bubbling as an
   // unhandled rejection (the debounce fires `void fire()` on its timer, and the
@@ -89,6 +113,16 @@ export function startAutosave(
   }
   const autosave = createAutosave<Project>(guardedSave, delayMs)
 
+  // Set when an edit arrived during a suspension, so `resume()` knows there is
+  // something to write. Deliberately a bare flag, not a queued project: the
+  // point is to write the LATEST state once, not to replay what was skipped.
+  let dirtyWhileSuspended = false
+
+  const saveLatest = (): void => {
+    const composed = store.getState().composeProject()
+    if (composed) autosave(composed)
+  }
+
   const unsubscribe = store.subscribe((state, prev) => {
     // Gate on an open project — closing a project (→ null) must not save.
     if (!state.currentProject) return
@@ -101,6 +135,10 @@ export function startAutosave(
       state.transcript !== prev.transcript ||
       state.exportHistory !== prev.exportHistory
     if (!changed) return
+    if (opts.isSuspended?.()) {
+      dirtyWhileSuspended = true
+      return
+    }
     const composed = state.composeProject()
     if (composed) autosave(composed)
   })
@@ -112,6 +150,11 @@ export function startAutosave(
   // Expose the debounce flush so a host can persist a pending edit on quit
   // without tearing down the subscription (used by installAutosave's pagehide).
   stop.flush = () => autosave.flush()
+  stop.resume = () => {
+    if (!dirtyWhileSuspended) return
+    dirtyWhileSuspended = false
+    saveLatest()
+  }
   return stop
 }
 
@@ -138,8 +181,21 @@ export function installAutosave(delayMs?: number, onError?: (err: unknown) => vo
       await window.openclip.project.save({ project })
     },
     delayMs,
-    handleError
+    handleError,
+    // Hold off while an import is streaming transcript partials into the open
+    // project (see AutosaveOptions.isSuspended).
+    { isSuspended: () => hasActiveKind('import') }
   )
+
+  // …and write once when it lets go. Without this the terminal
+  // `hydrateTranscript` — the one write that actually matters — would be
+  // swallowed by the suspension and the finished transcript never persisted.
+  let importWasActive = hasActiveKind('import')
+  const unsubscribeJobs = useJobsStore.subscribe(() => {
+    const active = hasActiveKind('import')
+    if (importWasActive && !active) stop.resume()
+    importWasActive = active
+  })
 
   // Flush the pending debounced save on Cmd-Q / window close so an in-flight edit
   // is persisted before teardown (the guarded save routes any failure to
@@ -166,6 +222,7 @@ export function installAutosave(delayMs?: number, onError?: (err: unknown) => vo
   return () => {
     window.removeEventListener('pagehide', onPageHide)
     window.removeEventListener('message', onQuitFlush)
+    unsubscribeJobs()
     stop()
   }
 }

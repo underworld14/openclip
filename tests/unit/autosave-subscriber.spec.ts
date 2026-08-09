@@ -165,3 +165,76 @@ describe('startAutosave: subscribe project edits → debounced COMPOSED save', (
     stop()
   })
 })
+
+/**
+ * Suspension (FEAT-ky1jfw). The project is now committed at PROBE time, so a
+ * running transcription streams partials into an OPEN project — and `transcript`
+ * is one of the four refs that trigger a save. Without a suspension a ten-minute
+ * transcription would write the whole growing `.ocproj` every debounce window,
+ * hundreds of times, for data the terminal `hydrateTranscript` replaces wholesale.
+ */
+describe('startAutosave: suspension while a job streams into the open project', () => {
+  it('writes nothing while suspended, however many edits land', async () => {
+    const save = vi.fn().mockResolvedValue(undefined)
+    let suspended = true
+    const stop = startAutosave(useProjectStore, save, 200, undefined, {
+      isSuspended: () => suspended
+    })
+
+    useProjectStore.getState().setCurrentProject(projectFixture)
+    for (let i = 0; i < 50; i += 1) {
+      useProjectStore.getState().appendTranscriptPartial({ words: [], segments: [] })
+      await vi.advanceTimersByTimeAsync(200)
+    }
+    expect(save).not.toHaveBeenCalled()
+
+    suspended = false
+    stop()
+  })
+
+  it('writes exactly once when the suspension lifts', async () => {
+    const save = vi.fn().mockResolvedValue(undefined)
+    let suspended = true
+    const stop = startAutosave(useProjectStore, save, 200, undefined, {
+      isSuspended: () => suspended
+    })
+
+    useProjectStore.getState().setCurrentProject(projectFixture)
+    useProjectStore.getState().hydrateTranscript(transcriptFixture)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(save).not.toHaveBeenCalled()
+
+    // The import settles: the finished transcript must reach disk. This is the
+    // one write that actually matters, and it is the one the suspension would
+    // otherwise swallow.
+    suspended = false
+    stop.resume()
+    await vi.advanceTimersByTimeAsync(200)
+
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(save.mock.calls[0][0].transcript.segments).toEqual(transcriptFixture.segments)
+    stop()
+  })
+
+  it('does not write on resume when nothing was swallowed', async () => {
+    const save = vi.fn().mockResolvedValue(undefined)
+    const stop = startAutosave(useProjectStore, save, 200, undefined, {
+      isSuspended: () => true
+    })
+
+    stop.resume()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(save).not.toHaveBeenCalled()
+    stop()
+  })
+
+  it('saves normally when no suspension predicate is supplied', async () => {
+    const save = vi.fn().mockResolvedValue(undefined)
+    const stop = startAutosave(useProjectStore, save, 200)
+
+    useProjectStore.getState().setCurrentProject(projectFixture)
+    await vi.advanceTimersByTimeAsync(200)
+    expect(save).toHaveBeenCalledTimes(1)
+    stop()
+  })
+})

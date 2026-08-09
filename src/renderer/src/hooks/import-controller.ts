@@ -298,7 +298,53 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     taskId: string,
     markCommitted: () => void
   ): Promise<void> {
-    const result = await runImport({
+    /**
+     * COMMIT THE PROJECT AT PROBE TIME, not at the end (FEAT-ky1jfw).
+     *
+     * This used to run after `runImport` resolved — i.e. after a transcription
+     * that can take ten minutes — which meant the app held a fully probed video
+     * it refused to show, and the user sat on the Welcome screen watching a bar.
+     * Worse, `App.showEditor` counted streamed transcript segments, so the first
+     * closed sentence swapped the layout anyway and destroyed the progress bar,
+     * Cancel and error surface mid-import.
+     *
+     * Committing here means the editor appears about a second in, with the real
+     * video in the preview and the transcript filling the sidebar live, while
+     * progress and Cancel live in the app-level status bar that outlives any
+     * view. Same steps, same order, just moved ahead of the long work.
+     */
+    const commitProject = async (probed: SourceVideo): Promise<void> => {
+      const current = deps.store.getCurrentProject()
+      if (current) {
+        // Save the COMPOSED project (live clips + transcript merged), not the raw
+        // currentProject — otherwise the flush would persist stale/empty clips and
+        // discard the user's edits, the very loss G.3 exists to prevent.
+        const toSave = deps.store.composeProject?.() ?? current
+        try {
+          await deps.store.saveProject(toSave)
+        } catch {
+          /* best-effort flush — don't block the new import on a save error */
+        }
+      }
+      // Stamp the permanent source path + ownership (Part H): for URL imports the
+      // probe ran on the adopted path, but force it explicitly + mark app-owned so
+      // project-delete reclaims it; file imports keep their original path, not owned.
+      const sourceVideo = { ...probed, path: sourcePath, appOwned }
+      const blank = deps.createBlankProject(name, sourceVideo)
+      // hydrateProject (NOT setCurrentProject): `blank` carries clips: [] and
+      // exportHistory: [], so this is what clears the outgoing project's slices.
+      // No transcript is passed — it starts empty and fills from the partials
+      // below, then `onTranscript` replaces it with the authoritative result.
+      deps.store.hydrateProject({ ...blank, id: projectId })
+      // The project is now LIVE/visible — past here a failure must not reclaim its
+      // media. A transcription that fails or is cancelled now leaves the user with
+      // a real project holding a real video, which is the honest outcome: the
+      // import DID happen, only the transcript is missing, and it can be retried.
+      markCommitted()
+      deps.ui?.setView?.('editor')
+    }
+
+    await runImport({
       bridge: deps.bridge,
       filePath: sourcePath,
       projectId,
@@ -311,36 +357,13 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
         set({ pct: scaled, stage: s })
         deps.ui?.updateTask?.(taskId, { pct: scaled, stage: s })
       },
+      onProbed: commitProject,
       onPartial: (partial) => deps.store.appendTranscriptPartial(partial),
       onTranscript: (t: JobResult['transcribe']) => deps.store.hydrateTranscript(t),
       onStart: (jobId) => {
         activeJobId = jobId
       }
     })
-
-    const current = deps.store.getCurrentProject()
-    if (current) {
-      // Save the COMPOSED project (live clips + transcript merged), not the raw
-      // currentProject — otherwise the flush would persist stale/empty clips and
-      // discard the user's edits, the very loss G.3 exists to prevent.
-      const toSave = deps.store.composeProject?.() ?? current
-      try {
-        await deps.store.saveProject(toSave)
-      } catch {
-        /* best-effort flush — don't block the new import on a save error */
-      }
-    }
-    // Stamp the permanent source path + ownership (Part H): for URL imports the
-    // probe ran on the adopted path, but force it explicitly + mark app-owned so
-    // project-delete reclaims it; file imports keep their original path, not owned.
-    const sourceVideo = { ...result.sourceVideo, path: sourcePath, appOwned }
-    const blank = deps.createBlankProject(name, sourceVideo)
-    // hydrateProject (NOT setCurrentProject): `blank` carries clips: [] and
-    // exportHistory: [], so this is what clears the outgoing project's slices.
-    deps.store.hydrateProject({ ...blank, id: projectId, transcript: result.transcript })
-    // The project is now LIVE/visible — past here a failure must not reclaim its media.
-    markCommitted()
-    deps.ui?.setView?.('editor')
   }
 
   /**

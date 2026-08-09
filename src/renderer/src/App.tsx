@@ -58,7 +58,20 @@ function App(): React.JSX.Element {
   const hasSource = useProjectStore((s) => !!s.currentProject?.sourceVideo)
   const hasTranscript = useProjectStore((s) => (s.transcript?.segments.length ?? 0) > 0)
   const hasClips = useProjectStore((s) => (s.clips?.length ?? 0) > 0)
-  const showEditor = hasSource || hasTranscript || hasClips
+  /**
+   * Deliberately NOT `hasTranscript` (FEAT-ky1jfw). Transcript segments arrive as
+   * streamed job partials, so counting them made the FIRST CLOSED SENTENCE — no
+   * user action at all, roughly 1% into a ten-minute transcription — unmount the
+   * Welcome screen and take the progress bar, the Cancel button and the only
+   * error surface with it. A transcribe failure at 80% was therefore completely
+   * silent.
+   *
+   * `hasSource` is the honest signal now: the import controller commits the
+   * project the moment ffprobe returns, so this flips within about a second of
+   * an import starting — earlier than the old predicate, not later — and it
+   * flips exactly ONCE, on a real event, instead of mid-stream.
+   */
+  const showEditor = hasSource || hasClips
 
   const generating = useProjectStore((s) => s.generating)
 

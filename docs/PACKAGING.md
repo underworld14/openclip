@@ -28,7 +28,20 @@ disk) and resolved at runtime by `src/main/utils/paths.ts`:
 
 GGML whisper **models are NOT bundled** (75 MB – 2.9 GB). They are downloaded on
 first transcribe into `userData/models/` (PRD §13). This keeps the installer
-under the 250 MB target (the unsigned dmg is ~211 MB).
+under the 250 MB target (the unsigned dmg is ~216 MB).
+
+Dead weight is also excluded from `app.asar` (BUG-t1xj4d): onnxruntime-web's
+unused wasm build variants and sourcemaps, and lucide-react's node_modules copy
+(vite compiles it into the renderer chunk). Measured before/after:
+
+|        | `.app` on disk | dmg (what users download) |
+| ------ | -------------- | ------------------------- |
+| before | 630 MB         | 240 MB                    |
+| after  | 507 MB         | 216 MB                    |
+
+Note the download saves far less than the raw byte count suggests — wasm and JS
+compress well, so 123 MB off the installed app is only 24 MB off the dmg. The
+win is mostly installed footprint, not transfer.
 
 The large binaries are **not committed to git**. `scripts/bundle-binaries.mjs`
 stages them into `resources/`, and electron-builder runs it automatically via the
@@ -129,8 +142,8 @@ CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac [dmg] --arm64 -c.mac.id
 
 Artifacts:
 
-- `dist/mac-arm64/OpenClip.app` (~535 MB on disk)
-- `dist/openclip-desktop-2.0.0-arm64.dmg` (~211 MB)
+- `dist/mac-arm64/OpenClip.app` (~507 MB on disk)
+- `dist/openclip-desktop-2.0.0-arm64.dmg` (~216 MB)
 
 The resulting `.app` is **ad-hoc (linker) signed** only — `codesign -dv` reports
 `Signature=adhoc`, `TeamIdentifier=not set`. That is expected for an unsigned

@@ -36,10 +36,13 @@ import {
   applyLengthPreset,
   normalizePreflight,
   parseKeywords,
+  preflightCost,
   preflightSummary,
   sliceSegmentsToRange,
   type PreflightConfig
 } from '@shared/generate-preflight'
+import { formatCostEstimate } from '@shared/token-estimate'
+import { useSettingsStore } from '@renderer/stores/settingsStore'
 import type { TranscriptSegment } from '@shared/schema'
 import { formatSeconds } from '@renderer/components/format-time'
 
@@ -90,6 +93,23 @@ export function GeneratePreflightDialog({
    */
   const segmentsInWindow = sliceSegmentsToRange(segments, normalized.range).length
   const emptyWindow = segmentsInWindow === 0
+
+  /**
+   * What this run will cost (FEAT-56bxyh). PRD §16 requires it and nothing showed
+   * it: on BYOK the user pays per press, and this app's whole pitch is "cheap,
+   * because we only send text" — a number is how that claim gets made.
+   *
+   * Prices come from the model list the settings store already holds. Providers
+   * that publish none get the TOKEN count and "price unknown" rather than
+   * nothing, because half an estimate still beats a mystery.
+   */
+  const model = useSettingsStore((s) => s.settings.model)
+  const models = useSettingsStore((s) => s.models)
+  const price = models.find((m) => m.id === model)
+  const cost = preflightCost(normalized, segments, {
+    pricePerMTokIn: price?.pricePerMTokIn,
+    pricePerMTokOut: price?.pricePerMTokOut
+  })
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
@@ -258,6 +278,11 @@ export function GeneratePreflightDialog({
         <p className="text-xs text-muted-foreground" data-testid="preflight-summary">
           {preflightSummary(normalized, duration)}
         </p>
+        {!emptyWindow && (
+          <p className="text-xs text-muted-foreground" data-testid="preflight-cost">
+            {formatCostEstimate(cost, model || undefined)}
+          </p>
+        )}
         {emptyWindow && (
           <p className="text-xs text-destructive" data-testid="preflight-empty-window">
             {normalized.range

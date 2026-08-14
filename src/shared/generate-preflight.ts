@@ -23,6 +23,14 @@
  */
 
 import type { ClipStyle, Project, Settings, TranscriptSegment } from './schema'
+import {
+  estimateChunkCount,
+  estimateGenerateCost,
+  estimateTokens,
+  PROMPT_OVERHEAD_TOKENS,
+  type CostEstimate,
+  type ModelPrice
+} from './token-estimate'
 
 // ============================================================================
 // Clip-length presets
@@ -334,6 +342,39 @@ export function preflightToProjectSettings(
     generatePrompt: config.customPrompt,
     generateRange: config.range
   }
+}
+
+/**
+ * What this run will cost, from the segments the panel will actually send
+ * (FEAT-56bxyh).
+ *
+ * Deliberately derived from the SLICED segments, not the whole transcript:
+ * restricting the timeframe is one of the panel's controls, and an estimate that
+ * ignored it would price a run the user is not making — and would make the
+ * timeframe look like it saves nothing.
+ */
+export function preflightCost(
+  config: PreflightConfig,
+  segments: TranscriptSegment[],
+  price: ModelPrice
+): CostEstimate {
+  const text = sliceSegmentsToRange(segments, config.range)
+    .map((s) => s.text)
+    .join('\n')
+  const transcriptTokens = estimateTokens(text)
+  const chunkCount = estimateChunkCount(transcriptTokens)
+  return estimateGenerateCost({
+    transcriptTokens,
+    chunkCount,
+    promptOverheadTokens: PROMPT_OVERHEAD_TOKENS,
+    // Mirrors `clipsPerChunk` in ai-client: each chunk is asked for its SHARE
+    // plus a little slack, not the full total.
+    clipsPerChunk:
+      chunkCount === 1
+        ? config.numClips
+        : Math.min(config.numClips, Math.ceil(config.numClips / chunkCount) + 1),
+    price
+  })
 }
 
 /** A one-line description of what pressing Generate will do, for the button row. */

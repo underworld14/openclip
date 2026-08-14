@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { ClipSchema, type DetectedClip, type TranscriptSegment } from '@shared/schema'
 import { snapClipBounds, snapOverlongEnd } from '@shared/clip-snap'
+import { estimateTokens, CHUNK_MAX_TOKENS } from '@shared/token-estimate'
 import type { ClipStyle, AIProvider } from '@shared/schema'
 
 // ============================================================================
@@ -441,10 +442,19 @@ export function clampDetectedClips<T extends ClampInput>(clips: T[], opts: Clamp
 // Token budget — chunking + map-reduce (PRD §16).
 // ============================================================================
 
-/** ~1 token per 4 characters (cheap heuristic, no tokenizer dependency). */
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4)
-}
+/**
+ * Token estimate for the chunk budget.
+ *
+ * RE-EXPORTED from `@shared/token-estimate` (FEAT-56bxyh) so the chunker here and
+ * the cost estimate the user sees before pressing Generate are computed by the
+ * SAME function — two heuristics that could drift would make the shown number a
+ * lie about the requests actually sent.
+ *
+ * It used to be a flat `chars / 4` here, which is roughly right for English and
+ * Indonesian and badly wrong for CJK/Thai (≈1 char per token), so a Chinese
+ * transcript was chunked at up to ~4× the intended budget.
+ */
+export { estimateTokens }
 
 export interface ChunkOptions {
   /** Soft token budget per chunk (~8-12k in production). */
@@ -564,7 +574,15 @@ export interface MapReduceRequest {
   segments: TranscriptSegment[]
   system: string
   /** Build the per-chunk user prompt from that chunk's segments. */
-  buildUserPrompt: (segments: TranscriptSegment[]) => string
+  /**
+   * Build the per-chunk user prompt.
+   *
+   * `chunkCount` is passed (FEAT-56bxyh) so the caller can ask each chunk for its
+   * SHARE of the clips instead of the full total: every chunk used to request
+   * `numClips` independently, so a 6-chunk video asked for 6× the clips it would
+   * keep and paid ~6× the output tokens to throw most of them away.
+   */
+  buildUserPrompt: (segments: TranscriptSegment[], chunkIndex: number, chunkCount: number) => string
   chunkOptions: ChunkOptions
   duration: number
   minDuration: number
@@ -619,7 +637,7 @@ export async function mapReduceGenerate(
       transport,
       {
         system: req.system,
-        user: req.buildUserPrompt(chunks[i].segments)
+        user: req.buildUserPrompt(chunks[i].segments, i, chunks.length)
       },
       { signal: req.signal }
     )
@@ -1021,16 +1039,34 @@ export function clipCacheKey(args: {
   ].join('|')
 }
 
+/**
+ * How many clips to ask ONE chunk for (FEAT-56bxyh).
+ *
+ * Every chunk used to request the full `numClips` independently, so a 6-chunk
+ * podcast asked for 30 clips to keep 5 — paying ~6× the output tokens to throw
+ * most of them away, on the user's own key.
+ *
+ * The share is rounded UP and gets `+1` of slack, deliberately: the reduce step
+ * de-overlaps and ranks across chunks, so some candidates are always discarded,
+ * and a chunk that happens to hold most of the good moments must not be capped
+ * at its arithmetic share. `numClips` for a single chunk, exactly as before.
+ */
+export function clipsPerChunk(numClips: number, chunkCount: number): number {
+  const chunks = Math.max(1, Math.round(chunkCount))
+  if (chunks === 1) return numClips
+  return Math.min(numClips, Math.ceil(numClips / chunks) + 1)
+}
+
 export function generateClips(args: GenerateClipsArgs): Promise<LadderResult> {
   return mapReduceGenerate(args.transport, {
     segments: args.segments,
     system: SYSTEM_PROMPT,
-    buildUserPrompt: (chunkSegs) =>
+    buildUserPrompt: (chunkSegs, _i, chunkCount) =>
       buildUserPrompt({
         videoTitle: args.videoTitle,
         durationSeconds: args.durationSeconds,
         clipStyle: args.clipStyle,
-        numClips: args.numClips,
+        numClips: clipsPerChunk(args.numClips, chunkCount),
         targetPlatform: args.targetPlatform,
         minDuration: args.minDuration,
         maxDuration: args.maxDuration,
@@ -1039,7 +1075,7 @@ export function generateClips(args: GenerateClipsArgs): Promise<LadderResult> {
         keywords: args.keywords,
         customPrompt: args.customPrompt
       }),
-    chunkOptions: { maxTokens: 10_000, overlapSeconds: 10 },
+    chunkOptions: { maxTokens: CHUNK_MAX_TOKENS, overlapSeconds: 10 },
     duration: args.durationSeconds,
     minDuration: args.minDuration,
     maxDuration: args.maxDuration,

@@ -22,6 +22,7 @@ import { installRendererEnv } from '../harness/renderer-env'
 import { GeneratePreflightDialog } from '@renderer/components/GeneratePreflightDialog'
 import { ClipSidebar } from '@renderer/components/ClipSidebar'
 import { useProjectStore } from '@renderer/stores/projectStore'
+import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { clipFixture } from '../fixtures/contract'
 import { ClipStyle } from '@shared/schema'
 import type { PreflightConfig } from '@shared/generate-preflight'
@@ -266,6 +267,64 @@ describe('the summary line', () => {
       fireEvent.click(screen.getByTestId('preflight-style-educational'))
     })
     expect(screen.getByTestId('preflight-summary').textContent).toContain('educational')
+  })
+})
+
+describe('the BYOK cost estimate (FEAT-56bxyh)', () => {
+  const priced = (id: string, inP: number, outP: number): void => {
+    useSettingsStore.setState({
+      settings: { ...useSettingsStore.getState().settings, model: id },
+      models: [{ id, name: id, pricePerMTokIn: inP, pricePerMTokOut: outP } as never]
+    })
+  }
+
+  it('shows tokens and a dollar figure before anything is sent', () => {
+    // PRD §16 requires it and nothing showed it. On BYOK the user pays per
+    // press; an unpriced button is a trust problem, not a missing nicety.
+    priced('gpt-4o', 3, 15)
+    open()
+    const line = screen.getByTestId('preflight-cost').textContent ?? ''
+    expect(line).toMatch(/input tokens/)
+    expect(line).toMatch(/est\. \$/)
+    expect(line).toContain('gpt-4o')
+  })
+
+  it('shows the TOKENS even when the model publishes no price', () => {
+    // Half an estimate beats a mystery — and hiding it entirely is what the
+    // ticket explicitly rules out.
+    useSettingsStore.setState({
+      settings: { ...useSettingsStore.getState().settings, model: 'local-llama' },
+      models: []
+    })
+    open()
+    const line = screen.getByTestId('preflight-cost').textContent ?? ''
+    expect(line).toMatch(/input tokens/)
+    expect(line).toMatch(/price unknown/)
+  })
+
+  it('gets CHEAPER when the timeframe narrows — the estimate follows the config', () => {
+    // An estimate computed from the whole transcript would price a run the user
+    // is not making, and make the timeframe control look like it saves nothing.
+    priced('gpt-4o', 3, 15)
+    open()
+    const before = screen.getByTestId('preflight-cost').textContent ?? ''
+    act(() => {
+      fireEvent.click(screen.getByTestId('preflight-range-toggle'))
+    })
+    act(() => {
+      fireEvent.change(screen.getByTestId('preflight-range-start'), { target: { value: '0' } })
+    })
+    act(() => {
+      fireEvent.change(screen.getByTestId('preflight-range-end'), { target: { value: '100' } })
+    })
+    const after = screen.getByTestId('preflight-cost').textContent ?? ''
+    expect(after).not.toBe(before)
+  })
+
+  it('is hidden when the window holds no speech — there is nothing to price', () => {
+    priced('gpt-4o', 3, 15)
+    open({}, 600, [])
+    expect(screen.queryByTestId('preflight-cost')).toBeNull()
   })
 })
 

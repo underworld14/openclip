@@ -26,6 +26,8 @@ import { IPCChannels } from '@shared/channels'
 import type { ChannelReq, ChannelRes, ImportVideoResult } from '@shared/channels'
 import type { IpcContext } from './index'
 import { registerRunner, hasRunner } from '@main/services/sidecar-manager'
+import { planReframe, DEFAULT_SAMPLE_FPS } from '@main/services/reframe-detect'
+import { reframeCacheKey, readReframePlan, writeReframePlan } from '@main/services/reframe-cache'
 import { exportRunner } from '@main/services/jobs/export-runner'
 import { urlDownloadRunner } from '@main/services/jobs/url-download-runner'
 import { probeVideo } from '@main/utils/ffprobe'
@@ -67,6 +69,75 @@ export function registerVideoHandlers(ctx: IpcContext): void {
       })
       ctx.mediaAccess.grant(outputPath)
       return { thumbnailPath: outputPath }
+    }
+  )
+
+  /**
+   * Source mtime for the plan cache key — 0 when the file cannot be stat'd, so a
+   * missing source produces a stable key instead of a throw (it will fail later,
+   * in detection, with an error that names the real problem).
+   */
+  const sourceMtimeMs = (p: string): number => {
+    try {
+      return statSync(p).mtimeMs
+    } catch {
+      return 0
+    }
+  }
+
+  /**
+   * Compute the auto-reframe plan for a clip, so the PREVIEW can show it
+   * (FEAT-kzej8t).
+   *
+   * Shares the export runner's plan cache (FEAT-rmh08k), which is what makes
+   * this affordable to call from a preview at all — and what guarantees the
+   * preview and the export show the same crop, because they read one plan.
+   *
+   * A detection FAILURE is reported as such rather than degraded in silence: the
+   * export path wraps analysis in its own try/catch and falls back to a centre
+   * crop, so "the ONNX model is missing" and "this clip has no faces" were
+   * indistinguishable, and both looked like the feature doing nothing at all.
+   */
+  ctx.ipcMain.handle(
+    IPCChannels.PLAN_REFRAME,
+    async (
+      _e,
+      req: ChannelReq<IPCChannels.PLAN_REFRAME>
+    ): Promise<ChannelRes<IPCChannels.PLAN_REFRAME>> => {
+      const key = reframeCacheKey({
+        clipId: req.clipId,
+        startTime: req.startTime,
+        endTime: req.endTime,
+        sourceMtimeMs: sourceMtimeMs(req.sourcePath),
+        sampleFps: DEFAULT_SAMPLE_FPS,
+        aspect: req.aspectRatio,
+        mode: req.mode
+      })
+      const dir = cacheDirFor(req.projectId)
+      const hit = readReframePlan(dir, key)
+      if (hit) return { plan: hit.plan, reason: hit.plan ? undefined : 'no-face' }
+
+      try {
+        const plan = await planReframe({
+          sourcePath: req.sourcePath,
+          startTime: req.startTime,
+          endTime: req.endTime,
+          source: req.sourceResolution,
+          aspect: req.aspectRatio,
+          mode: req.mode
+        })
+        writeReframePlan(dir, key, plan)
+        return { plan, reason: plan ? undefined : 'no-face' }
+      } catch (e) {
+        // NOT cached: a missing model or a crashed ffmpeg is not the answer
+        // "there are no faces here", and caching it would poison every later
+        // request for this clip.
+        return {
+          plan: null,
+          reason: 'detect-failed',
+          message: e instanceof Error ? e.message : String(e)
+        }
+      }
     }
   )
 

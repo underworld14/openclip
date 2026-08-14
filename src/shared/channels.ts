@@ -18,6 +18,7 @@
  * is exposed under `window.openclip.jobs`.
  */
 
+import type { ReframePlan } from './reframe-plan'
 import type { SubtitleFormat } from './subtitle-export'
 import type {
   Project,
@@ -124,6 +125,19 @@ export enum IPCChannels {
    * suggestion. This is the missing caller.
    */
   CLIP_THUMBNAIL = 'video:clip-thumbnail',
+  /**
+   * Compute (or read from cache) the auto-reframe plan for a clip (FEAT-kzej8t).
+   *
+   * Auto-reframe was an invisible on/off switch: the preview showed an unchanged
+   * centre crop with a badge reading "Auto-reframe on export", so a user could
+   * not see the face-follow, could not tell it had locked onto the wrong
+   * speaker, and found out only after exporting.
+   *
+   * Cheap on repeat because it shares the export runner's plan cache
+   * (FEAT-rmh08k) — the preview and the export therefore compute ONE plan and
+   * cannot disagree about what will be burned.
+   */
+  PLAN_REFRAME = 'video:plan-reframe',
   SHOW_SAVE_DIALOG = 'system:save-dialog',
   /**
    * Write a transcript to disk as SRT / WebVTT / plain text (FEAT-vwvgs0).
@@ -448,6 +462,32 @@ export interface ChannelMap {
       aspectRatio: '9:16' | '1:1' | '4:5' | '16:9'
     },
     { thumbnailPath: string }
+  >
+  [IPCChannels.PLAN_REFRAME]: ChannelPayload<
+    {
+      projectId: string
+      clipId: string
+      sourcePath: string
+      /** Effective (post-trim) bounds in absolute source seconds. */
+      startTime: number
+      endTime: number
+      sourceResolution: { width: number; height: number }
+      aspectRatio: '9:16' | '1:1' | '4:5' | '16:9'
+      mode: 'auto' | 'split'
+    },
+    {
+      /** `null` ⇒ no usable face; the export will centre-crop. */
+      plan: ReframePlan | null
+      /**
+       * Why there is no plan, when there is none. Detection failure used to
+       * degrade to a centre crop in silence (each analysis pass wrapped in its
+       * own try/catch), so "the model is missing" and "this clip has no faces"
+       * looked identical — and both looked like the feature simply doing nothing.
+       */
+      reason?: 'no-face' | 'detect-failed'
+      /** Present when `reason` is 'detect-failed', for the detail line. */
+      message?: string
+    }
   >
   [IPCChannels.SHOW_SAVE_DIALOG]: ChannelPayload<
     { defaultPath?: string; filters?: Array<{ name: string; extensions: string[] }> },

@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useBrandStore, activeBrand } from '@renderer/stores/brandStore'
 import { resolveBounds } from '@shared/clip-bounds'
+import { cropXAt } from '@shared/reframe-plan'
 import { sourceMediaUrl } from '@renderer/components/source-media'
 import { formatTime } from '@renderer/components/timeline-math'
 import { resolveEffectiveCaptionStyle } from '@renderer/components/captionPresets'
@@ -70,6 +71,49 @@ export function PreviewPlayer(): React.JSX.Element {
   )
 
   const aspect = aspectOverride ?? currentProject?.settings.aspectRatio ?? '9:16'
+
+  /**
+   * The auto-reframe plan, and where its crop sits right now (FEAT-kzej8t).
+   *
+   * This is what turns auto-reframe from an invisible switch into something the
+   * user can judge: the preview follows the same crop the export will burn, so
+   * a plan that locked onto the wrong speaker is obvious BEFORE paying for an
+   * encode rather than after.
+   */
+  const reframePlan = useProjectStore((s) => s.reframePlan)
+  const reframePlanError = useProjectStore((s) => s.reframePlanError)
+  const loadReframePlan = useProjectStore((s) => s.loadReframePlan)
+  useEffect(() => {
+    if (reframeMode === 'off' || !clip || !sourceVideo || !currentProject || !bounds) return
+    void loadReframePlan({
+      projectId: currentProject.id,
+      clipId: clip.id,
+      sourcePath: sourceVideo.path,
+      startTime: bounds.start,
+      endTime: bounds.end,
+      sourceResolution: sourceVideo.resolution,
+      aspectRatio: aspect
+    })
+  }, [reframeMode, clip, sourceVideo, currentProject, bounds, aspect, loadReframePlan])
+
+  /**
+   * Horizontal offset for the `<video>`, in PERCENT of the source width.
+   *
+   * The element is height-filled and centred, so the default `translateX(-50%)`
+   * shows the middle column. A plan's crop window has its own left edge, so the
+   * offset is the difference between the window's centre and the frame's,
+   * expressed against the element's own width — which is what `translateX(%)`
+   * resolves against.
+   */
+  const reframeShiftPct = useMemo(() => {
+    if (reframeMode === 'off' || !reframePlan || !sourceVideo) return 0
+    const cropX = cropXAt(reframePlan, Math.max(0, playhead - (bounds?.start ?? 0)))
+    if (cropX === null) return 0
+    const cropW = reframePlan.mode === 'split' ? 0 : reframePlan.cropW
+    if (!(cropW > 0)) return 0
+    const windowCentre = cropX + cropW / 2
+    return -((windowCentre - sourceVideo.resolution.width / 2) / sourceVideo.resolution.width) * 100
+  }, [reframeMode, reframePlan, sourceVideo, playhead, bounds])
   const captionTemplateId = currentProject?.settings.captionTemplateId ?? ''
   const autoEmoji = currentProject?.settings.autoEmoji ?? 'off'
   const brand = activeBrand(brands, currentProject?.activeBrandId)
@@ -171,7 +215,10 @@ export function PreviewPlayer(): React.JSX.Element {
                   width: 'auto',
                   maxWidth: 'none',
                   left: '50%',
-                  transform: 'translateX(-50%)'
+                  // The extra shift is the auto-reframe crop (FEAT-kzej8t); it is
+                  // 0 with reframe off, leaving the historical centre-crop
+                  // transform byte-for-byte unchanged.
+                  transform: `translateX(calc(-50% + ${reframeShiftPct.toFixed(3)}%))`
                 }}
                 onTimeUpdate={handleTimeUpdate}
                 onPlay={() => setPlaying(true)}
@@ -214,12 +261,33 @@ export function PreviewPlayer(): React.JSX.Element {
                   })}
                 </div>
               )}
+              {/* The badge now reports what auto-reframe IS DOING, not merely
+                that it is switched on — and names a detection failure instead
+                of degrading to a centre crop in silence (FEAT-kzej8t). */}
               {reframeMode !== 'off' && (
                 <span
                   data-testid="reframe-badge"
-                  className="absolute right-1.5 top-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-white/90"
+                  data-reframe-state={
+                    reframePlanError?.reason ?? (reframePlan ? reframePlan.mode : 'pending')
+                  }
+                  title={reframePlanError?.message}
+                  className={`absolute right-1.5 top-1.5 rounded px-1.5 py-0.5 text-[10px] ${
+                    reframePlanError?.reason === 'detect-failed'
+                      ? 'bg-amber-600/90 text-white'
+                      : 'bg-black/70 text-white/90'
+                  }`}
                 >
-                  Auto-reframe on export
+                  {reframePlanError?.reason === 'detect-failed'
+                    ? 'Face detection failed — centre crop'
+                    : reframePlanError?.reason === 'no-face'
+                      ? 'No face found — centre crop'
+                      : reframePlan?.mode === 'pan'
+                        ? 'Following speaker'
+                        : reframePlan?.mode === 'split'
+                          ? 'Split screen'
+                          : reframePlan?.mode === 'static'
+                            ? 'Locked on speaker'
+                            : 'Analysing…'}
                 </span>
               )}
             </>

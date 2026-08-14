@@ -89,7 +89,14 @@ describe('preload parity: real bridge method-set === mock method-set', () => {
 
   it('derives the expected camelCased method names (spot-check)', () => {
     // clipThumbnail: the poster-frame extractor the clip cards use (FEAT-71ay4e).
-    expect(methodKeys(realBridge.video)).toEqual(['clipThumbnail', 'export', 'import'])
+    // planReframe: the auto-reframe plan the PREVIEW reads (FEAT-kzej8t) — the
+    // same plan the export burns, so the two cannot disagree.
+    expect(methodKeys(realBridge.video)).toEqual([
+      'clipThumbnail',
+      'export',
+      'import',
+      'planReframe'
+    ])
     expect(methodKeys(realBridge.audio)).toEqual(['extract'])
     expect(methodKeys(realBridge.ai)).toEqual([
       'enhanceCaptions',

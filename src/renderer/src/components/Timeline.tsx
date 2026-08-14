@@ -30,6 +30,8 @@ export function Timeline(): React.JSX.Element {
   const clips = useProjectStore((s) => s.clips)
   const selectedClipId = useProjectStore((s) => s.selectedClipId)
   const playhead = useProjectStore((s) => s.playhead)
+  // The computed reframe plan, for the keyframe dots (FEAT-kzej8t).
+  const reframePlan = useProjectStore((s) => s.reframePlan)
   const setPlayhead = useProjectStore((s) => s.setPlayhead)
   const isPlaying = useProjectStore((s) => s.isPlaying)
   const setPlaying = useProjectStore((s) => s.setPlaying)
@@ -167,6 +169,28 @@ export function Timeline(): React.JSX.Element {
             width: `${Math.max(0, endFrac - startFrac) * 100}%`
           }}
         />
+
+        {/* Auto-reframe pan keyframes (FEAT-kzej8t).
+
+          The computed plan was invisible: the user could not see WHERE the crop
+          moves, only that reframing was switched on. Each dot is a point the
+          crop is pinned to, at its clip-relative time mapped back onto the
+          source timeline — so a pan that swings at the wrong moment is visible
+          without exporting. */}
+        {reframePlan?.mode === 'pan' &&
+          (reframePlan.keyframes ?? []).map((k, i) => {
+            const t = bounds.start + k.t
+            if (t < bounds.start || t > bounds.end) return null
+            return (
+              <div
+                key={`kf-${i}`}
+                data-testid="reframe-keyframe"
+                title={`Crop x=${Math.round(k.x)} at ${(bounds.start + k.t).toFixed(2)}s`}
+                className="pointer-events-none absolute top-0 size-1.5 -translate-x-1/2 rounded-full bg-sky-400"
+                style={{ left: `${timeToFraction(t, duration) * 100}%` }}
+              />
+            )
+          })}
 
         {/* Playhead marker. */}
         <div

@@ -21,6 +21,7 @@ import {
 import { runBatchExport } from '@renderer/components/batch-export'
 import { PLATFORM_PRESETS, platformPreset } from '@renderer/components/platformPresets'
 import { CAPTION_PRESETS, resolveEffectiveCaptionStyle } from '@renderer/components/captionPresets'
+import { FRAMING_MODES, framingMode, framingModeFor } from '@shared/framing-modes'
 import { brandCaptionOverride, brandLogoParams } from '@renderer/components/brandKit'
 import { fetchAiEmojiMap } from '@renderer/components/caption-emoji'
 import { resolveBounds } from '@shared/clip-bounds'
@@ -39,17 +40,6 @@ type Phase = 'idle' | 'exporting' | 'done' | 'error'
  */
 /** The ratios PRD §6.5 promises the user, in the order the picker shows them. */
 const ASPECT_RATIOS: AspectRatio[] = ['9:16', '1:1', '4:5', '16:9']
-
-/**
- * The fit modes (FEAT-bd87vz). Kapwing names its three "Fit to Center", "Fill and
- * Crop" and "Speaker Focus"; ours keeps Speaker Focus as the separate auto-reframe
- * toggle, because it is a whole analysis pipeline rather than a scaling choice.
- */
-const FIT_MODES: { id: 'fill' | 'letterbox' | 'blur'; label: string; hint: string }[] = [
-  { id: 'fill', label: 'Fill', hint: 'Crop the source to the canvas (may cut content off)' },
-  { id: 'letterbox', label: 'Fit', hint: 'Scale to fit and pad with black bars' },
-  { id: 'blur', label: 'Fit + blur', hint: 'Scale to fit over a blurred copy of the frame' }
-]
 
 const EXPORT_DIMENSIONS: Record<AspectRatio, string> = {
   '9:16': '1080×1920',
@@ -110,6 +100,9 @@ export function ExportPanel(): React.JSX.Element {
   const aspectRatio = currentProject?.settings.aspectRatio ?? '9:16'
   // FEAT-bd87vz — absent ⇒ 'fill', the historical centre-crop.
   const fitMode = currentProject?.settings.fitMode ?? 'fill'
+  // The single framing choice, derived from the two persisted fields so a
+  // project saved before the merge opens on whatever it was really doing.
+  const framingId = framingModeFor(fitMode, reframe)
   // Caption template (Part K) — PERSISTED on the project so the export and the
   // (Step 3) WYSIWYG preview always agree. '' ⇒ the app-default karaoke style.
   const captionTemplateId = currentProject?.settings.captionTemplateId ?? ''
@@ -422,18 +415,27 @@ export function ExportPanel(): React.JSX.Element {
                 </button>
               ))}
             </div>
-            <div className="flex flex-wrap gap-1.5">
-              {FIT_MODES.map((m) => (
+            {/* ONE framing control (FEAT-kzej8t). This was two — a fit picker and
+              a reframe dropdown — that secretly interacted: "Fit" + "Follow
+              speaker" asks for something that cannot exist (no crop left to
+              move inside a letterboxed frame), so the panel had to carry a
+              warning saying one of the two choices would be ignored. Merged,
+              that combination is unrepresentable and the warning is gone. */}
+            <div className="flex flex-wrap gap-1.5" data-testid="framing-modes">
+              {FRAMING_MODES.map((m) => (
                 <button
                   key={m.id}
                   type="button"
-                  data-testid={`fit-${m.id}`}
-                  data-active={fitMode === m.id}
-                  aria-pressed={fitMode === m.id}
+                  data-testid={`framing-${m.id}`}
+                  data-active={framingId === m.id}
+                  aria-pressed={framingId === m.id}
                   title={m.hint}
-                  onClick={() => setProjectSettings({ fitMode: m.id })}
+                  onClick={() => {
+                    setProjectSettings({ fitMode: m.fitMode })
+                    setReframe(m.reframe)
+                  }}
                   className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
-                    fitMode === m.id
+                    framingId === m.id
                       ? 'border-primary bg-primary text-primary-foreground'
                       : 'border-border bg-background hover:bg-accent'
                   }`}
@@ -442,13 +444,9 @@ export function ExportPanel(): React.JSX.Element {
                 </button>
               ))}
             </div>
-            {/* Speaker-follow moves a crop; there is no crop left to move inside a
-              letterboxed frame. Saying so beats silently ignoring the toggle. */}
-            {fitMode !== 'fill' && reframe !== 'off' && (
-              <span className="text-xs text-amber-600" data-testid="fit-reframe-conflict">
-                Auto-reframe needs Fill — it is skipped while fitting.
-              </span>
-            )}
+            <span className="text-xs text-muted-foreground" data-testid="framing-hint">
+              {framingMode(framingId).hint}
+            </span>
           </div>
 
           {/* Word-level karaoke captions toggle (PRD §6.4). */}
@@ -520,21 +518,6 @@ export function ExportPanel(): React.JSX.Element {
               onChange={(e) => setRemoveSilence(e.target.checked)}
             />
             <span>Remove silences (tighten the clip)</span>
-          </label>
-
-          {/* Auto-reframe (Part J, opt-in). Off = static center-crop. */}
-          <label className="flex items-center gap-2 text-xs" data-testid="reframe-control">
-            <span className="text-muted-foreground">Reframe:</span>
-            <select
-              data-testid="reframe-select"
-              className="flex-1 rounded-md border bg-background px-2 py-1"
-              value={reframe}
-              onChange={(e) => setReframe(e.target.value as 'off' | 'auto' | 'split')}
-            >
-              <option value="off">Off (center)</option>
-              <option value="auto">Follow speaker</option>
-              <option value="split">Split-screen (2 people)</option>
-            </select>
           </label>
 
           {/* Quick clip picker when multiple clips exist. */}

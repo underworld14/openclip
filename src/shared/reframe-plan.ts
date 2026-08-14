@@ -63,17 +63,83 @@ export interface CropRegion {
  *  - `split`  — two stacked crops (left/right) → `vstack` (needs filter_complex).
  * `buildReframePlan` returns `null` to mean "no usable faces → center-crop".
  */
+/**
+ * One point on a pan path: crop-x at a CLIP-RELATIVE time (FEAT-kzej8t).
+ *
+ * The `xExpr` is an ffmpeg expression, which the renderer cannot evaluate — so
+ * a preview could never show what auto-reframe was going to do, and the timeline
+ * could never draw where it moves. These are the same points the expression is
+ * compiled FROM, carried alongside it.
+ */
+export interface PanKeyframe {
+  /** Clip-relative seconds. */
+  t: number
+  /** Crop-window left edge, absolute source pixels. */
+  x: number
+}
+
 export type ReframePlan =
   | { mode: 'static'; cropW: number; cropH: number; cropX: number }
   // `xExpr` is in CLIP-RELATIVE time (`t` 0-based from the clip start, matching the
   // `-ss`-rebased PTS ffmpeg feeds `crop` in BOTH the single-cut and the multi-range
   // jump-cut paths). `cropX` is the pan's representative "home" position (a valid
   // static crop) — metadata for a coarse preview/thumbnail.
-  | { mode: 'pan'; cropW: number; cropH: number; xExpr: string; cropX: number }
+  //
+  // `keyframes` are the SAME points `xExpr` is compiled from, kept so the
+  // renderer can preview and draw the pan (FEAT-kzej8t). Optional: a plan
+  // deserialised from a cache written before this field existed has none, and
+  // the export path never reads them — `xExpr` remains the authority.
+  | {
+      mode: 'pan'
+      cropW: number
+      cropH: number
+      xExpr: string
+      cropX: number
+      keyframes?: PanKeyframe[]
+    }
   | { mode: 'split'; regions: [CropRegion, CropRegion] }
 
 /** What the user asked for (mirrors `JobParams['export'].reframe`). */
 export type ReframeMode = 'off' | 'auto' | 'split'
+
+/**
+ * Where the crop window sits at clip-relative time `t` (FEAT-kzej8t).
+ *
+ * This is what makes auto-reframe VISIBLE. It was a badge reading "Auto-reframe
+ * on export" over an unchanged centre-cropped preview: the user could not see
+ * the face-follow, could not tell it had picked the wrong speaker, and found out
+ * only by exporting.
+ *
+ * Returns the crop's left edge in absolute source pixels, or null when the plan
+ * has nothing to preview (split — two tiles, not one window — or a pan from an
+ * older cache entry with no keyframes).
+ *
+ * Linear interpolation BETWEEN keyframes, matching `buildLinearPanExpr`'s own
+ * `lerp`: a preview that stepped where the burn slides would misrepresent the
+ * one thing it exists to show.
+ */
+export function cropXAt(plan: ReframePlan | null | undefined, t: number): number | null {
+  if (!plan) return null
+  if (plan.mode === 'static') return plan.cropX
+  if (plan.mode === 'split') return null
+  const kf = plan.keyframes
+  if (!kf || kf.length === 0) return plan.cropX
+  if (t <= kf[0].t) return kf[0].x
+  const last = kf[kf.length - 1]
+  if (t >= last.t) return last.x
+  for (let i = 1; i < kf.length; i += 1) {
+    const a = kf[i - 1]
+    const b = kf[i]
+    if (t <= b.t) {
+      const span = b.t - a.t
+      // Coincident keyframes would divide by zero; they also mean "cut", so the
+      // later position is the right answer.
+      if (span <= 0) return b.x
+      return a.x + ((t - a.t) / span) * (b.x - a.x)
+    }
+  }
+  return last.x
+}
 
 export interface BuildReframePlanArgs {
   samples: SampleFrame[]
@@ -691,7 +757,13 @@ export function buildReframePlan(args: BuildReframePlanArgs): ReframePlan | null
           cropW,
           cropH,
           xExpr: buildStepPanExpr(steps, source.width, cropW),
-          cropX: fallbackX
+          cropX: fallbackX,
+          // A STEP pan cuts between speakers, so each segment contributes its
+          // start (the cut) rather than a smooth path (FEAT-kzej8t).
+          keyframes: steps.map((st, i) => ({
+            t: r3(i === 0 ? 0 : steps[i - 1].end),
+            x: st.x
+          }))
         }
       }
       // Single active side throughout → static on that cluster (fall through to
@@ -744,6 +816,7 @@ export function buildReframePlan(args: BuildReframePlanArgs): ReframePlan | null
     cropW,
     cropH,
     xExpr: buildLinearPanExpr(keyframes, source.width, cropW),
-    cropX: fallbackX
+    cropX: fallbackX,
+    keyframes: keyframes.map((k) => ({ t: r3(k.t), x: ri(k.x) }))
   }
 }

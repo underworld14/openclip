@@ -22,6 +22,7 @@ import {
   type TrimBounds
 } from '@renderer/components/timeline-math'
 import { resolveBounds } from '@shared/clip-bounds'
+import { snapClipBounds } from '@shared/clip-snap'
 import type { Clip } from '@shared/schema'
 
 export interface TimelineSlice {
@@ -43,6 +44,37 @@ export interface TimelineSlice {
   markIn: (id: string) => void
   /** Keyboard O: set the selected clip's OUT point to the current playhead. */
   markOut: (id: string, duration: number) => void
+}
+
+/**
+ * Pull a keyboard mark onto the nearest word/sentence boundary (BUG-yq6qbw).
+ *
+ * Applied to the DISCRETE I/O marks only, not to `dragClipHandle`. A drag calls
+ * its action continuously, so snapping there would make the handle stick to
+ * boundaries and fight the user mid-gesture; a mark is a single deliberate
+ * action, which is exactly where an assist helps. The tolerance is deliberately
+ * tighter than the AI pipeline's — a user aiming at a specific frame should not
+ * be moved a second and a half.
+ */
+const MARK_SNAP_TOLERANCE_SEC = 0.35
+
+function snapMark(
+  get: () => ProjectStore,
+  next: { start: number; end: number }
+): { start: number; end: number } {
+  const transcript = get().transcript
+  if (!transcript) return next
+  const snapped = snapClipBounds(
+    { start: next.start, end: next.end, segments: transcript.segments, words: transcript.words },
+    {
+      // Bounds are already valid here; the snap must only refine them, so the
+      // duration window is opened wide enough not to reject a small nudge.
+      minDuration: 0,
+      maxDuration: Number.POSITIVE_INFINITY,
+      toleranceSec: MARK_SNAP_TOLERANCE_SEC
+    }
+  )
+  return { start: snapped.start, end: snapped.end }
 }
 
 /** Find a clip by id in the live clips slice (the source of truth for bounds). */
@@ -72,12 +104,14 @@ export const createTimelineSlice: StateCreator<ProjectStore, [], [], TimelineSli
     const clip = findClip(get, id)
     if (!clip) return
     const next = markInAt(get().playhead, resolveBounds(clip))
-    get().updateClip(id, { editedStart: next.start, editedEnd: next.end })
+    const snapped = snapMark(get, next)
+    get().updateClip(id, { editedStart: snapped.start, editedEnd: snapped.end })
   },
   markOut: (id, duration) => {
     const clip = findClip(get, id)
     if (!clip) return
-    const next = markOutAt(get().playhead, resolveBounds(clip), duration)
+    const nextRaw = markOutAt(get().playhead, resolveBounds(clip), duration)
+    const next = snapMark(get, nextRaw)
     get().updateClip(id, { editedStart: next.start, editedEnd: next.end })
   }
 })

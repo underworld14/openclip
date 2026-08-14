@@ -29,6 +29,7 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { ClipSchema, type DetectedClip, type TranscriptSegment } from '@shared/schema'
+import { snapClipBounds, snapOverlongEnd } from '@shared/clip-snap'
 import type { ClipStyle, AIProvider } from '@shared/schema'
 
 // ============================================================================
@@ -339,6 +340,13 @@ export interface ClampOptions {
    * duplicates wins — clamping with earlier-wins first would discard it.
    */
   dropOverlaps?: boolean
+  /**
+   * Where to cut a clip that exceeds `maxDuration`. Absent ⇒ the raw arithmetic
+   * `start + maxDuration`, which lands mid-word essentially every time
+   * (BUG-yq6qbw). The map-reduce pipeline passes a transcript-aware snapper; the
+   * standalone single-shot guardrail has no transcript and keeps the arithmetic.
+   */
+  snapOverlongTo?: (start: number, limit: number) => number
 }
 
 /** Minimal shape we clamp (accepts full DetectedClip or just times). */
@@ -356,7 +364,10 @@ export function clampDetectedClips<T extends ClampInput>(clips: T[], opts: Clamp
     let end = Math.max(0, Math.min(c.end_time, opts.duration))
     if (end <= start) continue // drop inverted/zero-length
     // enforce max duration by truncating the end
-    if (end - start > opts.maxDuration) end = start + opts.maxDuration
+    if (end - start > opts.maxDuration) {
+      const limit = start + opts.maxDuration
+      end = opts.snapOverlongTo ? opts.snapOverlongTo(start, limit) : limit
+    }
     if (end - start < opts.minDuration) continue // drop too-short
     cleaned.push({ ...c, start_time: start, end_time: end })
   }
@@ -579,10 +590,28 @@ export async function mapReduceGenerate(
   // Reconcile virality FIRST so the derived 1-10 headline drives both the
   // overlap-dedupe sort and the displayed breakdown (Part I).
   const reconciled = all.map(reconcileVirality)
-  const clamped = clampDetectedClips(reconciled, {
+
+  // Pull each boundary onto a sentence (else word) edge before the clamp runs
+  // (BUG-yq6qbw). Deliberately NOT inside `clampDetectedClips`: that function is
+  // pure arithmetic over times and has no business knowing about transcripts,
+  // and it stays the final guardrail after this.
+  const snapped = reconciled.map((c) => {
+    const s = snapClipBounds(
+      { start: c.start_time, end: c.end_time, segments: req.segments },
+      { minDuration: req.minDuration, maxDuration: req.maxDuration }
+    )
+    return { ...c, start_time: s.start, end_time: s.end }
+  })
+
+  const clamped = clampDetectedClips(snapped, {
     duration: req.duration,
     minDuration: req.minDuration,
     maxDuration: req.maxDuration,
+    // A clip the model returned OVER the cap is cut back to the last sentence end
+    // at or before the limit, rather than at exactly `start + maxDuration` —
+    // which lands mid-word essentially every time (BUG-yq6qbw).
+    snapOverlongTo: (start, limit) =>
+      snapOverlongEnd(start, limit, { segments: req.segments }, req.minDuration),
     // Let the SCORE-AWARE dedupe own overlap removal so a higher-scoring later clip
     // isn't discarded by clamp's earlier-wins pass first (audit fix openclip-bsc).
     dropOverlaps: false

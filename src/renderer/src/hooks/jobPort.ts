@@ -95,7 +95,26 @@ export function acquireJobPort(jobId: string, timeoutMs = 30_000): Promise<Messa
 }
 
 let listenerInstalled = false
-/** Lazily attach the main-world `message` listener (no-op outside a browser). */
+/**
+ * Attach the main-world `message` listener (idempotent; no-op outside a browser).
+ *
+ * Called at MODULE LOAD, not lazily on first use. It used to run only from inside
+ * `acquireJobPort`, which quietly broke the port-before-waiter half of this
+ * registry's contract: for the FIRST job on a page nobody had called
+ * `acquireJobPort` yet, so no listener existed, so the preload's forwarded
+ * `window.postMessage` was dropped and `ready` stayed empty — the consumer then
+ * waited out the full 30s timeout and the job stream was unconsumable.
+ *
+ * It is a genuine race, not a theoretical one: main transfers the port BEFORE the
+ * JOB_START invoke returns (main/index.ts:245), so whether the port beats the
+ * renderer's `await jobs.start()` continuation depends on machine load. It
+ * surfaced as an intermittent CI hang on whichever E2E happened to start the
+ * first transcribe of its app instance (BUG-zcqyb7).
+ *
+ * Installing at import time is safe and cheap: this module is pulled in by
+ * `useJob`/`import-pipeline` during app startup, long before any job can start,
+ * and the listener ignores every message that isn't a tagged port handoff.
+ */
 function ensureWindowListener(): void {
   if (listenerInstalled) return
   if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return
@@ -106,6 +125,10 @@ function ensureWindowListener(): void {
     if (port) registerJobPort(event.data.jobId, port as unknown as MessagePortLike)
   })
 }
+
+// Install eagerly — see above. `acquireJobPort` still calls it defensively for
+// the case where this module is imported before a `window` exists.
+ensureWindowListener()
 
 /** TEST-ONLY: clear any buffered ports/waiters between tests. */
 export function __resetJobPortRegistry(): void {

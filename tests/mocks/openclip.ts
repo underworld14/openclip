@@ -17,6 +17,7 @@ import { MessageChannel } from 'node:worker_threads'
 import { IPCChannels } from '@shared/channels'
 import type { OpenClipBridge } from '@preload/index'
 import type { JobKind, JobParams, JobsAPI } from '@shared/jobs'
+import type { Settings } from '@shared/schema'
 import { registerJobPort } from '@renderer/hooks/jobPort'
 import type { MessagePortLike } from '@renderer/hooks/useJob'
 import { driveScriptOverChannel, type JobScript } from '../harness/fake-utility-process'
@@ -28,7 +29,8 @@ import {
   modelStatusFixture,
   transcribeResultFixture,
   transcribePartialFixture,
-  brandTemplateFixture
+  brandTemplateFixture,
+  preflightFixture
 } from '../fixtures/contract'
 
 // ============================================================================
@@ -115,7 +117,11 @@ const CANNED: Partial<Record<string, unknown>> = {
   [IPCChannels.SHOW_OPEN_DIALOG]: { canceled: false, filePaths: ['/Users/me/Movies/source.mp4'] },
   [IPCChannels.SHOW_DIRECTORY_DIALOG]: { canceled: false, dirPath: '/Users/me/Movies/batch' },
   [IPCChannels.SHOW_IMAGE_DIALOG]: { canceled: false, filePaths: ['/Users/me/Pictures/logo.png'] },
-  [IPCChannels.CHECK_UPDATE]: { updateAvailable: false }
+  [IPCChannels.CHECK_UPDATE]: { updateAvailable: false },
+  // Was absent, so this resolved `undefined` despite being typed as
+  // `PreflightResult` — and `readinessView` dereferences it as soon as it is
+  // non-null (FEAT-26tkya). Healthy machine by default; override to test gating.
+  [IPCChannels.SYSTEM_PREFLIGHT]: preflightFixture
 }
 
 function buildMockNamespace(prefix: string): Record<string, (req?: unknown) => Promise<unknown>> {
@@ -194,6 +200,8 @@ const DEFAULT_SCRIPTS: { [K in JobKind]: JobScript<K> } = {
 export interface MockOptions {
   /** Override the scripted JobEvent stream a kind plays back. */
   scripts?: Partial<{ [K in JobKind]: JobScript<K> }>
+  /** Seed the stateful settings document (merged over `settingsFixture`). */
+  settings?: Partial<Settings>
 }
 
 /**
@@ -235,6 +243,19 @@ function buildMockJobs(opts: MockOptions): JobsAPI {
  * (asserted in `preload-parity.spec.ts`).
  */
 export function createMockOpenclip(opts: MockOptions = {}): OpenClipBridge {
+  // Settings are STATEFUL per mock instance. The derived namespace would answer
+  // `settings.set` with the same frozen fixture no matter what was patched, so a
+  // renderer spec that saved a value and then re-read it got the fixture back and
+  // silently proved nothing (FEAT-26tkya). The real handler merges and returns the
+  // merged document; so does this. `opts.settings` seeds the starting document.
+  const settingsState: Settings = { ...settingsFixture, ...opts.settings }
+  const settingsApi = buildMockNamespace('settings') as unknown as Record<string, unknown>
+  settingsApi.get = async (): Promise<Settings> => ({ ...settingsState })
+  settingsApi.set = async (req: { settings: Partial<Settings> }): Promise<Settings> => {
+    Object.assign(settingsState, req.settings)
+    return { ...settingsState }
+  }
+
   return {
     video: buildMockNamespace('video') as OpenClipBridge['video'],
     audio: buildMockNamespace('audio') as OpenClipBridge['audio'],
@@ -242,7 +263,7 @@ export function createMockOpenclip(opts: MockOptions = {}): OpenClipBridge {
     media: buildMockNamespace('media') as OpenClipBridge['media'],
     brand: buildMockNamespace('brand') as OpenClipBridge['brand'],
     project: buildMockNamespace('project') as OpenClipBridge['project'],
-    settings: buildMockNamespace('settings') as OpenClipBridge['settings'],
+    settings: settingsApi as unknown as OpenClipBridge['settings'],
     model: buildMockNamespace('model') as OpenClipBridge['model'],
     system: buildMockNamespace('system') as OpenClipBridge['system'],
     jobs: buildMockJobs(opts),

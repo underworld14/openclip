@@ -67,6 +67,16 @@ export interface ImportController {
  */
 let sharedController: CoreImportController | null = null
 
+/**
+ * TEST-ONLY: drop the shared instance so each spec starts from a clean slate
+ * (mirrors `__resetImportHostForTests`). Without it every spec in a file would
+ * inherit the previous one's in-flight state, and the singleton would close over
+ * the first test's mock bridge for the rest of the run.
+ */
+export function __resetImportControllerForTests(): void {
+  sharedController = null
+}
+
 export function useImportController(opts: ImportControllerOptions = {}): ImportController {
   // Keep onNeedModel current without rebuilding the controller (which would drop
   // its in-flight state). Synced in an effect (refs must not be written during

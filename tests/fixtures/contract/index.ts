@@ -29,7 +29,8 @@ import type {
   JobResult,
   JobPartial,
   ApiKeyStatus,
-  ModelStatus
+  ModelStatus,
+  PreflightResult
 } from '@shared'
 
 // ── Source video ────────────────────────────────────────────────────────────
@@ -200,6 +201,22 @@ export const modelStatusFixture: ModelStatus[] = [
   },
   { model: 'small', installed: false }
 ]
+
+/**
+ * All four sidecars resolved — the healthy-machine baseline.
+ *
+ * This channel had no canned response at all, so `createMockOpenclip().system
+ * .preflight()` resolved `undefined` while being typed as `PreflightResult`.
+ * `readinessView` dereferences the result the moment it is non-null, so the first
+ * renderer spec to touch readiness crashed on `input.preflight!.ffmpeg.ok`
+ * (FEAT-26tkya). A spec that wants a missing binary overrides the method.
+ */
+export const preflightFixture: PreflightResult = {
+  ffmpeg: { ok: true, path: '/opt/homebrew/bin/ffmpeg' },
+  ffprobe: { ok: true, path: '/opt/homebrew/bin/ffprobe' },
+  whisperCli: { ok: true, path: '/opt/homebrew/bin/whisper-cli' },
+  ytDlp: { ok: true, path: '/opt/homebrew/bin/yt-dlp' }
+}
 
 // ── JobEvents — one per variant, plus per-kind result/partial ─────────────────
 export const jobEventProgressFixture: JobEvent = { t: 'progress', pct: 42, stage: 'transcribing' }

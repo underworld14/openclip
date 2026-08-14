@@ -170,11 +170,19 @@ export function SettingsPanel({
   // Never leave the model field empty (FEAT-6v92dk): as soon as we know what the
   // provider offers, seed it. Only fills a BLANK field — it never overwrites a
   // choice the user made.
+  //
+  // "Blank" has to mean the DRAFT is blank, not just `settings.model`. The draft
+  // only commits on blur (openclip-i68), so a user typing a model id by hand has
+  // an empty `settings.model` for as long as the field is focused. Gating on the
+  // stored value alone meant a slow `/models` response landing mid-word saved a
+  // default, and the render-time re-sync above then replaced what they were
+  // typing with it (FEAT-26tkya). Reading modelDraft here is safe precisely
+  // because the re-sync keeps it equal to settings.model whenever it is untouched.
   useEffect(() => {
-    if (settings.model.trim()) return
+    if (settings.model.trim() || modelDraft.trim()) return
     const next = resolveDefaultModel(provider, models)
     if (next) void save({ model: next })
-  }, [provider, models, settings.model, save])
+  }, [provider, models, settings.model, modelDraft, save])
 
   // Memoized so typing in the filter doesn't re-walk the full catalog + re-mount
   // unchanged rows each render.

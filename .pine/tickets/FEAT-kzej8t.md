@@ -1,14 +1,14 @@
 ---
 id: FEAT-kzej8t
 title: Auto-reframe is an invisible, unpreviewable, un-overridable on/off switch
-status: todo
+status: testing
 priority: medium
 labels:
     - ux
     - reframe
 parent: EPIC-f953vk
 created: "2026-08-08T15:56:46Z"
-updated: "2026-08-08T15:56:46Z"
+updated: "2026-08-14T14:29:47Z"
 ---
 
 ## Current behavior
@@ -34,3 +34,28 @@ Impact: **medium** · Effort: **large**
 ## Provenance
 
 Found by a multi-agent sweep of the codebase cross-referenced against OpusClip, Kapwing AI Clip Maker, LokaClip, yt-short-clipper and SupoClip. Every `file:line` above was read directly from the source tree.
+
+## Delivered (2026-08-14)
+
+- `video:plan-reframe` channel; preview follows the plan's crop at the playhead
+  (`cropXAt`, interpolating like the burn). Shares the export plan cache, so the
+  preview and the export read one plan.
+- `ReframePlan` carries pan `keyframes` (the `xExpr` is unevaluable in the
+  renderer, which is why the plan could never be previewed or drawn).
+- Detection failure is NAMED in the badge with the cause in its tooltip, instead
+  of degrading to a centre crop in silence. Failures are not cached.
+- ONE framing control — Fill / Follow speaker / Split screen / Fit (bars) /
+  Fit (blur) — replacing the two that interacted and needed a warning.
+- Timeline draws a dot per pan keyframe, rebased onto the source timeline.
+
+## NOT delivered, deliberately
+
+- **Auto-switch to Fit on detection failure.** The "say so" half is done;
+  silently letterboxing an export the user configured as "Follow speaker" trades
+  one surprise for another. The merged control puts Fit one click away and the
+  badge says why they might want it.
+- **Draggable manual crop box over the preview.** Not started.
+- **Nudge/delete individual crop keyframes.** The dots are read-only.
+
+Sequenced after FEAT-bd87vz (pad/fit — Step 1) and FEAT-rmh08k (plan cache —
+Step 2's prerequisite), both closed.

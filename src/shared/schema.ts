@@ -229,7 +229,14 @@ export const ProjectSettings = z.looseObject({
   // ('off' default / 'local' built-in dict / 'ai' BYOK suggestions). Persisted
   // here so the WYSIWYG preview and the export agree. Optional ⇒ pre-Part-K
   // `.ocproj` validate (absent ⇒ no emoji).
-  autoEmoji: z.enum(['off', 'local', 'ai']).optional()
+  autoEmoji: z.enum(['off', 'local', 'ai']).optional(),
+  /**
+   * How a source that does not match `aspectRatio` is fitted (FEAT-bd87vz):
+   * `fill` centre-crops, `letterbox` pads with black bars, `blur` pads with a
+   * blurred copy of the frame. Optional so pre-existing `.ocproj` validate;
+   * absent ⇒ `fill`, the historical behaviour.
+   */
+  fitMode: z.enum(['fill', 'letterbox', 'blur']).optional()
 })
 export type ProjectSettings = z.infer<typeof ProjectSettings>
 

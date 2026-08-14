@@ -85,8 +85,70 @@ export function cropExpr(aspect: AspectRatio): string {
   }
 }
 
+/**
+ * How a source that does not match the target aspect is made to fit
+ * (FEAT-bd87vz).
+ *
+ *  - `fill`      — centre-crop to the ratio (the historical, and only, behaviour).
+ *  - `letterbox` — scale to fit and pad with black bars. PRD Appendix A documents
+ *                  exactly this command (docs/prd.md:885) and nothing implemented it.
+ *  - `blur`      — the same fit, over a blurred, zoomed copy of the frame. The
+ *                  variant social audiences actually expect, and what LokaClip
+ *                  ships as "16:9 Fit blur".
+ *
+ * The gap this closes: a source that is ALREADY portrait or square was cropped
+ * when it should have been letterboxed, silently cutting content out of frame.
+ *
+ * Speaker-focus is deliberately NOT a member here — it is the `reframePlan`, and
+ * it composes only with `fill` (you cannot follow a face inside a letterboxed
+ * frame; there is no crop left to move).
+ */
+export type FitMode = 'fill' | 'letterbox' | 'blur'
+
+/** Blur strength for the `blur` background, in px at the 1080-wide canvas. */
+const BLUR_SIGMA = 20
+
+/**
+ * The crop/scale portion of the filtergraph — everything up to and including the
+ * node that produces a frame at the target size.
+ *
+ * Returned as a STRING that may contain `;`-separated sub-chains (the `blur`
+ * background needs a `split`/`overlay` fork). Every caller composes it the same
+ * way — by appending `,<node>` or a `[label]` — and both remain valid because the
+ * final sub-chain always ends unlabeled with a single output.
+ *
+ * `fill` returns the exact node pair it always did, so the golden argv tests stay
+ * byte-identical and the historical path is provably untouched.
+ */
+export function fitChain(opts: {
+  aspectRatio: AspectRatio
+  fitMode?: FitMode
+  reframePlan?: ReframePlan | null
+}): string {
+  const { width: w, height: h } = outputDimensions(opts.aspectRatio)
+  const mode = opts.fitMode ?? 'fill'
+  if (mode === 'letterbox') {
+    return `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2`
+  }
+  if (mode === 'blur') {
+    // The background is the SAME frame scaled to COVER (increase + crop) and
+    // blurred; the foreground is the frame scaled to FIT, centred over it. Labels
+    // are prefixed `oc` so they cannot collide with the logo/subtitle labels the
+    // callers add around this.
+    return [
+      `split=2[ocbg][ocfg]`,
+      `[ocbg]scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},gblur=sigma=${BLUR_SIGMA}[ocbgb]`,
+      `[ocfg]scale=${w}:${h}:force_original_aspect_ratio=decrease[ocfgs]`,
+      `[ocbgb][ocfgs]overlay=(W-w)/2:(H-h)/2`
+    ].join(';')
+  }
+  return `${reframeCropNode(opts.aspectRatio, opts.reframePlan)},scale=${w}:${h}`
+}
+
 export interface BuildVfOptions {
   aspectRatio: AspectRatio
+  /** How a mismatched source is fitted (FEAT-bd87vz). Absent ⇒ `fill`. */
+  fitMode?: FitMode
   /**
    * If set, a libass `.ass` file to burn — appended as the FINAL filter node so
    * captions are rendered AFTER the crop/scale (the proven order, fix M3). The
@@ -137,14 +199,15 @@ export function reframeCropNode(aspect: AspectRatio, plan?: ReframePlan | null):
  * `split` plan (or no plan) keeps the center-crop here.
  */
 export function buildVf(opts: BuildVfOptions): string {
-  const { width, height } = outputDimensions(opts.aspectRatio)
-  const nodes = [reframeCropNode(opts.aspectRatio, opts.reframePlan), `scale=${width}:${height}`]
+  // The fit chain may itself be a multi-sub-chain graph (`blur`), so the
+  // subtitles node is APPENDED to its final sub-chain with a comma rather than
+  // joined across an array — `,` between two `;`-separated chains is invalid.
+  let graph = fitChain(opts)
   if (opts.assPath) {
-    let sub = `subtitles=${escapeFilterPath(opts.assPath)}`
-    if (opts.fontsDir) sub += `:fontsdir=${escapeFilterPath(opts.fontsDir)}`
-    nodes.push(sub)
+    graph += `,subtitles=${escapeFilterPath(opts.assPath)}`
+    if (opts.fontsDir) graph += `:fontsdir=${escapeFilterPath(opts.fontsDir)}`
   }
-  return nodes.join(',')
+  return graph
 }
 
 /**
@@ -399,6 +462,12 @@ export interface ExportArgsOptions extends LogoOverlayOptions {
   endTime: number
   aspectRatio: AspectRatio
   quality: '720p' | '1080p'
+  /**
+   * How a source that does not match `aspectRatio` is fitted (FEAT-bd87vz).
+   * Absent ⇒ `fill`, the historical centre-crop. Only `fill` composes with
+   * `reframePlan`.
+   */
+  fitMode?: FitMode
   /** Optional libass `.ass` to burn (caption-burn seam, fix M3). */
   assPath?: string
   /** fontsdir for libass (caption-burn seam). */
@@ -451,10 +520,10 @@ export function exportClipArgs(opts: ExportArgsOptions): string[] {
   // simple `-vf` chain can't express — so a logo SWITCHES this path to a
   // `filter_complex` (+ explicit `-map [v] -map 0:a`). With NO logo we keep the
   // exact `-vf` argv (byte-identical to today; the golden test guards it).
-  const { width, height } = outputDimensions(opts.aspectRatio)
+  const { width } = outputDimensions(opts.aspectRatio)
   const logo = resolveLogo(opts, width)
   if (logo) {
-    const baseChain = `[0:v]${reframeCropNode(opts.aspectRatio, opts.reframePlan)},scale=${width}:${height}`
+    const baseChain = `[0:v]${fitChain(opts)}`
     const { graph, extraInputs } = composeVideoGraph(baseChain, logo, opts.assPath, opts.fontsDir)
     return [
       '-hide_banner',
@@ -492,6 +561,7 @@ export function exportClipArgs(opts: ExportArgsOptions): string[] {
     '-vf',
     buildVf({
       aspectRatio: opts.aspectRatio,
+      fitMode: opts.fitMode,
       assPath: opts.assPath,
       fontsDir: opts.fontsDir,
       reframePlan: opts.reframePlan
@@ -545,8 +615,14 @@ export function exportClipArgsMultiRange(opts: ExportArgsOptions): string[] {
   // `select` then drops the silence frames and `setpts` re-stamps the survivors to
   // a compressed 0-based output (audio `aselect`'d in lock-step). static/center
   // crops are constant, so the ordering is harmless for them.
-  const crop = reframeCropNode(opts.aspectRatio, opts.reframePlan)
-  const baseChain = `[0:v]${crop},select='${between}',setpts=N/FRAME_RATE/TB,scale=${width}:${height}`
+  // `fill` keeps the historical node order exactly (crop, select, setpts, scale)
+  // — that ordering is the openclip-dwu invariant above and must not move. The
+  // pad/blur modes have no `xExpr` to time, so their whole fit chain sits in the
+  // crop's place and `select`/`setpts` follow it.
+  const baseChain =
+    (opts.fitMode ?? 'fill') === 'fill'
+      ? `[0:v]${reframeCropNode(opts.aspectRatio, opts.reframePlan)},select='${between}',setpts=N/FRAME_RATE/TB,scale=${width}:${height}`
+      : `[0:v]${fitChain(opts)},select='${between}',setpts=N/FRAME_RATE/TB`
   // Brand-kit logo (Part K): overlay AFTER scale, BEFORE subtitles. No logo ⇒ the
   // graph is the same single comma-chain as before (and no 2nd `-i`).
   const logo = resolveLogo(opts, width)

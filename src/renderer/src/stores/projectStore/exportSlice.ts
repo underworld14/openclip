@@ -81,7 +81,7 @@ export function buildExportParams(args: {
   projectId: string
   clip: Clip
   source: SourceVideo
-  settings: Pick<ProjectSettings, 'aspectRatio'>
+  settings: Pick<ProjectSettings, 'aspectRatio'> & { fitMode?: JobParams['export']['fitMode'] }
   outputPath: string
   quality?: '720p' | '1080p'
   assPath?: string
@@ -129,6 +129,10 @@ export function buildExportParams(args: {
     startTime: start,
     endTime: end,
     aspectRatio: args.settings.aspectRatio,
+    // How a mismatched source is fitted (FEAT-bd87vz). Absent ⇒ `fill`, the
+    // historical centre-crop — which silently cut content out of an already
+    // portrait or square source.
+    fitMode: args.settings.fitMode,
     outputPath: args.outputPath,
     forceCpu: args.forceCpu,
     assPath: args.assPath,

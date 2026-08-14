@@ -155,6 +155,16 @@ export interface JobParams {
     startTime: number
     endTime: number
     aspectRatio: '9:16' | '1:1' | '4:5' | '16:9'
+    /**
+     * How a source that does not match `aspectRatio` is fitted (FEAT-bd87vz):
+     * `fill` centre-crops (the historical behaviour), `letterbox` pads with black
+     * bars, `blur` pads with a blurred copy of the frame.
+     *
+     * Optional so every existing caller and the contract fixtures stay valid;
+     * absent ⇒ `fill`. Only `fill` composes with a reframe plan — there is no
+     * crop left to move inside a letterboxed frame.
+     */
+    fitMode?: 'fill' | 'letterbox' | 'blur'
     /** Absolute path the user chose to write the final clip to. */
     outputPath: string
     /**

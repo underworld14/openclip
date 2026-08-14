@@ -37,6 +37,20 @@ type Phase = 'idle' | 'exporting' | 'done' | 'error'
  * the authoritative encoder size; kept as a tiny renderer-local map because
  * `@main` can't be imported across the process boundary.
  */
+/** The ratios PRD §6.5 promises the user, in the order the picker shows them. */
+const ASPECT_RATIOS: AspectRatio[] = ['9:16', '1:1', '4:5', '16:9']
+
+/**
+ * The fit modes (FEAT-bd87vz). Kapwing names its three "Fit to Center", "Fill and
+ * Crop" and "Speaker Focus"; ours keeps Speaker Focus as the separate auto-reframe
+ * toggle, because it is a whole analysis pipeline rather than a scaling choice.
+ */
+const FIT_MODES: { id: 'fill' | 'letterbox' | 'blur'; label: string; hint: string }[] = [
+  { id: 'fill', label: 'Fill', hint: 'Crop the source to the canvas (may cut content off)' },
+  { id: 'letterbox', label: 'Fit', hint: 'Scale to fit and pad with black bars' },
+  { id: 'blur', label: 'Fit + blur', hint: 'Scale to fit over a blurred copy of the frame' }
+]
+
 const EXPORT_DIMENSIONS: Record<AspectRatio, string> = {
   '9:16': '1080×1920',
   '1:1': '1080×1080',
@@ -94,6 +108,8 @@ export function ExportPanel(): React.JSX.Element {
   )
   const span = clip ? resolveBounds(clip) : null
   const aspectRatio = currentProject?.settings.aspectRatio ?? '9:16'
+  // FEAT-bd87vz — absent ⇒ 'fill', the historical centre-crop.
+  const fitMode = currentProject?.settings.fitMode ?? 'fill'
   // Caption template (Part K) — PERSISTED on the project so the export and the
   // (Step 3) WYSIWYG preview always agree. '' ⇒ the app-default karaoke style.
   const captionTemplateId = currentProject?.settings.captionTemplateId ?? ''
@@ -149,6 +165,7 @@ export function ExportPanel(): React.JSX.Element {
                 projectId: project.id,
                 clip,
                 source: project.sourceVideo,
+                // `project.settings` already carries `fitMode` (FEAT-bd87vz).
                 settings: project.settings,
                 outputPath: chosenPath,
                 captionsEnabled: captionsEnabled && hasWords,
@@ -369,6 +386,67 @@ export function ExportPanel(): React.JSX.Element {
                 {span.start.toFixed(2)}s – {span.end.toFixed(2)}s (
                 {(span.end - span.start).toFixed(2)}s) · {aspectRatio} ·{' '}
                 {EXPORT_DIMENSIONS[aspectRatio]}
+              </span>
+            )}
+          </div>
+
+          {/* Aspect ratio + fit (FEAT-bd87vz).
+
+              PRD §6.5 promises 1:1 and 4:5 to the USER, but single-clip export
+              read `currentProject.settings.aspectRatio` — a field with no UI
+              writer anywhere, permanently '9:16'. The only way to reach another
+              ratio was a batch-export platform preset.
+
+              And the only fit was a centre-crop, so a source that was ALREADY
+              portrait or square got cropped when it should have been letterboxed
+              — silently cutting content out of frame. PRD Appendix A has
+              documented the missing pad command since the spec was written. */}
+          <div className="flex flex-col gap-1.5" data-testid="export-canvas-controls">
+            <span className="text-xs text-muted-foreground">Canvas:</span>
+            <div className="flex flex-wrap gap-1.5">
+              {ASPECT_RATIOS.map((ratio) => (
+                <button
+                  key={ratio}
+                  type="button"
+                  data-testid={`aspect-${ratio}`}
+                  data-active={aspectRatio === ratio}
+                  aria-pressed={aspectRatio === ratio}
+                  onClick={() => setProjectSettings({ aspectRatio: ratio })}
+                  className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                    aspectRatio === ratio
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-border bg-background hover:bg-accent'
+                  }`}
+                >
+                  {ratio}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {FIT_MODES.map((m) => (
+                <button
+                  key={m.id}
+                  type="button"
+                  data-testid={`fit-${m.id}`}
+                  data-active={fitMode === m.id}
+                  aria-pressed={fitMode === m.id}
+                  title={m.hint}
+                  onClick={() => setProjectSettings({ fitMode: m.id })}
+                  className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                    fitMode === m.id
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-border bg-background hover:bg-accent'
+                  }`}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+            {/* Speaker-follow moves a crop; there is no crop left to move inside a
+              letterboxed frame. Saying so beats silently ignoring the toggle. */}
+            {fitMode !== 'fill' && reframe !== 'off' && (
+              <span className="text-xs text-amber-600" data-testid="fit-reframe-conflict">
+                Auto-reframe needs Fill — it is skipped while fitting.
               </span>
             )}
           </div>

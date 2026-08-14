@@ -203,6 +203,10 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
         })(),
         // Auto-reframe (Part J, opt-in): detect faces → a crop plan, or null ⇒ center-crop.
         (async (): Promise<ReframePlan | null> => {
+          // A letterbox/blur fit has no crop left to move, so the plan could only
+          // be discarded (FEAT-bd87vz) — and face analysis is the slowest phase of
+          // the whole export. Skip it rather than paying for an ignored result.
+          if (params.fitMode && params.fitMode !== 'fill') return null
           if (!(params.reframe && params.reframe !== 'off' && params.sourceResolution)) return null
           try {
             return await planReframe({
@@ -269,6 +273,8 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
           startTime: params.startTime,
           endTime: params.endTime,
           aspectRatio: params.aspectRatio,
+          // FEAT-bd87vz — absent ⇒ `fill`, the historical centre-crop.
+          fitMode: params.fitMode,
           quality: params.quality,
           forceCpu,
           assPath,

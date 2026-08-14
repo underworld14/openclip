@@ -206,7 +206,47 @@ const scanNonfree = (label, path) => {
 scanNonfree('bundled ffmpeg', bins.ffmpeg)
 scanNonfree('bundled ffprobe', bins.ffprobe)
 const asarPath = join(resourcesDir, 'app.asar')
-scanNonfree('packaged app.asar', asarPath)
+/**
+ * app.asar is a single packed blob, so a plain byte-scan can only say "somewhere
+ * in here" — which is a genuinely bad place to leave whoever hits it (finding the
+ * culprit meant extracting the archive by hand, twice, during FEAT-d8b6bj). When
+ * the marker IS present, walk the archive and name the exact packed files, so the
+ * failure distinguishes a real nonfree ffmpeg binary from a document that merely
+ * mentions the flag.
+ */
+if (existsSync(asarPath) && readFileSync(asarPath).includes(NONFREE_MARKER)) {
+  let culprits = []
+  try {
+    const asar = await import('@electron/asar')
+    culprits = asar
+      .listPackage(asarPath)
+      .filter((entry) => {
+        try {
+          return asar.extractFile(asarPath, entry.replace(/^\//, '')).includes(NONFREE_MARKER)
+        } catch {
+          return false // directories and unreadable entries
+        }
+      })
+      .map((entry) => {
+        const buf = asar.extractFile(asarPath, entry.replace(/^\//, ''))
+        // A real ffmpeg build embeds its configure line in an executable; prose
+        // that discusses the flag is valid UTF-8 text. Say which one this is.
+        const isText = Buffer.compare(Buffer.from(buf.toString('utf8'), 'utf8'), buf) === 0
+        return `${entry}${isText ? '  (text — likely documentation, not a binary)' : '  (BINARY)'}`
+      })
+  } catch {
+    culprits = ['(could not enumerate the archive — @electron/asar unavailable)']
+  }
+  fail(
+    `packaged app.asar contains the --enable-nonfree marker. OpenClip ships a ` +
+      `redistributable ffmpeg only; a nonfree binary in the bundle is a ` +
+      `redistribution/supply-chain regression.\n  offending entries:\n    ` +
+      culprits.join('\n    ') +
+      `\n  If these are documentation rather than a binary, exclude them from ` +
+      `app.asar in electron-builder.yml \`files\` — prose does not belong in the ` +
+      `code archive.`
+  )
+}
 const asarUnpacked = join(resourcesDir, 'app.asar.unpacked')
 if (existsSync(asarUnpacked)) {
   // Native binaries are commonly asarUnpack'd; scan each file in the unpacked tree.
@@ -241,6 +281,24 @@ if (fontLicenseNames.length === 0) {
   )
 }
 log(`bundled font license OK: ${fontsResDir}/${fontLicenseNames.join(', ')}`)
+
+// 4c) the bundled ffmpeg/ffprobe are GPL-3.0-or-later (--enable-gpl
+// --enable-version3), so the packaged app MUST carry a verbatim copy of the GPL
+// and a written offer of source — `ffmpeg -L` literally tells the user they
+// should have received one. Shipping the binary without it is a redistribution
+// violation, and it was the state of the app before FEAT-d8b6bj.
+const ffmpegResDir = join(resourcesDir, 'ffmpeg', platArch)
+for (const name of ['COPYING.GPLv3', 'README.md']) {
+  const p = join(ffmpegResDir, name)
+  if (!existsSync(p) || statSync(p).size === 0) {
+    fail(
+      `bundled ffmpeg is GPL-3.0-or-later but ${name} did not ship beside it (${p}). ` +
+        `Check the resources/ffmpeg extraResources filter in electron-builder.yml and ` +
+        `scripts/bundle-binaries.mjs stageFfmpegLicense().`
+    )
+  }
+}
+log(`bundled ffmpeg GPL license + written offer OK: ${ffmpegResDir}`)
 
 // 5) auto-reframe ONNX assets (Part J): the YuNet model + the onnxruntime-web
 // WASM the detector loads via `ort.env.wasm.wasmPaths`. Both ship under

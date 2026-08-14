@@ -27,6 +27,23 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,tsconfig.shared.json,tsconfig.test.json}'
   - '!{vitest.config.ts,playwright.config.ts,components.json}'
   - '!{tests,scripts,test-results,playwright-report,.smoke-cache}/**'
+  # Repo/agent metadata is not product. All of this was shipping inside app.asar
+  # (FEAT-d8b6bj): the Pine issue tracker with every ticket and learning, four
+  # agent-harness config dirs, the internal PRD/design docs, and stale
+  # tsbuildinfo. Besides being ~550 KB of noise in a user-facing bundle, it is
+  # internal project history handed to anyone who opens the app — and it broke
+  # `verify:package`, because a ticket QUOTING `--enable-nonfree` tripped the
+  # byte-scan guardrail meant to catch a real nonfree ffmpeg in the bundle.
+  - '!{.pine,.claude,.codex,.cursor,.agents,.husky}/**'
+  - '!docs/**'
+  - '!*.tsbuildinfo'
+  - '!build/**'
+  # No markdown inside app.asar. The user-facing licence documents ship under
+  # `extraResources` below (where licence files belong, next to the binaries they
+  # describe) rather than being buried in the code archive — and keeping prose out
+  # of the asar stops documentation that merely *discusses* `--enable-nonfree`
+  # from tripping verify-package's byte-scan for a real nonfree ffmpeg binary.
+  - '!*.md'
 # Populate resources/{ffmpeg,whisper}/<plat-arch> from node_modules / the whisper
 # build output before the app is packed (keeps large binaries out of git — plan E.6).
 beforePack: build/bundle-binaries.cjs
@@ -70,6 +87,14 @@ extraResources:
       - '**/*.onnx'
       - '**/*.wasm'
       - '**/*.mjs'
+  # The app's own licence and the third-party inventory (FEAT-d8b6bj). A user who
+  # opens the bundle should be able to find out what they actually received and
+  # under which terms — the app is MIT but ships GPL-3.0-or-later FFmpeg, whose
+  # licence text and written offer live at ffmpeg/<plat-arch>/.
+  - from: LICENSE
+    to: LICENSE
+  - from: THIRD-PARTY-LICENSES.md
+    to: THIRD-PARTY-LICENSES.md
 mac:
   category: public.app-category.video
   target:

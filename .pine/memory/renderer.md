@@ -1,6 +1,6 @@
 ---
 topic: renderer
-updated: 2026-08-09T03:58:17Z
+updated: 2026-08-14T11:00:23Z
 ---
 
 # renderer
@@ -10,3 +10,5 @@ updated: 2026-08-09T03:58:17Z
 - 2026-08-09: A project committed at probe time means transcript partials stream into an OPEN project, so the autosave subscriber must suspend while an import runs (startAutosave isSuspended + resume). Otherwise every streamed partial changes the transcript ref and rewrites the whole .ocproj each debounce window. (cites: src/renderer/src/stores/projectStore/autosave.ts)
 - 2026-08-09: Map-reduce job partials are PROVISIONAL — per-chunk clips are not de-overlapped across chunks, ranked or clamped. Render them from a separate store field (provisionalClips), never the persisted one, and REPLACE on the terminal done. Routing them through clips would both duplicate moments from overlapping chunk windows and get them autosaved into the .ocproj. (cites: src/renderer/src/stores/projectStore/clipsSlice.ts)
 - 2026-08-09: Long jobs get exactly one user-visible surface: stores/jobsStore tracks ACTIVITIES (an import = url-download + probe + extract + transcribe = one row) at the orchestrator level, not inside the frozen drainJob seam. Anything new that runs for more than a second should wrap its orchestrator in trackTask rather than growing its own modal-local progress UI. (cites: src/renderer/src/stores/jobsStore.ts)
+- 2026-08-14: Renderer specs opt into a DOM with a '// @vitest-environment jsdom' docblock on line 1 (the suite default stays 'node'); call installRendererEnv() from tests/harness/renderer-env.ts in beforeEach to get a fresh mock bridge on window plus a reset of the import-controller, need-model and job-port module singletons. (cites: tests/harness/renderer-env.ts)
+- 2026-08-14: createMockOpenclip() calls registerJobPort() directly, so it bypasses the window-message listener in jobPort.ts. Any test that needs to prove the REAL port handoff must dispatch a tagged window 'message' event itself — a bug living only in that listener is invisible to every mock-bridge test. (cites: tests/mocks/openclip.ts)

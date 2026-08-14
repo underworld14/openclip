@@ -2,7 +2,7 @@
 
 This is the operational guide for producing a distributable OpenClip build. It
 covers the **unsigned** build (which anyone can produce, no Apple account
-needed) and the **signed + notarized** build (which requires *your* Apple
+needed) and the **signed + notarized** build (which requires _your_ Apple
 Developer credentials — the CI/build machine cannot do this without them).
 
 > Targets: macOS **Apple Silicon (arm64)** first (PRD §12.4). Electron 41.7.1,
@@ -16,27 +16,64 @@ The three native sidecars and the libass caption font are shipped as
 `extraResources` (NOT inside `app.asar` — they must be spawnable/loadable from
 disk) and resolved at runtime by `src/main/utils/paths.ts`:
 
-| Bundled artifact | Lands at (inside `OpenClip.app`) | Resolved in prod by |
-|---|---|---|
-| ffmpeg (static, libass + videotoolbox) | `Contents/Resources/ffmpeg/darwin-arm64/ffmpeg` | `ffmpegPath()` |
-| ffprobe (static) | `Contents/Resources/ffmpeg/darwin-arm64/ffprobe` | `ffprobePath()` |
-| whisper-cli (static, Metal-embedded) | `Contents/Resources/whisper/darwin-arm64/whisper-cli` | `whisperCliPath()` |
-| DejaVuSans.ttf (libass `fontsdir`) | `Contents/Resources/fonts/DejaVuSans.ttf` | `fontsDir()` |
+| Bundled artifact                       | Lands at (inside `OpenClip.app`)                                   | Resolved in prod by   |
+| -------------------------------------- | ------------------------------------------------------------------ | --------------------- |
+| ffmpeg (static, libass + videotoolbox) | `Contents/Resources/ffmpeg/darwin-arm64/ffmpeg`                    | `ffmpegPath()`        |
+| ffprobe (static)                       | `Contents/Resources/ffmpeg/darwin-arm64/ffprobe`                   | `ffprobePath()`       |
+| whisper-cli (static, Metal-embedded)   | `Contents/Resources/whisper/darwin-arm64/whisper-cli`              | `whisperCliPath()`    |
+| DejaVuSans.ttf (libass `fontsdir`)     | `Contents/Resources/fonts/DejaVuSans.ttf`                          | `fontsDir()`          |
+| yt-dlp (standalone, no Python)         | `Contents/Resources/yt-dlp/darwin-arm64/yt-dlp`                    | `ytDlpPath()`         |
+| YuNet model + onnxruntime-web wasm     | `Contents/Resources/onnx/`                                         | `reframeOnnxDir()`    |
+| FFmpeg GPL licence + written offer     | `Contents/Resources/ffmpeg/darwin-arm64/{COPYING.GPLv3,README.md}` | — (legal, not loaded) |
 
 GGML whisper **models are NOT bundled** (75 MB – 2.9 GB). They are downloaded on
 first transcribe into `userData/models/` (PRD §13). This keeps the installer
 under the 250 MB target (the unsigned dmg is ~211 MB).
 
-The large binaries are **not committed to git**. They are staged from
-`node_modules` (ffmpeg/ffprobe) and a locally-built whisper-cli into
-`resources/` by `scripts/bundle-binaries.mjs`, which electron-builder runs
-automatically via the `beforePack` hook (`build/bundle-binaries.cjs`). The
-bundler also asserts the Gate-A invariants and fails loudly otherwise:
+The large binaries are **not committed to git**. `scripts/bundle-binaries.mjs`
+stages them into `resources/`, and electron-builder runs it automatically via the
+`beforePack` hook (`build/bundle-binaries.cjs`). Where each one comes from:
+
+| Sidecar                                   | Source                                                                                                                              |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| ffmpeg / ffprobe                          | **Downloaded**, pinned by build id and SHA-256-verified, from [Martin Riedl's FFmpeg Build Server](https://ffmpeg.martin-riedl.de/) |
+| whisper-cli                               | **Built locally** by you — see the next section                                                                                     |
+| yt-dlp                                    | **Downloaded**, pinned to a specific release tag and SHA-256-verified                                                               |
+| ONNX (YuNet model + onnxruntime-web wasm) | Committed model + wasm copied from `node_modules`                                                                                   |
+
+> **Not from `node_modules`.** The `ffmpeg-static` / `ffmpeg-ffprobe-static`
+> packages report `--enable-nonfree`, which is **not redistributable** in a public
+> dmg at all. They remain devDependencies for local testing only; the bundler
+> reads the staged binary's own `-buildconf` and hard-fails if it sees that flag,
+> and `verify-package.mjs` byte-scans the packaged bundle for the same marker.
+
+The bundler also asserts the Gate-A invariants and fails loudly otherwise:
 
 - ffmpeg exposes the libass `subtitles` filter + `h264_videotoolbox` encoder;
 - every sidecar is **portable** (`otool -L` shows only `/usr/lib` + `/System/*`
   dylibs — no `@rpath`/brew libs), so notarization won't fail on an unsigned
-  third-party dylib.
+  third-party dylib;
+- the FFmpeg **GPL licence text and written offer of source** are staged next to
+  the binaries (see below).
+
+### FFmpeg is GPL-3.0-or-later, and its licence ships with it
+
+The bundled ffmpeg/ffprobe are built `--enable-gpl --enable-version3`, which makes
+them GPL-3.0-or-later — `ffmpeg -L` on the shipped binary prints the GPLv3 notice,
+including "You should have received a copy of the GNU General Public License along
+with ffmpeg".
+
+So `build/licenses/ffmpeg/` (the verbatim GPL-3.0 text plus a written offer of
+source and the exact build provenance) is staged into
+`resources/ffmpeg/<plat-arch>/` and ships at
+`Contents/Resources/ffmpeg/<plat-arch>/`. `bundle-binaries.mjs` verifies the
+licence text against a pinned SHA so an edited or truncated copy fails the build,
+and `verify-package.mjs` fails if it did not reach the `.app`.
+
+OpenClip's own source stays MIT: it ships FFmpeg as an unmodified, separately
+licensed executable and spawns it as a subprocess rather than linking against it.
+See [`THIRD-PARTY-LICENSES.md`](../THIRD-PARTY-LICENSES.md) for the full inventory
+and for the LGPL alternative if you would rather not carry GPL obligations.
 
 ### Building the static whisper-cli (one-time prerequisite)
 
@@ -144,7 +181,7 @@ security find-identity -v -p codesigning
 **b) Notarization credentials.** The `afterSign` hook (`build/notarize.cjs`)
 accepts either set (App Store Connect **API key preferred**):
 
-*Option 1 — App Store Connect API key (recommended):* create an API key in App
+_Option 1 — App Store Connect API key (recommended):_ create an API key in App
 Store Connect → Users and Access → Integrations → App Store Connect API. Download
 the `AuthKey_XXXX.p8` once. Then export:
 
@@ -154,7 +191,7 @@ export APPLE_API_KEY_ID="T9GPZ92M7K"                         # the Key ID
 export APPLE_API_ISSUER="aaaa-bbbb-cccc-dddd-eeee"           # the Issuer UUID
 ```
 
-*Option 2 — Apple ID + app-specific password:*
+_Option 2 — Apple ID + app-specific password:_
 
 ```bash
 export APPLE_ID="you@example.com"
@@ -169,7 +206,7 @@ must be available as a file on the build machine.)
 
 `electron-builder.yml` sets `afterSign: build/notarize.cjs` and `mac.notarize:
 false` (we use the hook, not electron-builder's built-in notarize path, so an
-unsigned dev build is never *forced* to notarize). The hook
+unsigned dev build is never _forced_ to notarize). The hook
 (`build/notarize.cjs`):
 
 1. runs only for `electronPlatformName === 'darwin'`;
@@ -180,7 +217,7 @@ unsigned dev build is never *forced* to notarize). The hook
    `notarize({ appPath, ...creds })`, which submits the signed `.app` to Apple
    and waits for the ticket.
 
-So the *only* thing that flips the build from "unsigned" to "notarized" is:
+So the _only_ thing that flips the build from "unsigned" to "notarized" is:
 (1) a Developer ID cert in the keychain, and (2) the notarization env vars set.
 No code change is required.
 

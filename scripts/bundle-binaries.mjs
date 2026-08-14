@@ -419,6 +419,58 @@ function verifyNotNonfree(bin, label) {
   log(`${label} OK: redistributable (no --enable-nonfree in build configuration)`)
 }
 
+/**
+ * The bundled ffmpeg/ffprobe are built `--enable-gpl --enable-version3`, which
+ * makes them GPL-3.0-or-later. `ffmpeg -L` even prints "You should have received
+ * a copy of the GNU General Public License along with ffmpeg" — and until
+ * FEAT-d8b6bj we shipped no such copy, and no written offer of source.
+ *
+ * So the licence + offer are staged NEXT TO the binaries, exactly like the fonts
+ * ship with their OFL.txt. electron-builder's `resources/ffmpeg` extraResources
+ * filter is `**\/*`, so anything placed here lands in the packaged app at
+ * Contents/Resources/ffmpeg/<plat-arch>/.
+ */
+const FFMPEG_LICENSE_DIR = join(repoRoot, 'build', 'licenses', 'ffmpeg')
+/** Canonical FSF GPL-3.0 text; pinned so an edited/truncated copy fails the build. */
+const GPLV3_SHA256 = '8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903'
+const FFMPEG_LICENSE_FILES = ['COPYING.GPLv3', 'README.md']
+
+function stageFfmpegLicense() {
+  const destDir = join(repoRoot, 'resources', 'ffmpeg', platArch)
+  mkdirSync(destDir, { recursive: true })
+  for (const name of FFMPEG_LICENSE_FILES) {
+    const src = join(FFMPEG_LICENSE_DIR, name)
+    if (!existsSync(src)) {
+      fail(`ffmpeg licence file missing from the repo: ${src} (FEAT-d8b6bj)`)
+    }
+    copyFileSync(src, join(destDir, name))
+  }
+  log('ffmpeg GPL licence + written offer staged beside the binaries')
+}
+
+function verifyFfmpegLicense() {
+  const destDir = join(repoRoot, 'resources', 'ffmpeg', platArch)
+  for (const name of FFMPEG_LICENSE_FILES) {
+    const p = join(destDir, name)
+    if (!existsSync(p) || statSync(p).size === 0) {
+      fail(
+        `ffmpeg is GPL-3.0-or-later but ${name} is not staged beside it (${p}). ` +
+          `Shipping the binary without its licence is a redistribution violation (FEAT-d8b6bj).`
+      )
+    }
+  }
+  const actual = createHash('sha256')
+    .update(readFileSync(join(destDir, 'COPYING.GPLv3')))
+    .digest('hex')
+  if (actual !== GPLV3_SHA256) {
+    fail(
+      `staged COPYING.GPLv3 does not match the canonical FSF GPL-3.0 text ` +
+        `(expected ${GPLV3_SHA256}, got ${actual}) — the licence text must be verbatim.`
+    )
+  }
+  log('ffmpeg OK: verbatim GPL-3.0 text + written offer of source are bundled')
+}
+
 /** A portable binary may only link /usr/lib and /System/* dylibs. */
 function verifyPortable(bin, label) {
   if (!isMac) {
@@ -522,6 +574,9 @@ if (!verifyOnly) {
   // nonfree ffmpeg-static — openclip-fh2 / openclip-hk7).
   installBinary(resolveFfmpegRedistributable(), dest.ffmpeg)
   installBinary(resolveFfprobeRedistributable(), dest.ffprobe)
+  // The GPL text + written offer of source have to travel WITH those binaries
+  // (FEAT-d8b6bj) — same rule the fonts already follow.
+  stageFfmpegLicense()
   installBinary(resolveWhisperCli(), dest.whisper)
   installBinary(resolveYtDlp(), dest.ytdlp)
   // Auto-reframe ONNX runtime (Part J): assert the committed YuNet model + stage
@@ -537,6 +592,8 @@ verifyFfmpeg(dest.ffmpeg)
 // Legal guardrail (openclip-fh2): refuse to ship a --enable-nonfree build.
 verifyNotNonfree(dest.ffmpeg, 'ffmpeg')
 verifyNotNonfree(dest.ffprobe, 'ffprobe')
+// Legal guardrail (FEAT-d8b6bj): refuse to ship GPL binaries without their licence.
+verifyFfmpegLicense()
 verifyPortable(dest.ffmpeg, 'ffmpeg')
 verifyPortable(dest.ffprobe, 'ffprobe')
 verifyPortable(dest.whisper, 'whisper-cli')

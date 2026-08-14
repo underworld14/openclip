@@ -5,7 +5,14 @@
   "main": "./out/main/index.js",
   "author": "OpenClip",
   "license": "MIT",
-  "homepage": "https://github.com/openclip/openclip-desktop",
+  "homepage": "https://github.com/underworld14/openclip",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/underworld14/openclip.git"
+  },
+  "bugs": {
+    "url": "https://github.com/underworld14/openclip/issues"
+  },
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",

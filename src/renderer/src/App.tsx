@@ -10,7 +10,7 @@
  * ClipSidebar / Timeline.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { APP_NAME } from '@shared'
 import type { WhisperModelSize } from '@shared/jobs'
 import { Button } from '@renderer/components/ui/button'
@@ -40,6 +40,8 @@ import { Toaster } from '@renderer/components/ui/sonner'
 import { toast } from 'sonner'
 import { createGenerateClipsHandler } from '@renderer/components/generateClips'
 import { useProjectStore } from '@renderer/stores/projectStore'
+import { useJobsStore } from '@renderer/stores/jobsStore'
+import { activeTasks } from '@renderer/components/jobStatus'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { installAutosave } from '@renderer/stores/projectStore/autosave'
 import { installJobNotifications } from '@renderer/stores/jobNotifications'
@@ -52,6 +54,19 @@ type Modal = 'none' | 'import' | 'export' | 'settings'
 
 function App(): React.JSX.Element {
   const [modal, setModal] = useState<Modal>('none')
+  /**
+   * Is an export encode still running? Read from the app-level job registry
+   * rather than ExportPanel's local state, because the panel unmounts on
+   * dismissal — which is exactly the moment we need the answer (FEAT-az3sxm).
+   */
+  const exportTasks = useJobsStore((s) => s.tasks)
+  const exportRunning = useMemo(
+    // `activeTasks` is the same predicate the status bar uses (running OR queued,
+    // top-level only), so the toast and the bar can never disagree about whether
+    // there is something to go back to.
+    () => activeTasks(exportTasks).some((t) => t.kind === 'export'),
+    [exportTasks]
+  )
   const [modelDialogOpen, setModelDialogOpen] = useState(false)
   const [neededModel, setNeededModel] = useState<WhisperModelSize | undefined>(undefined)
   const [dark, setDark] = useState(true)
@@ -272,7 +287,24 @@ function App(): React.JSX.Element {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={modal === 'export'} onOpenChange={(o) => !o && setModal('none')}>
+      {/* Dismissing mid-export does NOT kill the encode — JobStatusBar is mounted
+          above, outside every modal, and keeps the row (with its Cancel and, when
+          it lands, "Open folder") reachable. That is the behaviour we want: an
+          export you can navigate away from and come back to. What was missing is
+          that nobody TOLD the user, so the dialog's progress bar and "Open
+          folder" appeared to simply vanish (FEAT-az3sxm). */}
+      <Dialog
+        open={modal === 'export'}
+        onOpenChange={(o) => {
+          if (o) return
+          if (exportRunning) {
+            toast('Export continues in the background', {
+              description: 'Track it — or cancel it — in the status bar at the top.'
+            })
+          }
+          setModal('none')
+        }}
+      >
         <DialogContent className="app-no-drag sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Export clips</DialogTitle>

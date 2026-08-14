@@ -99,6 +99,8 @@ export function ExportPanel(): React.JSX.Element {
 
   const [pct, setPct] = useState(0)
   const [phase, setPhase] = useState<Phase>('idle')
+  /** The in-flight single-clip export job, so the panel can cancel it. */
+  const exportJobId = useRef<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [outputPath, setOutputPath] = useState<string | null>(null)
   // Burn word-level karaoke captions into the export (PRD §6.4). On by default
@@ -160,7 +162,13 @@ export function ExportPanel(): React.JSX.Element {
           const result = await exportToFile({
             bridge: window.openclip,
             defaultFileName: defaultClipFileName(clip.title),
-            onStart: (jobId) => task.setCancel(() => window.openclip.jobs.cancel(jobId)),
+            onStart: (jobId) => {
+              // Keep the id so the panel can offer its OWN cancel, not just the
+              // status-bar row's (FEAT-az3sxm): the single-clip path had no
+              // cancel at all while the batch path right below it did.
+              exportJobId.current = jobId
+              task.setCancel(() => window.openclip.jobs.cancel(jobId))
+            },
             buildParams: (chosenPath) =>
               buildExportParams({
                 projectId: project.id,
@@ -535,6 +543,23 @@ export function ExportPanel(): React.JSX.Element {
             >
               {phase === 'exporting' ? 'Exporting…' : 'Export clip'}
             </Button>
+            {/* The single-clip path had no way to stop a running encode, while the
+                batch path immediately below has had "Cancel all" all along. The
+                sidecar already SIGKILLs the child and cleans up the .part.mp4 —
+                nothing new was needed on the main side (FEAT-az3sxm). */}
+            {phase === 'exporting' && (
+              <Button
+                size="sm"
+                variant="destructive"
+                data-testid="export-cancel"
+                onClick={() => {
+                  const id = exportJobId.current
+                  if (id) void window.openclip.jobs.cancel(id)
+                }}
+              >
+                Cancel
+              </Button>
+            )}
             {phase === 'done' && outputPath && (
               <Button
                 size="sm"

@@ -23,16 +23,33 @@ const ASPECTS = ['9:16', '1:1', '4:5', '16:9'] as const
 const AI_PROVIDERS = ['openai', 'anthropic', 'google', 'ollama', 'openrouter'] as const
 const nonEmpty = z.string().min(1)
 
+/**
+ * A projectId becomes ONE path segment under `<temp>/openclip/` (paths.ts), so a
+ * separator or `..` here escapes the temp root entirely — `'../../../../victim'`
+ * resolved to a directory outside it, which the export runner then created and
+ * wrote captions into (BUG-e06a9d). It was only ever checked as "non-empty
+ * string", while the media path had guarded the same value from day one.
+ *
+ * Rejecting here turns it into the typed, non-retriable INPUT_INVALID the
+ * renderer already knows how to surface; `paths.assertSafeProjectId` is the
+ * belt-and-braces guard at the construction site for any caller that bypasses
+ * this boundary.
+ */
+const safeSegment = nonEmpty.refine(
+  (v) => !/[\\/]/.test(v) && v !== '.' && v !== '..' && !v.includes('\0'),
+  'must be a single path segment (no "/", "\\", "." or "..")'
+)
+
 /** Per-kind params validators — strict on the sensitive fields, loose on the rest. */
 const paramsByKind = {
   transcribe: z.looseObject({
-    projectId: nonEmpty,
+    projectId: safeSegment,
     wavPath: nonEmpty,
     model: z.enum(WHISPER_MODELS),
     language: z.string().optional()
   }),
   export: z.looseObject({
-    projectId: nonEmpty,
+    projectId: safeSegment,
     clipId: nonEmpty,
     sourcePath: nonEmpty,
     outputPath: nonEmpty,
@@ -49,7 +66,7 @@ const paramsByKind = {
   // is additionally clamped to 1..50 in the runner (audit fix openclip-9hc):
   // an unbounded value inflates the prompt and risks output truncation.
   'generate-clips': z.looseObject({
-    projectId: nonEmpty,
+    projectId: safeSegment,
     provider: z.enum(AI_PROVIDERS),
     model: nonEmpty,
     segments: z.array(z.unknown()),

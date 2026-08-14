@@ -304,9 +304,36 @@ export function openclipTempRoot(baseTemp?: string): string {
   return join(base, 'openclip')
 }
 
+/**
+ * A projectId is interpolated into a path as ONE segment, so it must actually be
+ * one (audit fix BUG-e06a9d). These builders were a bare `join`, which happily
+ * resolves `..` — `tempRootFor('../../../../victim')` produced a directory well
+ * outside the temp root, and the app then created it and wrote into it.
+ *
+ * `media-store.ts` has guarded this since it was written, but only on the media
+ * path; the temp path had no guard at all and both of its feeders (`JOB_START`
+ * and `audio:extract`) passed the renderer's value straight through. Guarding
+ * here — at CONSTRUCTION — covers every present and future caller, rather than
+ * relying on each entry point to remember. `job-start-validation.ts` additionally
+ * rejects it at the trust boundary so the renderer gets a typed INPUT_INVALID
+ * instead of an internal throw.
+ */
+export function assertSafeProjectId(projectId: string): string {
+  if (
+    !projectId ||
+    /[\\/]/.test(projectId) ||
+    projectId === '.' ||
+    projectId === '..' ||
+    projectId.includes('\0')
+  ) {
+    throw new Error(`unsafe project id: ${JSON.stringify(projectId)}`)
+  }
+  return projectId
+}
+
 /** Per-project temp root `<temp>/openclip/<projectId>` (PRD §17). */
 export function tempRootFor(projectId: string, baseTemp?: string): string {
-  return join(openclipTempRoot(baseTemp), projectId)
+  return join(openclipTempRoot(baseTemp), assertSafeProjectId(projectId))
 }
 
 /** Per-job scratch dir `<temp>/openclip/<projectId>/<jobId>` (deleted in finally). */

@@ -138,7 +138,9 @@ export function Timeline(): React.JSX.Element {
       data-testid="timeline"
       tabIndex={0}
       role="group"
-      aria-label="Clip timeline — I mark in, O mark out, Space play/pause"
+      // The keys work app-wide now (FEAT-vvaycm) and are listed in the ? sheet
+      // and the Clip menu; this label stays for anyone landing here by tab.
+      aria-label="Clip timeline — I mark in, O mark out, Space play/pause, ? for all shortcuts"
       onKeyDown={onKeyDown}
       className="flex flex-col gap-1 rounded-md border p-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
@@ -177,7 +179,7 @@ export function Timeline(): React.JSX.Element {
         <button
           type="button"
           data-testid="timeline-handle-in"
-          aria-label="Trim in"
+          aria-label="Trim in — left/right arrow keys nudge by one frame"
           onPointerDown={onHandlePointerDown('in')}
           onPointerMove={onHandlePointerMove}
           onPointerUp={onHandlePointerUp}
@@ -189,7 +191,7 @@ export function Timeline(): React.JSX.Element {
         <button
           type="button"
           data-testid="timeline-handle-out"
-          aria-label="Trim out"
+          aria-label="Trim out — shift+left/right arrow keys nudge by one frame"
           onPointerDown={onHandlePointerDown('out')}
           onPointerMove={onHandlePointerMove}
           onPointerUp={onHandlePointerUp}

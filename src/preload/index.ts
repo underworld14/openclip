@@ -30,6 +30,7 @@ import { buildJobsApi, installJobPortForwarder } from './api/jobs'
 import { buildFilesApi } from './api/files'
 import type { FilesAPI } from './api/files'
 import { installQuitFlushForwarder } from './quit-flush'
+import { installMenuCommandForwarder } from './menu-command'
 
 // ============================================================================
 // OpenClipBridge — the public, derived `window.openclip` type (E.4 namespaces)
@@ -88,6 +89,9 @@ const openclip: OpenClipBridge = {
 installJobPortForwarder()
 // Forward the quit-time flush signal into the renderer (openclip-49y).
 installQuitFlushForwarder()
+// Application-menu commands → a window message the renderer's shortcut hook
+// consumes (FEAT-vvaycm). Same one-way forwarding shape as the quit flush.
+installMenuCommandForwarder()
 
 if (process.contextIsolated) {
   try {

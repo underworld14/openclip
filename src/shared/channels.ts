@@ -168,6 +168,14 @@ export enum IPCChannels {
   // debounced save and then calls `system.autosaveFlushed()` (the AUTOSAVE_FLUSHED invoke
   // below) so main can quit as soon as the save lands instead of racing renderer teardown.
   FLUSH_BEFORE_QUIT = 'lifecycle:flush-before-quit',
+  /**
+   * Application-menu command (main→renderer), carrying a `ShortcutId`
+   * (FEAT-vvaycm). ONE-WAY and forwarded as a window message, exactly like
+   * FLUSH_BEFORE_QUIT above — and on the same `lifecycle:` prefix for the same
+   * reason: `buildNamespace('system')` derives an invoke per matching enum value,
+   * and this is not an invoke.
+   */
+  MENU_COMMAND = 'lifecycle:menu-command',
   AUTOSAVE_FLUSHED = 'system:autosave-flushed'
 }
 

@@ -37,6 +37,7 @@ import {
 } from './utils/media-protocol'
 import { createMediaAccess } from './utils/media-access'
 import { mediaDir, openclipTempRoot } from './utils/paths'
+import { installApplicationMenu } from './menu'
 
 let mainWindow: BrowserWindow | null = null
 const sidecar = new SidecarManager()
@@ -318,6 +319,12 @@ app.whenReady().then(async () => {
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
+
+  // The application menu (FEAT-vvaycm). `setApplicationMenu` appeared nowhere in
+  // this process, so the app shipped Electron's stock menu — no Cmd+N/O/I/E/,.
+  // The window is resolved at CLICK time (a thunk, not a captured reference) so a
+  // command reaches whichever window is focused, and survives window recreation.
+  installApplicationMenu(() => BrowserWindow.getFocusedWindow() ?? mainWindow)
 
   // Use the production-grade p-queue limiter (ESM, dynamically imported).
   try {

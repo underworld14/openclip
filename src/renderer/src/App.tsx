@@ -13,6 +13,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { APP_NAME } from '@shared'
 import type { WhisperModelSize } from '@shared/jobs'
+import type { Clip } from '@shared/schema'
 import { Button } from '@renderer/components/ui/button'
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@renderer/components/ui/dialog'
@@ -47,6 +48,9 @@ import {
   type PreflightConfig
 } from '@shared/generate-preflight'
 import { useProjectStore } from '@renderer/stores/projectStore'
+import { useGlobalShortcuts } from '@renderer/hooks/useGlobalShortcuts'
+import { ShortcutSheet } from '@renderer/components/ShortcutSheet'
+import { resolveBounds } from '@shared/clip-bounds'
 import { useJobsStore } from '@renderer/stores/jobsStore'
 import { useUiStore } from '@renderer/stores/uiStore'
 import { saveStatusLabel } from '@renderer/components/saveStatus'
@@ -158,6 +162,105 @@ function App(): React.JSX.Element {
     useProjectStore.getState().setProjectSettings(preflightToProjectSettings(config))
     void runGenerateClips(config)
   }
+
+  /**
+   * App-wide keyboard + application-menu commands (FEAT-vvaycm).
+   *
+   * Before this, the only key handling in the app was three keys on the timeline
+   * `<div>` — which had to hold focus first — and `setApplicationMenu` appeared
+   * nowhere in main, so the app shipped Electron's stock menu with no ⌘N/O/I/E/,.
+   *
+   * The handlers are deliberately thin: each one is the SAME action the
+   * corresponding button already calls, so a keystroke and a click cannot drift.
+   */
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+
+  /** The clip a clip-scoped shortcut applies to: the selected one, else the first. */
+  const targetClip = (): Clip | null => {
+    const st = useProjectStore.getState()
+    return st.clips.find((c) => c.id === st.selectedClipId) ?? st.clips[0] ?? null
+  }
+
+  /** Move the selection by `delta` positions in the current list order. */
+  const stepClip = (delta: number): void => {
+    const st = useProjectStore.getState()
+    if (st.clips.length === 0) return
+    const i = st.clips.findIndex((c) => c.id === st.selectedClipId)
+    const next = st.clips[Math.max(0, Math.min(st.clips.length - 1, (i < 0 ? 0 : i) + delta))]
+    if (next) st.selectClip(next.id)
+  }
+
+  /**
+   * Nudge one trim handle by a frame.
+   *
+   * A FRAME, not a fixed 0.1s: "one frame" is the unit an editor thinks in, and
+   * it is the unit the source actually has. Falls back to 30fps only when the
+   * probe gave us nothing.
+   */
+  const nudge = (handle: 'in' | 'out', frames: number): void => {
+    const st = useProjectStore.getState()
+    const clip = targetClip()
+    const source = st.currentProject?.sourceVideo
+    if (!clip || !source) return
+    const step = frames / (source.fps > 0 ? source.fps : 30)
+    const bounds = resolveBounds(clip)
+    const time = (handle === 'in' ? bounds.start : bounds.end) + step
+    st.dragClipHandle(clip.id, handle, time, source.duration)
+  }
+
+  useGlobalShortcuts({
+    'new-project': () => useProjectStore.getState().setCurrentProject(null),
+    'open-project': () => setModal('import'),
+    'import-video': () => setModal('import'),
+    settings: () => setModal('settings'),
+    'export-clip': () => setModal('export'),
+    'generate-clips': openPreflight,
+    help: () => setShortcutsOpen(true),
+    'play-pause': () => {
+      const st = useProjectStore.getState()
+      st.setPlaying(!st.isPlaying)
+    },
+    'shuttle-stop': () => useProjectStore.getState().setPlaying(false),
+    'shuttle-back': () => {
+      const st = useProjectStore.getState()
+      st.setPlayhead(Math.max(0, st.playhead - 1))
+    },
+    'shuttle-forward': () => {
+      const st = useProjectStore.getState()
+      st.setPlayhead(st.playhead + 1)
+    },
+    'mark-in': () => {
+      const clip = targetClip()
+      if (clip) useProjectStore.getState().markIn(clip.id)
+    },
+    'mark-out': () => {
+      const st = useProjectStore.getState()
+      const clip = targetClip()
+      if (clip) st.markOut(clip.id, st.currentProject?.sourceVideo.duration ?? 0)
+    },
+    'nudge-in-back': () => nudge('in', -1),
+    'nudge-in-forward': () => nudge('in', 1),
+    'nudge-out-back': () => nudge('out', -1),
+    'nudge-out-forward': () => nudge('out', 1),
+    'prev-clip': () => stepClip(-1),
+    'next-clip': () => stepClip(1),
+    'approve-clip': () => {
+      const clip = targetClip()
+      if (clip) useProjectStore.getState().approveClip(clip.id)
+    },
+    'reject-clip': () => {
+      const clip = targetClip()
+      if (clip) useProjectStore.getState().rejectClip(clip.id)
+    },
+    'zoom-in': () => {
+      const st = useProjectStore.getState()
+      st.setZoom(st.zoom * 1.25)
+    },
+    'zoom-out': () => {
+      const st = useProjectStore.getState()
+      st.setZoom(st.zoom / 1.25)
+    }
+  })
 
   // Wire the debounced autosave subscriber (Wave-1 integration) once for the app
   // lifetime; tears down on unmount.
@@ -429,6 +532,11 @@ function App(): React.JSX.Element {
           onGenerate={handlePreflightGenerate}
         />
       )}
+
+      {/* The `?` cheat sheet (FEAT-vvaycm). The three shortcuts that existed were
+        documented only inside the timeline's aria-label — which is to say, not
+        at all for anyone not using a screen reader. */}
+      <ShortcutSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
 
       {/* App-wide toasts (autosave failures, etc.). Mounted once. */}
       <Toaster />

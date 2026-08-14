@@ -40,45 +40,47 @@ export function ClipCard({ clip }: ClipCardProps): React.JSX.Element {
       data-testid="clip-card"
       data-clip-id={clip.id}
       data-selected={selected}
-      // Keyboard-selectable + announced as an actionable, pressable control (audit fix
-      // openclip-uzb): the card was a plain onClick <div> that Tab skipped and screen
-      // readers never announced. Enter/Space select it; aria-pressed surfaces selection.
-      role="button"
-      tabIndex={0}
-      aria-pressed={selected}
-      aria-label={`Select clip: ${vm.title}`}
-      onClick={() => selectClip(clip.id)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          selectClip(clip.id)
-        }
-      }}
+      // A PLAIN CONTAINER (FEAT-ybhdhz). It used to carry role="button" +
+      // tabIndex + an Enter/Space handler while nesting real <Button>s for
+      // Approve and Reject — interactive controls inside an interactive control,
+      // which makes assistive-technology announcement ambiguous and traps Space
+      // (the inner buttons and the outer role both claim it). The selectable
+      // region is now an explicit <button> around the title block, with the
+      // action row as its sibling.
       className={`flex flex-col gap-1 rounded-md border p-2 text-sm ${
         selected ? 'border-primary' : ''
       }`}
     >
-      <div className="flex items-center justify-between gap-2">
-        <span className="line-clamp-2 font-medium">{vm.title}</span>
-        <span
-          className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-semibold text-amber-600"
-          aria-label="virality score"
-        >
-          ⭐ {vm.score}/10
-        </span>
-      </div>
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span>{vm.range}</span>
-        {vm.hookType && vm.hookType !== 'none' && (
+      <button
+        type="button"
+        data-testid="clip-select"
+        aria-pressed={selected}
+        aria-label={`Select clip: ${vm.title}`}
+        onClick={() => selectClip(clip.id)}
+        className="flex flex-col gap-1 text-left"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className="line-clamp-2 font-medium">{vm.title}</span>
           <span
-            data-testid="hook-type"
-            className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium capitalize text-foreground/80"
+            className="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-semibold text-amber-600"
+            aria-label="virality score"
           >
-            {vm.hookType}
+            ⭐ {vm.score}/10
           </span>
-        )}
-      </div>
-      <p className="line-clamp-2 text-xs text-muted-foreground">{vm.hook}</p>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>{vm.range}</span>
+          {vm.hookType && vm.hookType !== 'none' && (
+            <span
+              data-testid="hook-type"
+              className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium capitalize text-foreground/80"
+            >
+              {vm.hookType}
+            </span>
+          )}
+        </div>
+        <p className="line-clamp-2 text-xs text-muted-foreground">{vm.hook}</p>
+      </button>
 
       {vm.viralityBars && (
         <div className="mt-1 flex flex-col gap-0.5" aria-label="virality breakdown">
@@ -98,6 +100,56 @@ export function ClipCard({ clip }: ClipCardProps): React.JSX.Element {
           ))}
         </div>
       )}
+      {/* The AI wrote these, the mapper carried them and the schema persisted
+          them — and nothing ever displayed them, so the user paid for the tokens
+          on every generation and never saw the output (FEAT-g39qj3). */}
+      {(vm.suggestedCaption || (vm.hashtags && vm.hashtags.length > 0)) && (
+        <div className="mt-1 flex flex-col gap-1 border-t pt-1.5" data-testid="clip-social">
+          {vm.suggestedCaption && (
+            <p
+              className="line-clamp-2 text-[11px] text-muted-foreground"
+              data-testid="clip-caption"
+            >
+              {vm.suggestedCaption}
+            </p>
+          )}
+          {vm.hashtags && vm.hashtags.length > 0 && (
+            <div className="flex flex-wrap gap-1" data-testid="clip-hashtags">
+              {vm.hashtags.map((h) => (
+                <span
+                  key={h}
+                  className="rounded bg-muted px-1 py-0.5 text-[10px] text-foreground/70"
+                >
+                  {h.startsWith('#') ? h : `#${h}`}
+                </span>
+              ))}
+            </div>
+          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-6 self-start px-1.5 text-[10px]"
+            data-testid="clip-copy-caption"
+            onClick={(e) => {
+              e.stopPropagation()
+              // Caption then hashtags, which is the order they get pasted in.
+              const text = [
+                vm.suggestedCaption,
+                (vm.hashtags ?? []).map((h) => (h.startsWith('#') ? h : `#${h}`)).join(' ')
+              ]
+                .filter(Boolean)
+                .join('\n\n')
+              void navigator.clipboard.writeText(text).then(
+                () => toast('Caption copied'),
+                () => toast.error('Could not copy to the clipboard')
+              )
+            }}
+          >
+            Copy caption
+          </Button>
+        </div>
+      )}
+
       <div className="mt-1 flex gap-1">
         {vm.canApprove && (
           <Button
@@ -113,6 +165,16 @@ export function ClipCard({ clip }: ClipCardProps): React.JSX.Element {
         )}
         {vm.isApproved && (
           <span className="self-center text-xs font-medium text-green-600">Approved</span>
+        )}
+        {/* An exported clip rendered NO badge and no actions at all, so a clip
+            the user had already shipped looked broken (FEAT-ybhdhz). */}
+        {vm.isExported && (
+          <span
+            className="self-center rounded bg-green-600/15 px-1.5 py-0.5 text-xs font-medium text-green-600"
+            data-testid="clip-exported-badge"
+          >
+            Exported
+          </span>
         )}
         {vm.canReject && (
           <Button

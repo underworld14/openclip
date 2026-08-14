@@ -15,13 +15,29 @@ import { create } from 'zustand'
 
 export type AppView = 'dashboard' | 'editor' | 'settings'
 
+/**
+ * Whether the user's work is on disk (FEAT-51hnwx).
+ *
+ * The only user-visible signal in the entire persistence path was
+ * `toast.error('Autosave failed')`. Success produced nothing at all: no
+ * indicator, no last-saved time, no manual save. Users have been trained by
+ * every cloud editor to distrust local work they cannot see being saved, and
+ * this app's trims and approvals genuinely were being persisted — silently.
+ */
+export type SaveState = 'idle' | 'saving' | 'saved' | 'error'
+
 export interface UiStore {
   view: AppView
   selectedClipId: string | null
   playhead: number
   isPlaying: boolean
   zoom: number
+  /** Persistence state, rendered in the title bar. */
+  saveState: SaveState
+  /** `Date.now()` of the last successful write, for the "Saved · 2s ago" label. */
+  lastSavedAt: number | null
 
+  setSaveState: (state: SaveState, at?: number) => void
   setView: (view: AppView) => void
   selectClip: (id: string | null) => void
   setPlayhead: (t: number) => void
@@ -36,6 +52,10 @@ export const useUiStore = create<UiStore>()((set) => ({
   isPlaying: false,
   zoom: 1,
 
+  saveState: 'idle',
+  lastSavedAt: null,
+  setSaveState: (saveState, at) =>
+    set(saveState === 'saved' ? { saveState, lastSavedAt: at ?? Date.now() } : { saveState }),
   setView: (view) => set({ view }),
   selectClip: (selectedClipId) => set({ selectedClipId }),
   setPlayhead: (playhead) => set({ playhead }),

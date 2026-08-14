@@ -38,6 +38,12 @@ export interface ClipViewModel {
   canReject: boolean
   /** True when Reject has hidden this clip; the card shows Restore instead. */
   isRejected: boolean
+  /** True once the clip has been exported — the card shows a badge for it. */
+  isExported: boolean
+  /** AI-written social caption for this clip, when the project has one. */
+  suggestedCaption?: string
+  /** AI-suggested hashtags, when the project has them. */
+  hashtags?: string[]
   /** Part I — 0-100 virality total + the four sub-score bars (undefined on old clips). */
   viralityTotal?: number
   viralityBars?: ViralityBar[]
@@ -73,6 +79,21 @@ export function clipViewModel(clip: Clip): ClipViewModel {
     canReject: clip.status !== 'exported' && clip.status !== 'rejected',
     /** Rejected is reversible, so the card offers the way back (FEAT-k28j7h). */
     isRejected: clip.status === 'rejected',
+    /**
+     * An EXPORTED clip used to render nothing at all — not approved (so no
+     * badge), not approvable, not rejectable — so a clip the user had already
+     * shipped looked broken (FEAT-ybhdhz).
+     */
+    isExported: clip.status === 'exported',
+    /**
+     * The AI writes a social caption and hashtags for every clip, the mapper
+     * carries them onto the Clip and the schema persists them — and nothing ever
+     * showed them (FEAT-g39qj3). The user paid for those tokens on every
+     * generation. Optional, because projects written before they existed have
+     * neither.
+     */
+    suggestedCaption: clip.suggestedCaption,
+    hashtags: clip.hashtags,
     viralityTotal: clip.virality?.total,
     viralityBars: clip.virality ? viralityBars(clip.virality) : undefined,
     hookType: clip.hookType

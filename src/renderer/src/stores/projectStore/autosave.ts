@@ -32,6 +32,7 @@ import { toast } from 'sonner'
 import { createAutosave } from '@shared/autosave'
 import type { Project } from '@shared/schema'
 import { hasActiveKind, useJobsStore } from '@renderer/stores/jobsStore'
+import { useUiStore } from '@renderer/stores/uiStore'
 import { useProjectStore, type ProjectStore } from './index'
 
 /** The minimal zustand store surface the autosave subscriber needs. */
@@ -200,6 +201,7 @@ export function installAutosave(delayMs?: number, onError?: (err: unknown) => vo
   const handleError =
     onError ??
     ((err: unknown): void => {
+      useUiStore.getState().setSaveState('error')
       toast.error('Autosave failed', {
         description: err instanceof Error ? err.message : String(err)
       })
@@ -208,6 +210,10 @@ export function installAutosave(delayMs?: number, onError?: (err: unknown) => vo
   const stop = startAutosave(
     useProjectStore,
     async (project, opts) => {
+      // Persistence was entirely silent on success (FEAT-51hnwx) — the title bar
+      // now shows it, so a user can see their trims and approvals are safe
+      // instead of having to trust that they are.
+      useUiStore.getState().setSaveState('saving')
       if (opts?.clipsOnly) {
         // The patch path reads the on-disk document to merge into. If this
         // project has never been written (no `.ocproj` yet) that read fails, so
@@ -224,13 +230,16 @@ export function installAutosave(delayMs?: number, onError?: (err: unknown) => vo
             settings: project.settings,
             name: project.name
           })
+          useUiStore.getState().setSaveState('saved')
           return
         } catch {
           await window.openclip.project.save({ project })
+          useUiStore.getState().setSaveState('saved')
           return
         }
       }
       await window.openclip.project.save({ project })
+      useUiStore.getState().setSaveState('saved')
     },
     delayMs,
     handleError,

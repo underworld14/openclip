@@ -41,6 +41,8 @@ import { toast } from 'sonner'
 import { createGenerateClipsHandler } from '@renderer/components/generateClips'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useJobsStore } from '@renderer/stores/jobsStore'
+import { useUiStore } from '@renderer/stores/uiStore'
+import { saveStatusLabel } from '@renderer/components/saveStatus'
 import { activeTasks } from '@renderer/components/jobStatus'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { installAutosave } from '@renderer/stores/projectStore/autosave'
@@ -59,6 +61,17 @@ function App(): React.JSX.Element {
    * rather than ExportPanel's local state, because the panel unmounts on
    * dismissal — which is exactly the moment we need the answer (FEAT-az3sxm).
    */
+  // Persistence indicator (FEAT-51hnwx). `now` ticks slowly so "Saved · 2s ago"
+  // ages without a per-second re-render of the whole title bar.
+  const saveState = useUiStore((s) => s.saveState)
+  const lastSavedAt = useUiStore((s) => s.lastSavedAt)
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 15_000)
+    return () => clearInterval(t)
+  }, [])
+  const saveLabel = saveStatusLabel(saveState, lastSavedAt, now)
+
   const exportTasks = useJobsStore((s) => s.tasks)
   const exportRunning = useMemo(
     // `activeTasks` is the same predicate the status bar uses (running OR queued,
@@ -164,6 +177,18 @@ function App(): React.JSX.Element {
         <div className="flex items-center gap-2">
           <Clapperboard className="size-4 text-primary" />
           <span className="text-sm font-semibold tracking-tight">{APP_NAME}</span>
+          {/* Persistence was entirely silent on success (FEAT-51hnwx): the only
+              signal in the whole path was an error toast. Nothing before the
+              first save — inventing "Saved" there would be a lie. */}
+          {saveLabel && (
+            <span
+              className="text-[11px] text-muted-foreground"
+              data-testid="save-status"
+              role="status"
+            >
+              {saveLabel}
+            </span>
+          )}
         </div>
         <div className="app-no-drag flex items-center gap-2">
           <ReadinessBar

@@ -21,6 +21,7 @@ import { app, Notification } from 'electron'
 import { IPCChannels } from '@shared/channels'
 import type { PreflightResult, PreflightTool } from '@shared/channels'
 import { ffmpegPath, ffprobePath, whisperCliPath, ytDlpPath } from '@main/utils/paths'
+import { encoderBackend } from '@main/services/encoder-probe'
 import type { IpcContext } from './index'
 
 /** Run one resolver, mapping both a throw and an empty result to `{ok:false}`. */
@@ -41,7 +42,10 @@ export function registerSystemPreflightHandler(ctx: IpcContext): void {
       ffmpeg: probe(ffmpegPath),
       ffprobe: probe(ffprobePath),
       whisperCli: probe(whisperCliPath),
-      ytDlp: probe(ytDlpPath)
+      ytDlp: probe(ytDlpPath),
+      // PRD §14: report the encoder exports will actually use. Cached per
+      // process, so the one-frame probe runs at most once (FEAT-5hnsby).
+      encoder: encoderBackend()
     })
   )
 

@@ -141,6 +141,21 @@ export interface JobParams {
     /** Absolute path the user chose to write the final clip to. */
     outputPath: string
     /**
+     * Encode on the CPU (libx264) instead of `h264_videotoolbox` (PRD §14).
+     *
+     * FROZEN-CONTRACT ADDITION (BUG-jt3d62 / FEAT-5hnsby). `Settings.forceCpu` has
+     * existed since the schema was written and `codecArgs()` has always honoured
+     * it, but there was no field to carry it from the renderer to the runner — so
+     * the toggle was inert and a Mac without a usable VideoToolbox session had no
+     * way out of a failing export. It is optional, so every existing caller and
+     * the contract fixtures stay valid; absent ⇒ hardware encode, as before.
+     *
+     * The runner ALSO sets this itself when a hardware encode fails with a
+     * VideoToolbox session error, to retry on CPU — so it is both a user
+     * preference and the mechanism of the automatic fallback.
+     */
+    forceCpu?: boolean
+    /**
      * Path to an ALREADY-generated .ass file to burn (libass). Usually left
      * undefined: the renderer cannot write files, so it passes `captions`
      * instead and the export runner GENERATES the .ass into the per-job temp dir

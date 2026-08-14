@@ -36,11 +36,12 @@ import {
   formatModelPrice,
   LANGUAGES,
   languageLabel,
-  resolveDefaultModel
+  resolveDefaultModel,
+  encoderLabel
 } from '@renderer/components/settingsView'
 import { BrandKitEditor } from '@renderer/components/BrandKitEditor'
 import { TranscriptionSettings } from '@renderer/components/TranscriptionSettings'
-import type { ModelInfo } from '@shared/channels'
+import type { EncoderBackend, ModelInfo } from '@shared/channels'
 
 /** Sentinel: the emoji-provider option meaning "same as clip detection". */
 const SAME_AS_CLIP = '__same__'
@@ -94,6 +95,23 @@ export function SettingsPanel({
   onModelsChanged
 }: SettingsPanelProps = {}): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
+  /** PRD §14 — the encoder backend the startup probe found (FEAT-5hnsby). */
+  const [encoder, setEncoder] = useState<EncoderBackend | undefined>(undefined)
+  useEffect(() => {
+    let alive = true
+    void window.openclip.system
+      .preflight()
+      .then((r) => {
+        if (alive) setEncoder(r.encoder)
+      })
+      .catch(() => {
+        // Leave it undefined → "Checking…", rather than claiming a backend we
+        // never observed (the same rule useReadiness follows for its chips).
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
   const keyStatus = useSettingsStore((s) => s.keyStatus)
   const load = useSettingsStore((s) => s.load)
   const save = useSettingsStore((s) => s.save)
@@ -262,6 +280,9 @@ export function SettingsPanel({
           </TabsTrigger>
           <TabsTrigger value="transcription" data-testid="settings-tab-transcription">
             Transcription
+          </TabsTrigger>
+          <TabsTrigger value="video" data-testid="settings-tab-video">
+            Video
           </TabsTrigger>
           <TabsTrigger value="brand" data-testid="settings-tab-brand">
             Brand
@@ -511,6 +532,31 @@ export function SettingsPanel({
               <span className="font-medium">{languageLabel(settings.language)}</span>. Auto-detect
               lets whisper guess the language; set it explicitly if detection picks the wrong
               language (e.g. an Indonesian video transcribed as English).
+            </p>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="video" className="flex flex-col gap-4">
+          {/* PRD §14 — the encoder backend, reported and overridable (FEAT-5hnsby).
+              Both halves existed and neither was reachable: the probe did not exist,
+              and `forceCpu` was stored but never sent to the export job. */}
+          <div className="flex flex-col gap-1.5" data-testid="encoder-settings">
+            <Label>Video encoder</Label>
+            <p className="text-xs text-muted-foreground" data-testid="encoder-backend">
+              {encoderLabel(encoder, settings.forceCpu)}
+            </p>
+            <label className="flex items-center gap-2 text-xs" data-testid="force-cpu-toggle">
+              <input
+                type="checkbox"
+                checked={settings.forceCpu}
+                onChange={(e) => void save({ forceCpu: e.target.checked })}
+              />
+              <span>Force CPU encoding (libx264)</span>
+            </label>
+            <p className="text-xs text-muted-foreground">
+              Hardware encoding is much faster. Turn this on if exports fail with an encoder error —
+              OpenClip also falls back to the CPU automatically when the hardware encoder cannot
+              start.
             </p>
           </div>
         </TabsContent>

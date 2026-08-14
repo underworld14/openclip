@@ -263,7 +263,19 @@ export interface PreflightResult {
   ffprobe: PreflightTool
   whisperCli: PreflightTool
   ytDlp: PreflightTool
+  /**
+   * Which video encoder exports will actually use (PRD §14 "Settings shows the
+   * active backend"). `hardware` when `h264_videotoolbox` can genuinely open an
+   * encode session on this machine, `cpu` when exports will fall back to libx264,
+   * `unknown` when the probe could not run.
+   *
+   * Optional so an older cached/persisted PreflightResult still parses.
+   */
+  encoder?: EncoderBackend
 }
+
+/** The encoder backend exports will use, as reported by the startup probe. */
+export type EncoderBackend = 'hardware' | 'cpu' | 'unknown'
 
 /** Whisper model presence on disk (PRD §13 / §10.1 model:status). */
 export interface ModelStatus {

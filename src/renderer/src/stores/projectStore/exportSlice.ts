@@ -111,6 +111,12 @@ export function buildExportParams(args: {
   logoPosition?: JobParams['export']['logoPosition']
   logoScale?: number
   logoMargin?: number
+  /**
+   * App Setting "force CPU" (PRD §14). Declared in the schema and honoured by
+   * `codecArgs()` since day one, but with no field to carry it there the toggle
+   * was inert (BUG-jt3d62). Absent ⇒ hardware encode, as before.
+   */
+  forceCpu?: boolean
 }): JobParams['export'] {
   const { start, end } = resolveBounds(args.clip)
   if (!(end > start)) {
@@ -124,6 +130,7 @@ export function buildExportParams(args: {
     endTime: end,
     aspectRatio: args.settings.aspectRatio,
     outputPath: args.outputPath,
+    forceCpu: args.forceCpu,
     assPath: args.assPath,
     captions:
       args.captionsEnabled && args.words && args.words.length > 0

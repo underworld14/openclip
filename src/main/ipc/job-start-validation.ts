@@ -55,7 +55,10 @@ const paramsByKind = {
     outputPath: nonEmpty,
     startTime: z.number().finite(),
     endTime: z.number().finite(),
-    aspectRatio: z.enum(ASPECTS)
+    aspectRatio: z.enum(ASPECTS),
+    // Selects the ENCODER, so it is a spawn-affecting value: validate it here
+    // rather than letting looseObject wave through a non-boolean (BUG-jt3d62).
+    forceCpu: z.boolean().optional()
   }),
   'model-download': z.looseObject({ model: z.enum(WHISPER_MODELS) }),
   'url-download': z.looseObject({

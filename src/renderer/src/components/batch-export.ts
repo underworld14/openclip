@@ -79,6 +79,12 @@ export interface RunBatchExportOptions {
   dir: string
   /** The platform preset (aspectRatio + quality + caption template). */
   preset: PlatformPreset
+  /**
+   * App Setting "force CPU" (PRD §14). A batch is where a broken hardware
+   * encoder hurts most — without this the setting was inert for every clip in
+   * the run (BUG-jt3d62).
+   */
+  forceCpu?: boolean
   /** Part K — the active brand (caption font/colors + logo overlay). */
   brand?: BrandTemplate
   /** Part K — auto-emoji source for every clip's captions. */
@@ -142,6 +148,7 @@ export async function runBatchExport(opts: RunBatchExportOptions): Promise<Batch
           settings: { aspectRatio: opts.preset.aspectRatio },
           outputPath,
           quality: opts.preset.quality,
+          forceCpu: opts.forceCpu,
           captionsEnabled: words.length > 0,
           words,
           captionStyle,

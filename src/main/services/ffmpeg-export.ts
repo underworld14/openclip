@@ -218,6 +218,31 @@ export function codecArgs(opts: Pick<ExportArgsOptions, 'forceCpu' | 'quality'>)
 }
 
 /**
+ * Does this failure look like the HARDWARE encoder being unusable, rather than a
+ * problem with the clip? (FEAT-5hnsby)
+ *
+ * `h264_videotoolbox` is listed by `ffmpeg -encoders` on machines that cannot
+ * actually use it — VMs, headless sessions, a Mac already at its concurrent
+ * encode-session limit — and only fails when opened. The canonical symptom is
+ * `Error while opening encoder … cannot create compression session: -12903`.
+ *
+ * Deliberately narrow. Matching too broadly would retry a genuinely broken export
+ * on the CPU and just fail twice as slowly, so this keys on the encoder name plus
+ * an open/session failure rather than on any ffmpeg error mentioning video.
+ */
+export function isHardwareEncoderFailure(err: unknown): boolean {
+  const text = (err instanceof Error ? `${err.message}` : String(err)).toLowerCase()
+  if (!text.includes('videotoolbox')) return false
+  return (
+    text.includes('compression session') ||
+    text.includes('cannot create') ||
+    text.includes('error while opening encoder') ||
+    text.includes('function not implemented') ||
+    text.includes('-12903')
+  )
+}
+
+/**
  * The shared audio + container + progress tail ending in the output path (audit fix
  * openclip-6fz — previously repeated verbatim in all three builders): AAC 192k, a
  * faststart mp4 (moov atom up front, web-playable), and `-progress pipe:2 -nostats`

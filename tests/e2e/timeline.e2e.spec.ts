@@ -18,7 +18,7 @@
  *
  * Skips gracefully if ffmpeg-static is unavailable — and the RE-EXPORT case also
  * skips where ffmpeg cannot encode with h264_videotoolbox, which the production
- * export path uses unconditionally (no `forceCpu` in `JobParams['export']` — see
+ * export path uses by default (`forceCpu` now exists in `JobParams['export']` — see
  * BUG-jt3d62). GitHub's macos-14 runners are VMs whose VideoToolbox session fails
  * to open: `cannot create compression session: -12903` (run 31294445970). The
  * keyboard mark-in/out case needs no encoder and always runs.
@@ -66,12 +66,11 @@ const SRC_FPS = 30
 
 test('Timeline P6: drag-handle retrim → re-export reflects the new bounds (±1 frame, ffprobe)', async () => {
   test.skip(!FFMPEG, 'ffmpeg-static not available')
-  // This case re-exports for real, so it needs a usable GPU encoder — see the header.
-  // The keyboard mark-in/out case below touches only the store + DOM and stays portable.
-  test.skip(
-    !!FFMPEG && !videotoolboxAvailable(),
-    'ffmpeg cannot encode with h264_videotoolbox here (absent off macOS; unusable on a VM runner)'
-  )
+  // This case re-exports for real. It used to be skipped without a usable GPU
+  // encoder; now `forceCpu` reaches the export job (BUG-jt3d62), so a runner
+  // without a VideoToolbox session encodes on libx264 and the retrim assertions
+  // still run. On a dev Mac the GPU path is what executes.
+  const FORCE_CPU = !videotoolboxAvailable()
 
   const work = mkdtempSync(join(tmpdir(), 'openclip-timeline-e2e-'))
   const src = join(work, 'src.mp4')
@@ -181,7 +180,7 @@ test('Timeline P6: drag-handle retrim → re-export reflects the new bounds (±1
 
   // ── Export #1: the SUGGESTED (untrimmed) span — for an explicit before/after. ──
   const r1 = await win.evaluate(
-    async ({ out }) => {
+    async ({ out, forceCpu }) => {
       const h = window.__openclipTest!
       const store = h.store
       const project = store.getState().currentProject!
@@ -191,12 +190,13 @@ test('Timeline P6: drag-handle retrim → re-export reflects the new bounds (±1
         clip,
         source: project.sourceVideo,
         settings: project.settings,
-        outputPath: out
+        outputPath: out,
+        forceCpu
       })
       const r = await h.runExport({ bridge: window.openclip, params })
       return { durationMs: r.durationMs, startTime: params.startTime, endTime: params.endTime }
     },
-    { out: outSuggested }
+    { out: outSuggested, forceCpu: FORCE_CPU }
   )
   expect(r1.startTime).toBeCloseTo(0.5, 5)
   expect(r1.endTime).toBeCloseTo(6.5, 5)
@@ -225,7 +225,7 @@ test('Timeline P6: drag-handle retrim → re-export reflects the new bounds (±1
 
   // ── Export #2: the RETRIMMED span via the same real export path. ──
   const r2 = await win.evaluate(
-    async ({ out }) => {
+    async ({ out, forceCpu }) => {
       const h = window.__openclipTest!
       const store = h.store
       const project = store.getState().currentProject!
@@ -235,12 +235,13 @@ test('Timeline P6: drag-handle retrim → re-export reflects the new bounds (±1
         clip,
         source: project.sourceVideo,
         settings: project.settings,
-        outputPath: out
+        outputPath: out,
+        forceCpu
       })
       const r = await h.runExport({ bridge: window.openclip, params })
       return { durationMs: r.durationMs, startTime: params.startTime, endTime: params.endTime }
     },
-    { out: outTrimmed }
+    { out: outTrimmed, forceCpu: FORCE_CPU }
   )
   // buildExportParams applied resolveBounds → the export span is the EDITED span.
   expect(r2.startTime).toBeCloseTo(2.0, 5)

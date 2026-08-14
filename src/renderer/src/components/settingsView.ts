@@ -7,6 +7,7 @@
  * the last4 fragment — PRD §12.2).
  */
 
+import type { EncoderBackend } from '@shared/channels'
 import type { AIProvider } from '@shared/schema'
 import type { ApiKeyStatus, ModelInfo } from '@shared/channels'
 
@@ -182,4 +183,30 @@ export function formatModelPrice(m: ModelInfo): string {
   if (inp === null && out === null) return ''
   if (inp === '$0' && out === '$0') return 'Free'
   return `${inp ?? '?'} / ${out ?? '?'} per 1M`
+}
+
+/**
+ * Human-readable description of which encoder exports will actually use
+ * (PRD §14 "Settings shows the active backend" — FEAT-5hnsby).
+ *
+ * Two inputs, because the answer is a combination: what the machine CAN do (the
+ * startup probe) and what the user ASKED for (`forceCpu`). Reporting only the
+ * probe would tell someone who deliberately forced CPU that they are on
+ * hardware; reporting only the setting would hide the fact that a machine has no
+ * usable hardware encoder at all.
+ */
+export function encoderLabel(backend: EncoderBackend | undefined, forceCpu: boolean): string {
+  if (forceCpu) {
+    return backend === 'hardware'
+      ? 'CPU (libx264) — forced. Hardware encoding is available on this Mac.'
+      : 'CPU (libx264) — forced.'
+  }
+  switch (backend) {
+    case 'hardware':
+      return 'Hardware (h264_videotoolbox) — fastest.'
+    case 'cpu':
+      return 'CPU (libx264). This machine has no usable hardware encoder, so exports fall back automatically.'
+    default:
+      return 'Checking…'
+  }
 }

@@ -1,6 +1,6 @@
 ---
 topic: renderer
-updated: 2026-08-14T11:00:23Z
+updated: 2026-08-14T11:41:50Z
 ---
 
 # renderer
@@ -12,3 +12,4 @@ updated: 2026-08-14T11:00:23Z
 - 2026-08-09: Long jobs get exactly one user-visible surface: stores/jobsStore tracks ACTIVITIES (an import = url-download + probe + extract + transcribe = one row) at the orchestrator level, not inside the frozen drainJob seam. Anything new that runs for more than a second should wrap its orchestrator in trackTask rather than growing its own modal-local progress UI. (cites: src/renderer/src/stores/jobsStore.ts)
 - 2026-08-14: Renderer specs opt into a DOM with a '// @vitest-environment jsdom' docblock on line 1 (the suite default stays 'node'); call installRendererEnv() from tests/harness/renderer-env.ts in beforeEach to get a fresh mock bridge on window plus a reset of the import-controller, need-model and job-port module singletons. (cites: tests/harness/renderer-env.ts)
 - 2026-08-14: createMockOpenclip() calls registerJobPort() directly, so it bypasses the window-message listener in jobPort.ts. Any test that needs to prove the REAL port handoff must dispatch a tagged window 'message' event itself — a bug living only in that listener is invisible to every mock-bridge test. (cites: tests/mocks/openclip.ts)
+- 2026-08-14: Caption sizing is authored against a pinned 1080px design WIDTH: the ASS script sets PlayResX=1080 always and derives PlayResY from the export canvas, matching the preview's cqw (container-query width) units. Never set PlayRes to the raw output dimensions — that silently disagrees with the preview by 1.78x on 16:9. (cites: src/main/services/ass-captions.ts)

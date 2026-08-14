@@ -28,6 +28,7 @@ import type { JobResult, JobParams } from '@shared/jobs'
 import type { JobRunner, JobEmitter, JobRunnerContext } from '@main/services/sidecar-manager'
 import {
   exportClip as defaultExportClip,
+  isHardwareEncoderFailure,
   outputDimensions,
   type ExportClipResult
 } from '@main/services/ffmpeg-export'
@@ -47,6 +48,7 @@ export interface ExportRunnerDeps {
     endTime: number
     aspectRatio: JobParams['export']['aspectRatio']
     quality: JobParams['export']['quality']
+    forceCpu?: boolean
     assPath?: string
     fontsDir?: string
     keepRanges?: Range[]
@@ -257,31 +259,63 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
         })
       }
 
-      const result = await exportClip({
-        sourcePath: params.sourcePath,
-        outputPath: params.outputPath,
-        startTime: params.startTime,
-        endTime: params.endTime,
-        aspectRatio: params.aspectRatio,
-        quality: params.quality,
-        assPath,
-        // Only needed when captions are burned; harmless otherwise.
-        fontsDir: assPath ? resolveFontsDir() : undefined,
-        keepRanges,
-        reframePlan,
-        // Brand-kit logo overlay (Part K) — absent ⇒ no overlay (argv unchanged).
-        logoPath: params.logoPath,
-        logoPosition: params.logoPosition,
-        logoScale: params.logoScale,
-        logoMargin: params.logoMargin,
-        onProgress: (pct) => emit.progress(pct, 'encoding'),
-        // Register the encode child's PID for the sidecar kill-on-quit backstop
-        // (audit fix openclip-a00 — export previously tracked no PID), and untrack it on
-        // exit so a later quit can't SIGKILL a recycled PID (audit fix openclip-yul).
-        onSpawn: (pid) => ctx.trackPid(pid),
-        onExit: (pid) => ctx.untrackPid?.(pid),
-        signal: ctx.signal
-      })
+      const runExport = (forceCpu: boolean): Promise<ExportClipResult> =>
+        exportClip({
+          sourcePath: params.sourcePath,
+          outputPath: params.outputPath,
+          startTime: params.startTime,
+          endTime: params.endTime,
+          aspectRatio: params.aspectRatio,
+          quality: params.quality,
+          forceCpu,
+          assPath,
+          // Only needed when captions are burned; harmless otherwise.
+          fontsDir: assPath ? resolveFontsDir() : undefined,
+          keepRanges,
+          reframePlan,
+          // Brand-kit logo overlay (Part K) — absent ⇒ no overlay (argv unchanged).
+          logoPath: params.logoPath,
+          logoPosition: params.logoPosition,
+          logoScale: params.logoScale,
+          logoMargin: params.logoMargin,
+          onProgress: (pct) => emit.progress(pct, 'encoding'),
+          // Register the encode child's PID for the sidecar kill-on-quit backstop
+          // (audit fix openclip-a00 — export previously tracked no PID), and untrack it on
+          // exit so a later quit can't SIGKILL a recycled PID (audit fix openclip-yul).
+          onSpawn: (pid) => ctx.trackPid(pid),
+          onExit: (pid) => ctx.untrackPid?.(pid),
+          signal: ctx.signal
+        })
+
+      // AUTOMATIC CPU FALLBACK (FEAT-5hnsby / PRD §14 "all flows have a CPU
+      // fallback so the app always works").
+      //
+      // `h264_videotoolbox` is LISTED by `ffmpeg -encoders` on machines that
+      // cannot actually use it — a VM, a headless session, or a Mac already at
+      // its encode-session limit. It then fails at open with
+      // `cannot create compression session: -12903`, and the export died with a
+      // SIDECAR_CRASH the user could do nothing about. Probing the encoder list
+      // is not enough to predict this; only trying it is (the same lesson the CI
+      // work landed on in BUG-zcqyb7), so the fallback is reactive by design.
+      //
+      // Retried ONCE, and only for a hardware-encoder failure — a bad path, a
+      // cancelled job, or a genuinely broken source must still fail fast rather
+      // than pay for a second doomed encode.
+      let result: ExportClipResult
+      try {
+        result = await runExport(params.forceCpu === true)
+      } catch (e) {
+        if (params.forceCpu === true || ctx.signal?.aborted || !isHardwareEncoderFailure(e)) {
+          throw e
+        }
+        console.warn(
+          `[export] hardware encoder unavailable (${
+            e instanceof Error ? e.message : String(e)
+          }); retrying on libx264 (CPU).`
+        )
+        emit.progress(0, 'encoding')
+        result = await runExport(true)
+      }
 
       emit.progress(100, 'encoding')
       return {

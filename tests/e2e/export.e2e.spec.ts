@@ -15,7 +15,8 @@
  * binary (it would otherwise look under process.resourcesPath). Skips gracefully
  * if ffmpeg-static is unavailable.
  *
- * Also skips where ffmpeg cannot ENCODE with h264_videotoolbox. The production
+ * Encodes on libx264 where ffmpeg cannot use h264_videotoolbox (BUG-jt3d62) — it
+ * used to skip instead, losing real export coverage on CI. The production
  * export path has no CPU fallback wired (`JobParams['export']` carries no
  * `forceCpu` — see BUG-jt3d62), so this drives the GPU encoder by construction,
  * and GitHub's macos-14 runners are VMs with no hardware encode session: the
@@ -46,10 +47,12 @@ const FFMPEG = ffmpegStatic()
 
 test('Export P3: a clip exports to a non-empty 1080×1920 mp4 with streamed progress', async () => {
   test.skip(!FFMPEG, 'ffmpeg-static not available')
-  test.skip(
-    !!FFMPEG && !videotoolboxAvailable(),
-    'ffmpeg cannot encode with h264_videotoolbox here (absent off macOS; unusable on a VM runner)'
-  )
+  // NO LONGER SKIPPED without a GPU encoder (BUG-jt3d62). `forceCpu` now reaches
+  // the export job, so a runner with no usable VideoToolbox session encodes with
+  // libx264 instead of skipping the case entirely — same job plane, same
+  // MessagePort progress, same ffprobe assertions, only the encoder differs. On a
+  // dev Mac the probe reports hardware and the GPU path is still what runs.
+  const FORCE_CPU = !videotoolboxAvailable()
 
   const work = mkdtempSync(join(tmpdir(), 'openclip-export-e2e-'))
   const src = join(work, 'src.mp4')
@@ -99,7 +102,7 @@ test('Export P3: a clip exports to a non-empty 1080×1920 mp4 with streamed prog
   await win.waitForLoadState('domcontentloaded')
 
   const result = await win.evaluate(
-    async ({ src, out }) => {
+    async ({ src, out, forceCpu }) => {
       const h = window.__openclipTest!
       const progress: number[] = []
       const r = await h.runExport({
@@ -112,13 +115,14 @@ test('Export P3: a clip exports to a non-empty 1080×1920 mp4 with streamed prog
           endTime: 3.5,
           aspectRatio: '9:16',
           outputPath: out,
-          quality: '1080p'
+          quality: '1080p',
+          forceCpu
         },
         onProgress: (p) => progress.push(p)
       })
       return { r, progress }
     },
-    { src, out }
+    { src, out, forceCpu: FORCE_CPU }
   )
 
   // Streamed progress reached the renderer and ended at 100 (terminal done).

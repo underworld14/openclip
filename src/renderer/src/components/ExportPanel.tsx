@@ -88,6 +88,8 @@ export function ExportPanel(): React.JSX.Element {
   // Part K — the AI emoji provider/model lives in app Settings; the active brand
   // (per-project) drives caption colors/font + the logo overlay.
   const settings = useSettingsStore((s) => s.settings)
+  /** PRD §14 "force CPU": encode with libx264 instead of h264_videotoolbox. */
+  const forceCpu = settings.forceCpu
   const brands = useBrandStore((s) => s.brands)
   const brandLoaded = useBrandStore((s) => s.loaded)
   const loadBrands = useBrandStore((s) => s.load)
@@ -177,7 +179,10 @@ export function ExportPanel(): React.JSX.Element {
                 // Brand logo overlay (Part K) — {} when the brand has no logo.
                 ...brandLogoParams(brand),
                 removeSilence,
-                reframe
+                reframe,
+                // PRD §14 — the app-level "force CPU" Setting finally reaches the
+                // encoder (BUG-jt3d62). It was stored and displayed but inert.
+                forceCpu
               }),
             onProgress: (p) => {
               setPct(Math.round(p))
@@ -213,6 +218,7 @@ export function ExportPanel(): React.JSX.Element {
   }, [
     clip,
     currentProject,
+    forceCpu,
     composeProject,
     addExportRecord,
     captionsEnabled,
@@ -269,6 +275,7 @@ export function ExportPanel(): React.JSX.Element {
       clips: approvedClips,
       dir: dir.dirPath,
       preset,
+      forceCpu,
       // Part K — apply the active brand (caption colors/font + logo) and the
       // auto-emoji source to every clip; the AI map is fetched per clip.
       brand,
@@ -348,6 +355,7 @@ export function ExportPanel(): React.JSX.Element {
     composeProject,
     platformId,
     approvedClips,
+    forceCpu,
     addExportRecord,
     markExported,
     brand,

@@ -1,10 +1,10 @@
 ---
 id: BUG-zcqyb7
 title: 'CI red on main: Linux gates job runs macOS-only GPU smokes; macOS npm ci hits GitHub rate limit'
-status: doing
+status: done
 priority: high
 created: "2026-08-09T04:07:07Z"
-updated: "2026-08-14T10:41:34Z"
+updated: "2026-08-14T11:16:01Z"
 ---
 
 # Description
@@ -76,7 +76,7 @@ cannot — without ever silently disappearing on macOS, where they must run.
 - [x] `smoke-strict` (OPENCLIP_REQUIRE_SMOKES) fails loudly if macOS loses the GPU encoder,
       so the new guard cannot silently disable the layer where it counts
 - [x] `GITHUB_TOKEN` passed to both `npm ci` steps
-- [ ] CI green on main
+- [x] CI green on main
 
 # Related Files
 
@@ -133,3 +133,66 @@ Each environment was verified by wrapping the real ffmpeg to reproduce its exact
 | linux gates (`Unknown encoder`) + `npm test` | 930 passed, 4 skipped, 0 failed |
 | dev Mac, strict | 934 passed, **0 skipped** — GPU specs + strict assertion both run |
 | dev Mac, `test:e2e` | 12 passed, 1 skipped — both export specs run |
+
+## Work Evidence
+
+Closed by `pine close --evidence` on 2026-08-14.
+
+- Base: `16eefe29` (last commit at or before ticket created 2026-08-09)
+- Commits (6):
+  - `e807f107` — feat(test): renderer test harness, and the job-port race it found (FEAT-26tkya, BUG-zcqyb7)
+  - `742daaa2` — fix(e2e): make the per-job port handoff diagnosable instead of a silent 60s hang (BUG-zcqyb7)
+  - `cab4d2e6` — fix(ci): skip the yt-dlp download instead of trying to authenticate it (BUG-zcqyb7)
+  - `14e19185` — fix(ci): the E2E exports need a usable GPU encoder too (BUG-zcqyb7)
+  - `8533c6bc` — fix(ci): probe the videotoolbox encoder by using it, not by listing it (BUG-zcqyb7)
+  - `84bb3eea` — fix(ci): smokes guard on the encoder they use, not on ffmpeg existing (BUG-zcqyb7)
+- Files changed (base → working tree):
+
+```
+ .github/workflows/ci.yml                       |  18 +
+ .pine/memory/ci.md                             |  18 +
+ .pine/memory/renderer.md                       |   4 +-
+ .pine/tickets/BUG-jt3d62.md                    |  70 +++
+ .pine/tickets/BUG-zcqyb7.md                    | 135 +++++
+ .pine/tickets/FEAT-26tkya.md                   | 101 +++-
+ .pine/tickets/FEAT-d8b6bj.md                   | 212 ++++++-
+ CODE_OF_CONDUCT.md                             | 131 +++++
+ CONTRIBUTING.md                                | 191 +++++++
+ LICENSE                                        |  31 ++
+ README.md                                      | 163 ++++++
+ THIRD-PARTY-LICENSES.md                        |  49 ++
+ build/licenses/ffmpeg/COPYING.GPLv3            | 674 +++++++++++++++++++++++
+ build/licenses/ffmpeg/README.md                |  69 +++
+ docs/PACKAGING.md                              |  71 ++-
+ docs/screenshots/01-welcome.png                | Bin 0 -> 32645 bytes
+ docs/screenshots/02-editor.png                 | Bin 0 -> 92473 bytes
+ electron-builder.yml                           |  25 +
+ package-lock.json                              | 730 ++++++++++++++++++++++---
+ package.json                                   |  13 +-
+ scripts/bundle-binaries.mjs                    |  57 ++
+ scripts/capture-screenshots.mjs                | 130 +++++
+ scripts/verify-package.mjs                     |  60 +-
+ src/main/index.ts                              |  10 +
+ src/renderer/src/components/SettingsPanel.tsx  |  12 +-
+ src/renderer/src/hooks/jobPort.ts              |  25 +-
+ src/renderer/src/hooks/useImportController.ts  |  10 +
+ tests/e2e/export.e2e.spec.ts                   |  17 +-
+ tests/e2e/timeline.e2e.spec.ts                 |  14 +-
+ tests/e2e/vertical-slice.e2e.spec.ts           |  75 ++-
+ tests/fixtures/contract/index.ts               |  19 +-
+ tests/harness/fixtures.ts                      |  47 ++
+ tests/harness/renderer-env.ts                  |  59 ++
+ tests/mocks/openclip.ts                        |  27 +-
+ tests/unit/ass-captions.serial.spec.ts         |  21 +-
+ tests/unit/ffmpeg-export.serial.spec.ts        |  21 +-
+ tests/unit/ffmpeg-version.serial.spec.ts       |  35 +-
+ tests/unit/import-panel-drop.spec.tsx          | 136 +++++
+ tests/unit/job-port-window-delivery.spec.tsx   |  81 +++
+ tests/unit/settings-panel-model-draft.spec.tsx | 141 +++++
+ tests/unit/smoke-strict.spec.ts                |  25 +-
+ tests/unit/use-import-controller.spec.tsx      | 145 +++++
+ tests/unit/use-readiness.spec.tsx              | 117 ++++
+ tsconfig.test.json                             |   1 +
+ vitest.config.ts                               |  12 +-
+ 45 files changed, 3869 insertions(+), 133 deletions(-)
+```

@@ -51,12 +51,33 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          'fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border bg-background p-6 shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg',
+          // BOUNDED + SCROLLABLE (FEAT-7ffxsg). There was no `max-h` and no
+          // `overflow`, so a dense dialog simply grew past the viewport and its
+          // lower controls became physically unreachable — at the app's own
+          // `minHeight: 600` the Settings save/close row and Export's batch
+          // controls were off-screen with no way to scroll to them.
+          //
+          // The frame is a flex column that does NOT scroll; the inner wrapper
+          // below does. That ordering is deliberate: the close button is
+          // positioned against this element, so keeping the scroll one level in
+          // means the ✕ stays pinned instead of scrolling out of reach — which
+          // would have replaced one trapped-user bug with another.
+          'fixed top-[50%] left-[50%] z-50 flex max-h-[85vh] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] flex-col rounded-lg border bg-background p-6 shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg',
           className
         )}
         {...props}
       >
-        {children}
+        {/* `min-h-0` is what actually lets a flex child shrink below its content
+            height; without it `overflow-y-auto` never engages. `grid gap-4`
+            moves here from the frame so existing dialog layouts are unchanged.
+            `pr-1` keeps the scrollbar from running under the pinned ✕, and the
+            header sticks so you always know which dialog you are scrolling. */}
+        <div
+          data-slot="dialog-body"
+          className="oc-scroll grid min-h-0 gap-4 overflow-y-auto pr-1 [&>[data-slot=dialog-header]]:sticky [&>[data-slot=dialog-header]]:top-0 [&>[data-slot=dialog-header]]:z-10 [&>[data-slot=dialog-header]]:bg-background [&>[data-slot=dialog-header]]:pb-2"
+        >
+          {children}
+        </div>
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"

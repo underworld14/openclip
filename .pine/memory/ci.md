@@ -1,6 +1,6 @@
 ---
 topic: ci
-updated: 2026-08-09T04:14:53Z
+updated: 2026-08-14T11:16:01Z
 ---
 
 # ci
@@ -16,3 +16,4 @@ updated: 2026-08-09T04:14:53Z
   PATH CONSTANT without stat-ing it; the real-yt-dlp spec is gated on RUN_NETWORK_E2E plus a
   package-time-staged resources/yt-dlp/…). Tell the two apart by the error wording:
   "rate limit exceeded for <ip>" is unauthenticated, "for user ID <n>" is authenticated.
+- 2026-08-14: The GPL-3.0 FFmpeg licence text and written offer live in build/licenses/ffmpeg/ and are staged next to the binaries by bundle-binaries.mjs; verify-package.mjs fails the build if they don't reach the .app. Never put prose that quotes '--enable-nonfree' inside app.asar — it trips the byte-scan guardrail meant to catch a real nonfree ffmpeg binary. (cites: scripts/bundle-binaries.mjs)

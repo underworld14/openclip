@@ -18,6 +18,7 @@ import { Button } from '@renderer/components/ui/button'
 import { Input } from '@renderer/components/ui/input'
 import { Label } from '@renderer/components/ui/label'
 import { ScrollArea } from '@renderer/components/ui/scroll-area'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@renderer/components/ui/tabs'
 import {
   Select,
   SelectContent,
@@ -245,250 +246,280 @@ export function SettingsPanel({
         Settings
       </h2>
 
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="ai-provider">AI Provider (BYOK)</Label>
-        <Select value={provider} onValueChange={(v) => void onProviderChange(v)}>
-          <SelectTrigger id="ai-provider">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {providerOptions().map(({ provider: p, disabled }) => (
-              <SelectItem key={p} value={p} disabled={disabled}>
-                {providerLabel(p)}
-                {disabled ? ' — not available yet' : ''}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      {/*
+        Sectioned into tabs (FEAT-7ffxsg). This panel was one continuous stack —
+        provider + model + a 224px model list + key + the whole emoji provider
+        block + the full brand editor + the language picker — roughly 1300px of
+        content in a dialog the app permits to be 600px tall. Bounding the dialog
+        made that content reachable; splitting it into three shallow tabs makes it
+        navigable, so finding the language picker no longer means scrolling past
+        every AI control. `ui/tabs.tsx` was already in the tree with no importers.
+      */}
+      <Tabs defaultValue="ai">
+        <TabsList className="w-full">
+          <TabsTrigger value="ai" data-testid="settings-tab-ai">
+            AI
+          </TabsTrigger>
+          <TabsTrigger value="transcription" data-testid="settings-tab-transcription">
+            Transcription
+          </TabsTrigger>
+          <TabsTrigger value="brand" data-testid="settings-tab-brand">
+            Brand
+          </TabsTrigger>
+        </TabsList>
 
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-center justify-between">
-          <Label htmlFor="ai-model">Model</Label>
-          <div className="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 px-2 text-xs"
-              data-testid="load-models"
-              onClick={() => void loadModels(true)}
-              disabled={modelsLoading}
-            >
-              {modelsLoading ? 'Loading…' : 'Load models'}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-6 px-2 text-xs"
-              data-testid="test-connection"
-              onClick={() => void onTestConnection()}
-              disabled={testing}
-            >
-              {testing ? 'Testing…' : 'Test'}
-            </Button>
+        <TabsContent value="ai" className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="ai-provider">AI Provider (BYOK)</Label>
+            <Select value={provider} onValueChange={(v) => void onProviderChange(v)}>
+              <SelectTrigger id="ai-provider">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {providerOptions().map(({ provider: p, disabled }) => (
+                  <SelectItem key={p} value={p} disabled={disabled}>
+                    {providerLabel(p)}
+                    {disabled ? ' — not available yet' : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-        </div>
-        {/* Free-text id is always available — the escape hatch for any model id. */}
-        <Input
-          id="ai-model"
-          value={modelDraft}
-          placeholder="Pick one below, or type a model id"
-          onChange={(e) => setModelDraft(e.target.value)}
-          onBlur={() => {
-            if (modelDraft !== settings.model) void save({ model: modelDraft })
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-          }}
-        />
 
-        {testResult && (
-          <span
-            data-testid="test-connection-result"
-            className={testResult.ok ? 'text-xs text-emerald-500' : 'text-xs text-destructive'}
-          >
-            {testResult.message}
-          </span>
-        )}
-
-        <div className="mt-1 flex flex-col gap-1.5" data-testid="model-picker">
-          <Input
-            aria-label="Filter models"
-            placeholder="Filter models…"
-            value={modelQuery}
-            onChange={(e) => setModelQuery(e.target.value)}
-          />
-          {modelsError && (
-            <span className="text-xs text-destructive" data-testid="models-error">
-              {modelsError} — you can still type a model id above.
-            </span>
-          )}
-          <ScrollArea className="h-56 rounded-md border">
-            {modelsLoading && models.length === 0 ? (
-              <div className="p-3 text-xs text-muted-foreground">Loading models…</div>
-            ) : recommended.length === 0 && others.length === 0 ? (
-              <div className="p-3 text-xs text-muted-foreground">
-                {models.length === 0
-                  ? `No models loaded — add your ${providerLabel(provider)} key, then press Load models.`
-                  : 'No models match your filter.'}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="ai-model">Model</Label>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  data-testid="load-models"
+                  onClick={() => void loadModels(true)}
+                  disabled={modelsLoading}
+                >
+                  {modelsLoading ? 'Loading…' : 'Load models'}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  data-testid="test-connection"
+                  onClick={() => void onTestConnection()}
+                  disabled={testing}
+                >
+                  {testing ? 'Testing…' : 'Test'}
+                </Button>
               </div>
-            ) : (
-              <div className="flex flex-col py-1">
-                {recommended.length > 0 && (
-                  <ModelGroup
-                    label="Recommended"
-                    models={recommended}
-                    selected={settings.model}
-                    onPick={(id) => void save({ model: id })}
-                  />
-                )}
-                {others.length > 0 && (
-                  <ModelGroup
-                    label={recommended.length > 0 ? 'More models' : 'Models'}
-                    models={others}
-                    selected={settings.model}
-                    onPick={(id) => void save({ model: id })}
-                  />
-                )}
-              </div>
-            )}
-          </ScrollArea>
-          <p className="text-xs text-muted-foreground">
-            Clip detection needs a model that supports strict JSON output. Not every listed model
-            does — press Test to check one before relying on it. You can also type a model id that
-            isn’t listed.
-          </p>
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <Label htmlFor="api-key">
-          API key for {providerLabel(provider)} —{' '}
-          <span className="text-muted-foreground">{keyStatusLabel(status)}</span>
-        </Label>
-        <div className="flex gap-2">
-          <Input
-            id="api-key"
-            type="password"
-            value={keyDraft}
-            placeholder="Stored in the OS keychain; never leaves this machine"
-            onChange={(e) => setKeyDraft(e.target.value)}
-          />
-          <Button size="sm" onClick={() => void onSaveKey()} disabled={!keyDraft.trim()}>
-            Save
-          </Button>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          The key is encrypted with the OS keychain (safeStorage) and used only on this device for
-          outbound AI calls. It is never sent to OpenClip.
-        </p>
-      </div>
-
-      {/* Emoji AI (Part K) — an OPTIONAL independent provider/model/key for the
-          auto-emoji "AI" mode. Defaults to the clip-detection provider/model. */}
-      <div className="flex flex-col gap-1.5 border-t pt-3" data-testid="emoji-ai-settings">
-        <Label htmlFor="emoji-provider">Emoji AI (optional)</Label>
-        <p className="text-xs text-muted-foreground">
-          The model that suggests emoji when a caption’s emoji mode is “AI”. Defaults to your
-          clip-detection provider &amp; model — set a separate one (e.g. a cheaper model, or a local
-          Ollama) here.
-        </p>
-        <Select
-          value={settings.emojiProvider ?? SAME_AS_CLIP}
-          onValueChange={(v) => void onEmojiProviderChange(v)}
-        >
-          <SelectTrigger id="emoji-provider">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={SAME_AS_CLIP}>
-              Same as clip detection ({providerLabel(provider)})
-            </SelectItem>
-            {PROVIDERS.map((p) => (
-              <SelectItem key={p} value={p}>
-                {providerLabel(p)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {settings.emojiProvider && (
-          <>
+            </div>
+            {/* Free-text id is always available — the escape hatch for any model id. */}
             <Input
-              aria-label="Emoji model"
-              value={emojiModelDraft}
-              placeholder={`e.g. ${settings.model || 'a fast cheap model'} — blank = clip model`}
-              onChange={(e) => setEmojiModelDraft(e.target.value)}
+              id="ai-model"
+              value={modelDraft}
+              placeholder="Pick one below, or type a model id"
+              onChange={(e) => setModelDraft(e.target.value)}
               onBlur={() => {
-                const next = emojiModelDraft || undefined
-                if (next !== settings.emojiModel) void save({ emojiModel: next })
+                if (modelDraft !== settings.model) void save({ model: modelDraft })
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
               }}
             />
-            <Label htmlFor="emoji-api-key">
-              API key for {providerLabel(emojiProvider)} —{' '}
-              <span className="text-muted-foreground">{keyStatusLabel(emojiStatus)}</span>
+
+            {testResult && (
+              <span
+                data-testid="test-connection-result"
+                className={testResult.ok ? 'text-xs text-emerald-500' : 'text-xs text-destructive'}
+              >
+                {testResult.message}
+              </span>
+            )}
+
+            <div className="mt-1 flex flex-col gap-1.5" data-testid="model-picker">
+              <Input
+                aria-label="Filter models"
+                placeholder="Filter models…"
+                value={modelQuery}
+                onChange={(e) => setModelQuery(e.target.value)}
+              />
+              {modelsError && (
+                <span className="text-xs text-destructive" data-testid="models-error">
+                  {modelsError} — you can still type a model id above.
+                </span>
+              )}
+              <ScrollArea className="h-56 rounded-md border">
+                {modelsLoading && models.length === 0 ? (
+                  <div className="p-3 text-xs text-muted-foreground">Loading models…</div>
+                ) : recommended.length === 0 && others.length === 0 ? (
+                  <div className="p-3 text-xs text-muted-foreground">
+                    {models.length === 0
+                      ? `No models loaded — add your ${providerLabel(provider)} key, then press Load models.`
+                      : 'No models match your filter.'}
+                  </div>
+                ) : (
+                  <div className="flex flex-col py-1">
+                    {recommended.length > 0 && (
+                      <ModelGroup
+                        label="Recommended"
+                        models={recommended}
+                        selected={settings.model}
+                        onPick={(id) => void save({ model: id })}
+                      />
+                    )}
+                    {others.length > 0 && (
+                      <ModelGroup
+                        label={recommended.length > 0 ? 'More models' : 'Models'}
+                        models={others}
+                        selected={settings.model}
+                        onPick={(id) => void save({ model: id })}
+                      />
+                    )}
+                  </div>
+                )}
+              </ScrollArea>
+              <p className="text-xs text-muted-foreground">
+                Clip detection needs a model that supports strict JSON output. Not every listed
+                model does — press Test to check one before relying on it. You can also type a model
+                id that isn’t listed.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="api-key">
+              API key for {providerLabel(provider)} —{' '}
+              <span className="text-muted-foreground">{keyStatusLabel(status)}</span>
             </Label>
             <div className="flex gap-2">
               <Input
-                id="emoji-api-key"
+                id="api-key"
                 type="password"
-                value={emojiKeyDraft}
+                value={keyDraft}
                 placeholder="Stored in the OS keychain; never leaves this machine"
-                onChange={(e) => setEmojiKeyDraft(e.target.value)}
+                onChange={(e) => setKeyDraft(e.target.value)}
               />
-              <Button
-                size="sm"
-                onClick={() => void onSaveEmojiKey()}
-                disabled={!emojiKeyDraft.trim()}
-              >
+              <Button size="sm" onClick={() => void onSaveKey()} disabled={!keyDraft.trim()}>
                 Save
               </Button>
             </div>
-          </>
-        )}
-      </div>
+            <p className="text-xs text-muted-foreground">
+              The key is encrypted with the OS keychain (safeStorage) and used only on this device
+              for outbound AI calls. It is never sent to OpenClip.
+            </p>
+          </div>
 
-      {/* Brand kit (Part K) — logo + brand colors/font applied to exports. */}
-      <BrandKitEditor />
+          {/* Emoji AI (Part K) — an OPTIONAL independent provider/model/key for the
+          auto-emoji "AI" mode. Defaults to the clip-detection provider/model. */}
+          <div className="flex flex-col gap-1.5 border-t pt-3" data-testid="emoji-ai-settings">
+            <Label htmlFor="emoji-provider">Emoji AI (optional)</Label>
+            <p className="text-xs text-muted-foreground">
+              The model that suggests emoji when a caption’s emoji mode is “AI”. Defaults to your
+              clip-detection provider &amp; model — set a separate one (e.g. a cheaper model, or a
+              local Ollama) here.
+            </p>
+            <Select
+              value={settings.emojiProvider ?? SAME_AS_CLIP}
+              onValueChange={(v) => void onEmojiProviderChange(v)}
+            >
+              <SelectTrigger id="emoji-provider">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={SAME_AS_CLIP}>
+                  Same as clip detection ({providerLabel(provider)})
+                </SelectItem>
+                {PROVIDERS.map((p) => (
+                  <SelectItem key={p} value={p}>
+                    {providerLabel(p)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {settings.emojiProvider && (
+              <>
+                <Input
+                  aria-label="Emoji model"
+                  value={emojiModelDraft}
+                  placeholder={`e.g. ${settings.model || 'a fast cheap model'} — blank = clip model`}
+                  onChange={(e) => setEmojiModelDraft(e.target.value)}
+                  onBlur={() => {
+                    const next = emojiModelDraft || undefined
+                    if (next !== settings.emojiModel) void save({ emojiModel: next })
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                  }}
+                />
+                <Label htmlFor="emoji-api-key">
+                  API key for {providerLabel(emojiProvider)} —{' '}
+                  <span className="text-muted-foreground">{keyStatusLabel(emojiStatus)}</span>
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="emoji-api-key"
+                    type="password"
+                    value={emojiKeyDraft}
+                    placeholder="Stored in the OS keychain; never leaves this machine"
+                    onChange={(e) => setEmojiKeyDraft(e.target.value)}
+                  />
+                  <Button
+                    size="sm"
+                    onClick={() => void onSaveEmojiKey()}
+                    disabled={!emojiKeyDraft.trim()}
+                  >
+                    Save
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
+        </TabsContent>
 
-      <TranscriptionSettings
-        active={settings.whisperModel}
-        onSelect={(m) => void save({ whisperModel: m })}
-        onDownload={(m) => onDownloadModel?.(m)}
-        onChanged={onModelsChanged}
-      />
+        <TabsContent value="transcription" className="flex flex-col gap-4">
+          <TranscriptionSettings
+            active={settings.whisperModel}
+            onSelect={(m) => void save({ whisperModel: m })}
+            onDownload={(m) => onDownloadModel?.(m)}
+            onChanged={onModelsChanged}
+          />
 
-      <div className="flex flex-col gap-1.5" data-testid="language-picker">
-        <Label htmlFor="transcribe-language">Transcription language</Label>
-        <Select
-          value={langSelectValue}
-          onValueChange={(v) => void save({ language: v === AUTO_LANG ? undefined : v })}
-        >
-          <SelectTrigger id="transcribe-language">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {LANGUAGES.map((l) => (
-              <SelectItem key={l.code || AUTO_LANG} value={l.code || AUTO_LANG}>
-                {l.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Input
-          aria-label="Custom language ISO code"
-          placeholder="Or a custom ISO-639-1 code, e.g. sw, fa, bn"
-          value={langIsListed ? '' : (settings.language ?? '')}
-          onChange={(e) => void save({ language: e.target.value.trim() || undefined })}
-        />
-        <p className="text-xs text-muted-foreground">
-          Transcribing in: <span className="font-medium">{languageLabel(settings.language)}</span>.
-          Auto-detect lets whisper guess the language; set it explicitly if detection picks the
-          wrong language (e.g. an Indonesian video transcribed as English).
-        </p>
-      </div>
+          <div className="flex flex-col gap-1.5" data-testid="language-picker">
+            <Label htmlFor="transcribe-language">Transcription language</Label>
+            <Select
+              value={langSelectValue}
+              onValueChange={(v) => void save({ language: v === AUTO_LANG ? undefined : v })}
+            >
+              <SelectTrigger id="transcribe-language">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {LANGUAGES.map((l) => (
+                  <SelectItem key={l.code || AUTO_LANG} value={l.code || AUTO_LANG}>
+                    {l.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Input
+              aria-label="Custom language ISO code"
+              placeholder="Or a custom ISO-639-1 code, e.g. sw, fa, bn"
+              value={langIsListed ? '' : (settings.language ?? '')}
+              onChange={(e) => void save({ language: e.target.value.trim() || undefined })}
+            />
+            <p className="text-xs text-muted-foreground">
+              Transcribing in:{' '}
+              <span className="font-medium">{languageLabel(settings.language)}</span>. Auto-detect
+              lets whisper guess the language; set it explicitly if detection picks the wrong
+              language (e.g. an Indonesian video transcribed as English).
+            </p>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="brand" className="flex flex-col gap-4">
+          {/* Brand kit (Part K) — logo + brand colors/font applied to exports. */}
+          <BrandKitEditor />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

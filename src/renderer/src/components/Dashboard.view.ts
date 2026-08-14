@@ -18,6 +18,8 @@ export interface DashboardRow {
   updatedLabel: string
   /** True when this row is the currently-open project. */
   isActive: boolean
+  /** Absolute `.ocproj` path, for Reveal in Finder (FEAT-905vk4). */
+  path: string
 }
 
 export interface DashboardViewModel {
@@ -51,7 +53,8 @@ export function dashboardViewModel(
     name: p.name,
     updatedAt: p.updatedAt,
     updatedLabel: relativeUpdatedLabel(p.updatedAt, now),
-    isActive: p.id === activeProjectId
+    isActive: p.id === activeProjectId,
+    path: p.path
   }))
   return { rows, isEmpty: rows.length === 0 }
 }

@@ -5,6 +5,7 @@
  * video / transcript / clips exist, App swaps to the 3-pane editor.
  */
 
+import { toast } from 'sonner'
 import { Clapperboard, Clock } from 'lucide-react'
 import type { WhisperModelSize } from '@shared/jobs'
 import { ImportPanel } from '@renderer/components/ImportPanel'
@@ -48,7 +49,16 @@ export function Welcome({ onNeedModel }: WelcomeProps = {}): React.JSX.Element {
                 <li key={row.id}>
                   <button
                     type="button"
-                    onClick={() => void open(row.id)}
+                    onClick={() =>
+                      // Was `void open(...)`, which DISCARDED the rejection: a
+                      // project whose file had moved just silently refused to
+                      // open, with no spinner and no error (FEAT-905vk4).
+                      open(row.id).catch((e: unknown) =>
+                        toast.error('Could not open project', {
+                          description: e instanceof Error ? e.message : String(e)
+                        })
+                      )
+                    }
                     className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm hover:bg-accent"
                   >
                     <span className="truncate">{row.name}</span>

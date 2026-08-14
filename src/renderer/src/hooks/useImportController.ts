@@ -26,6 +26,15 @@ import { useSettingsStore } from '@renderer/stores/settingsStore'
 export interface ImportControllerOptions {
   /** Open the first-run model-download dialog when the whisper model is absent. */
   onNeedModel?: (model: WhisperModelSize) => void
+  /**
+   * The import finished successfully (FEAT-905vk4).
+   *
+   * An EVENT, not a `stage === 'done'` effect in the caller: the import dialog
+   * never closed itself, so a successful import left a modal sitting over the
+   * editor it had just populated — and watching derived state for it would fire
+   * again on every unrelated re-render while the stage happened to be 'done'.
+   */
+  onDone?: () => void
 }
 
 export interface ImportController {
@@ -149,6 +158,24 @@ export function useImportController(opts: ImportControllerOptions = {}): ImportC
   )
 
   const state = useSyncExternalStore(controller.subscribe, controller.getState, controller.getState)
+
+  /**
+   * Fire `onDone` on the TRANSITION into 'done', once per import.
+   *
+   * The previous stage is tracked in a ref so this is an edge, not a level: a
+   * level check would re-fire on every unrelated re-render for as long as the
+   * stage stayed 'done'. The callback is read through a ref too, so a caller
+   * passing a fresh closure each render does not re-run the effect.
+   */
+  const onDoneRef = useRef(opts.onDone)
+  useEffect(() => {
+    onDoneRef.current = opts.onDone
+  })
+  const prevStage = useRef(state.stage)
+  useEffect(() => {
+    if (state.stage === 'done' && prevStage.current !== 'done') onDoneRef.current?.()
+    prevStage.current = state.stage
+  }, [state.stage])
 
   return {
     busy: state.busy,

@@ -115,6 +115,22 @@ function App(): React.JSX.Element {
 
   const generating = useProjectStore((s) => s.generating)
 
+  // The open project's name, shown and renamed in the title bar (FEAT-905vk4).
+  const projectName = useProjectStore((s) => s.currentProject?.name ?? null)
+  const [renamingTitle, setRenamingTitle] = useState(false)
+  const [titleDraft, setTitleDraft] = useState('')
+
+  const commitTitleRename = (): void => {
+    const next = titleDraft.trim()
+    setRenamingTitle(false)
+    const project = useProjectStore.getState().currentProject
+    // Empty or unchanged is a cancel, not an error worth reporting.
+    if (!project || !next || next === project.name) return
+    // Written straight to the store: autosave persists it on the same debounce
+    // as every other edit, so this needs no save call of its own.
+    useProjectStore.getState().setCurrentProject({ ...project, name: next })
+  }
+
   // The PRE-FLIGHT panel (FEAT-n762y6). Generate used to fire straight off the
   // header button with zero configuration; it now opens a panel whose fields are
   // all defaulted, so the primary action is still one press away.
@@ -306,7 +322,13 @@ function App(): React.JSX.Element {
   // Pass the handler explicitly: App constructs the shared controller (parent
   // hooks run before children's), so it must supply the callback rather than
   // relying on ImportPanel to register one later.
-  const importCtl = useImportController({ onNeedModel: handleNeedModel })
+  const importCtl = useImportController({
+    onNeedModel: handleNeedModel,
+    // The import dialog never closed itself (FEAT-905vk4), so a successful
+    // import left a modal sitting over the editor it had just populated — the
+    // user had to dismiss a dialog to see the result of using it.
+    onDone: () => setModal((m) => (m === 'import' ? 'none' : m))
+  })
 
   // First-run readiness: what the user still has to set up, and whether Generate
   // can run at all (FEAT-c5a15c).
@@ -320,6 +342,39 @@ function App(): React.JSX.Element {
         <div className="flex items-center gap-2">
           <Clapperboard className="size-4 text-primary" />
           <span className="text-sm font-semibold tracking-tight">{APP_NAME}</span>
+          {/* The open project's NAME (FEAT-905vk4). It was visible only as a row
+            in the recents list, so the title bar could not tell you which
+            project you were editing. Click to rename in place — `window.prompt`
+            is unavailable under `sandbox: true`, and editing the name where it
+            is displayed is the better interaction regardless. */}
+          {projectName !== null &&
+            (renamingTitle ? (
+              <input
+                data-testid="title-rename-input"
+                autoFocus
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onBlur={commitTitleRename}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitTitleRename()
+                  if (e.key === 'Escape') setRenamingTitle(false)
+                }}
+                className="app-no-drag w-48 rounded border bg-background px-1.5 py-0.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            ) : (
+              <button
+                type="button"
+                data-testid="title-project-name"
+                title="Click to rename"
+                onClick={() => {
+                  setTitleDraft(projectName)
+                  setRenamingTitle(true)
+                }}
+                className="app-no-drag max-w-[16rem] truncate rounded px-1.5 py-0.5 text-sm text-muted-foreground hover:bg-accent"
+              >
+                {projectName}
+              </button>
+            ))}
           {/* Persistence was entirely silent on success (FEAT-51hnwx): the only
               signal in the whole path was an error toast. Nothing before the
               first save — inventing "Saved" there would be a lie. */}
@@ -425,7 +480,10 @@ function App(): React.JSX.Element {
                   className="gap-1.5"
                   onClick={() => setModal('export')}
                 >
-                  <Download className="size-4" /> Export All
+                  {/* Was "Export All" while the panel it opens has "Export clip"
+                    as its primary action (FEAT-905vk4) — the button promised a
+                    batch and delivered a single-clip dialog. */}
+                  <Download className="size-4" /> Export…
                 </Button>
               </div>
             </div>

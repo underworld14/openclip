@@ -135,6 +135,29 @@ export interface ProjectActions {
   save: () => Promise<{ path: string } | null>
   /** project:delete(id) then refresh the recents list. */
   remove: (id: string) => Promise<{ deleted: boolean }>
+  /**
+   * Rename a project on disk (FEAT-905vk4).
+   *
+   * Load → set name → save, rather than a new IPC channel: the name lives in the
+   * `.ocproj` document and `project:save` already writes it, so a dedicated
+   * channel would be a second way to do the same thing.
+   *
+   * Deliberately does NOT hydrate the store: renaming a project you are not
+   * currently editing must not yank the editor onto it. The one exception is the
+   * OPEN project, whose in-memory name is updated so the title bar agrees with
+   * the row without a reload.
+   */
+  rename: (id: string, name: string) => Promise<Project>
+  /**
+   * Copy a project under a new id (FEAT-905vk4).
+   *
+   * The copy keeps the transcript and the clips — which is the point: it is how
+   * you try a different set of clips without re-transcribing, or keep a version
+   * before a destructive trim. Export history is NOT copied: those files belong
+   * to the original run and claiming them would be a lie about what the copy has
+   * produced.
+   */
+  duplicate: (id: string) => Promise<Project>
   /** Seed a fresh blank Project into currentProject (does not persist yet). */
   createNew: (name: string, sourceVideo: SourceVideo) => Promise<Project>
 }
@@ -175,6 +198,39 @@ export function projectActions(bridge: Bridge, store: CoreStoreApi): ProjectActi
       const res = await bridge.project.delete({ id })
       await refreshRecents()
       return res
+    },
+
+    rename: async (id: string, name: string): Promise<Project> => {
+      const trimmed = name.trim()
+      if (!trimmed) throw new Error('A project name cannot be empty.')
+      const project = await bridge.project.load({ id })
+      const renamed: Project = { ...project, name: trimmed, updatedAt: Date.now() }
+      await bridge.project.save({ project: renamed })
+      // Keep the OPEN project's in-memory name in step, so the title bar and the
+      // row cannot disagree — but only when it IS the open one (renaming another
+      // project must not switch the editor to it).
+      const current = store.getState().currentProject
+      if (current?.id === id) store.getState().setCurrentProject(renamed)
+      await refreshRecents()
+      return renamed
+    },
+
+    duplicate: async (id: string): Promise<Project> => {
+      const project = await bridge.project.load({ id })
+      const now = Date.now()
+      const copy: Project = {
+        ...project,
+        id: crypto.randomUUID(),
+        name: `${project.name} copy`,
+        createdAt: now,
+        updatedAt: now,
+        // The copy has exported nothing yet. Inheriting the original's history
+        // would point at files this project never produced.
+        exportHistory: []
+      }
+      await bridge.project.save({ project: copy })
+      await refreshRecents()
+      return copy
     },
 
     createNew: async (name: string, sourceVideo: SourceVideo): Promise<Project> => {

@@ -78,6 +78,16 @@ export enum IPCChannels {
   BRAND_SET_LOGO = 'brand:set-logo',
   // Project
   SAVE_PROJECT = 'project:save',
+  /**
+   * Persist ONLY the parts of a project that changed (BUG-g6zq2t).
+   *
+   * Autosave fires on every approve, reject and settled trim drag, and
+   * `project:save` ships the whole document — including all ~20,000 word
+   * timestamps of a 2-hour podcast — to persist a few hundred bytes. A 30-edit
+   * session wrote ~90 MB. This channel exists so the overwhelmingly common edit
+   * (clips, and nothing else) does not pay for the transcript.
+   */
+  SAVE_PROJECT_PATCH = 'project:save-patch',
   LOAD_PROJECT = 'project:load',
   LIST_PROJECTS = 'project:list',
   DELETE_PROJECT = 'project:delete',
@@ -346,6 +356,16 @@ export interface ChannelMap {
 
   // --- Project ---
   [IPCChannels.SAVE_PROJECT]: ChannelPayload<{ project: Project }, { path: string }>
+  [IPCChannels.SAVE_PROJECT_PATCH]: ChannelPayload<
+    {
+      id: string
+      clips?: Project['clips']
+      exportHistory?: Project['exportHistory']
+      settings?: Project['settings']
+      name?: string
+    },
+    { path: string }
+  >
   [IPCChannels.LOAD_PROJECT]: ChannelPayload<{ id: string }, Project>
   [IPCChannels.LIST_PROJECTS]: ChannelPayload<
     void,

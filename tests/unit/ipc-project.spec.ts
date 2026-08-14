@@ -3,7 +3,8 @@
  *
  * `registerProjectHandlers(ctx)` is the ONLY thing the frozen
  * `HANDLER_REGISTRARS` registry calls for the project domain. It must wire the
- * four project channels (SAVE/LOAD/LIST/DELETE — PRD §10.1) to `project-store`,
+ * five project channels (SAVE/SAVE_PATCH/LOAD/LIST/DELETE — PRD §10.1) to
+ * `project-store`,
  * resolving the projects dir from trunk-frozen `utils/paths.ts` (mocked here so
  * no Electron `app` is touched). We drive the registered handlers exactly as
  * `ipcMain.handle` would, with the contract request payloads.
@@ -72,7 +73,7 @@ afterEach(async () => {
 })
 
 describe('registerProjectHandlers wires the project channels', () => {
-  it('registers exactly the four project channels', () => {
+  it('registers exactly the five project channels', () => {
     const { ctx } = makeFakeContext()
     const handle = ctx.ipcMain.handle as unknown as ReturnType<typeof vi.fn>
     const spy = vi.spyOn(ctx.ipcMain, 'handle')
@@ -81,6 +82,8 @@ describe('registerProjectHandlers wires the project channels', () => {
     expect(new Set(channels)).toEqual(
       new Set([
         IPCChannels.SAVE_PROJECT,
+        // The delta-save path autosave uses for clip-only edits (BUG-g6zq2t).
+        IPCChannels.SAVE_PROJECT_PATCH,
         IPCChannels.LOAD_PROJECT,
         IPCChannels.LIST_PROJECTS,
         IPCChannels.DELETE_PROJECT

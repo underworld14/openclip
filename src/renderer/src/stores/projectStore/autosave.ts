@@ -96,7 +96,12 @@ export interface AutosaveOptions {
  */
 export function startAutosave(
   store: AutosaveStoreApi,
-  save: (project: Project) => Promise<void> | void,
+  /**
+   * `opts.clipsOnly` is true when nothing outside clips/exportHistory changed
+   * since the last write, so the caller can persist a delta instead of the whole
+   * document (BUG-g6zq2t). Callers may ignore it and always save in full.
+   */
+  save: (project: Project, opts?: { clipsOnly: boolean }) => Promise<void> | void,
   delayMs?: number,
   onError?: (err: unknown) => void,
   opts: AutosaveOptions = {}
@@ -106,7 +111,12 @@ export function startAutosave(
   // teardown `void flush()` is fire-and-forget — both must not throw uncaught).
   const guardedSave = async (project: Project): Promise<void> => {
     try {
-      await save(project)
+      // Hand the caller the hint it needs to pick the cheap path. Read and reset
+      // HERE, at the moment of the actual write, so a burst that coalesced a
+      // full-document edit with clip edits still takes the full path.
+      const clipsOnly = !pendingFullSave
+      pendingFullSave = false
+      await save(project, { clipsOnly })
     } catch (err) {
       onError?.(err)
     }
@@ -117,6 +127,14 @@ export function startAutosave(
   // something to write. Deliberately a bare flag, not a queued project: the
   // point is to write the LATEST state once, not to replay what was skipped.
   let dirtyWhileSuspended = false
+
+  // STICKY: set by any edit that touches something outside clips/exportHistory,
+  // cleared only when a write actually happens. It has to be sticky rather than
+  // last-write-wins — a burst can coalesce a transcript change and a clip
+  // approval into ONE write, and taking the delta path there would silently drop
+  // the transcript change. One full-document edit in the window forces the full
+  // save (BUG-g6zq2t).
+  let pendingFullSave = false
 
   const saveLatest = (): void => {
     const composed = store.getState().composeProject()
@@ -137,10 +155,22 @@ export function startAutosave(
     if (!changed) return
     if (opts.isSuspended?.()) {
       dirtyWhileSuspended = true
+      // Force the FULL path for the write that `resume()` will do. The
+      // suspension exists precisely because an import is streaming transcript
+      // partials, so the deferred write is the one that must carry the
+      // transcript — taking the delta path there would drop it (BUG-g6zq2t).
+      pendingFullSave = true
       return
     }
-    const composed = state.composeProject()
-    if (composed) autosave(composed)
+    // Did anything OUTSIDE clips/exportHistory move? If not, the transcript is
+    // dead weight: shipping it costs a ~1.85 MB structured clone across the
+    // contextBridge and a full-document rewrite to persist a few hundred bytes
+    // of clip state (BUG-g6zq2t). Approve, reject and a settled trim drag all
+    // land here, which is nearly every edit a user makes.
+    const clipsOnly =
+      state.transcript === prev.transcript && state.currentProject === prev.currentProject
+    if (!clipsOnly) pendingFullSave = true
+    saveLatest()
   })
 
   const stop = (() => {
@@ -177,7 +207,29 @@ export function installAutosave(delayMs?: number, onError?: (err: unknown) => vo
 
   const stop = startAutosave(
     useProjectStore,
-    async (project) => {
+    async (project, opts) => {
+      if (opts?.clipsOnly) {
+        // The patch path reads the on-disk document to merge into. If this
+        // project has never been written (no `.ocproj` yet) that read fails, so
+        // fall back to the full save rather than losing the edit. Belt and
+        // braces: a project always reaches the store via setCurrentProject /
+        // hydrateProject first, which forces a full save.
+        try {
+          // The common case: approve/reject/trim. Ships clips + export history and
+          // NOT the transcript, whose word array dominates the document.
+          await window.openclip.project.savePatch({
+            id: project.id,
+            clips: project.clips,
+            exportHistory: project.exportHistory,
+            settings: project.settings,
+            name: project.name
+          })
+          return
+        } catch {
+          await window.openclip.project.save({ project })
+          return
+        }
+      }
       await window.openclip.project.save({ project })
     },
     delayMs,

@@ -86,7 +86,7 @@ export interface SaveResult {
 }
 
 /**
- * Serialize a Project to `<dir>/<id>.ocproj` as pretty-printed JSON. Creates the
+ * Serialize a Project to `<dir>/<id>.ocproj` as compact JSON. Creates the
  * directory tree if missing. Does NOT mutate the input project. When
  * `touchUpdatedAt` is set, the persisted copy gets a fresh `updatedAt` (PRD §9.3).
  */
@@ -108,7 +108,13 @@ export async function saveProject(
   const tmp = `${path}.${randomUUID()}.tmp`
   try {
     await mkdir(dir, { recursive: true })
-    await writeFile(tmp, JSON.stringify(toPersist, null, 2), 'utf8')
+    // COMPACT, not pretty-printed (BUG-g6zq2t). A 2-hour podcast's `.ocproj` is
+    // dominated by ~20,000 word timestamps, and two-space indentation inflated it
+    // by ~39% (3.04 MB → 1.85 MB measured) — paid on every autosave, which fires
+    // on every approve, reject and settled trim drag. `loadProject` is unaffected;
+    // the cost is that the file is no longer pleasant to read by hand, which is
+    // not what it is for.
+    await writeFile(tmp, JSON.stringify(toPersist), 'utf8')
     await rename(tmp, path)
   } catch (cause) {
     // Best-effort cleanup of the orphaned temp file; swallow its own errors.
@@ -116,6 +122,50 @@ export async function saveProject(
     throw new ProjectStoreError('IO', `failed to write project ${toPersist.id}`, cause)
   }
   return { path, project: toPersist }
+}
+
+/**
+ * Persist ONLY the fields that changed, leaving the rest of the document — above
+ * all `transcript.words` — untouched on disk (BUG-g6zq2t).
+ *
+ * Autosave fires on every approve, reject and settled trim drag. `saveProject`
+ * ships the entire document each time, so a 2-hour podcast wrote 1.85 MB
+ * (including ~20,000 word timestamps) to persist a few hundred bytes of clip
+ * state; a 30-edit session wrote ~90 MB. This reads the on-disk doc, merges the
+ * patch and writes it back through the same atomic path, so the renderer never
+ * has to hand the transcript across the contextBridge at all.
+ *
+ * Re-validates after merging: a patch is renderer-supplied, and a merge that
+ * produced an invalid document would otherwise be discovered at load time, long
+ * after the state that caused it is gone.
+ */
+export async function patchProject(
+  dir: string,
+  patch: {
+    id: string
+    clips?: ProjectType['clips']
+    exportHistory?: ProjectType['exportHistory']
+    settings?: ProjectType['settings']
+    name?: string
+  },
+  opts: { touchUpdatedAt?: boolean } = {}
+): Promise<SaveResult> {
+  const current = await loadProject(dir, patch.id)
+  const merged: ProjectType = {
+    ...current,
+    ...(patch.clips !== undefined ? { clips: patch.clips } : {}),
+    ...(patch.exportHistory !== undefined ? { exportHistory: patch.exportHistory } : {}),
+    ...(patch.settings !== undefined ? { settings: patch.settings } : {}),
+    ...(patch.name !== undefined ? { name: patch.name } : {})
+  }
+  const parsed = Project.safeParse(merged)
+  if (!parsed.success) {
+    throw new ProjectStoreError(
+      'VALIDATION',
+      `patch produced an invalid project ${patch.id}: ${parsed.error.message}`
+    )
+  }
+  return saveProject(dir, parsed.data, opts)
 }
 
 /**

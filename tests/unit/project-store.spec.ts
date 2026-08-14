@@ -76,12 +76,13 @@ describe('save → load round-trip', () => {
     expect(existsSync(nested)).toBe(true)
   })
 
-  it('writes valid, re-parseable JSON (pretty-printed)', async () => {
+  it('writes valid, re-parseable COMPACT JSON', async () => {
     const { path } = await saveProject(dir, projectFixture)
     const raw = await readFile(path, 'utf8')
     expect(() => JSON.parse(raw)).not.toThrow()
-    // pretty-printed (2-space) for human-readable backup/sharing (PRD §6.9)
-    expect(raw).toContain('\n  ')
+    // COMPACT, not pretty-printed (BUG-g6zq2t): indentation inflated a 2-hour
+    // podcast's document by ~39% (3.04 MB → 1.85 MB), paid on every autosave.
+    expect(raw).not.toContain('\n  ')
   })
 
   it('bumps updatedAt on save when touchUpdatedAt is set', async () => {

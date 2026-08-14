@@ -16,7 +16,13 @@ import type { IpcContext } from './index'
 import { IPCChannels } from '@shared/channels'
 import type { ChannelReq, ChannelRes } from '@shared/channels'
 import { projectsDir, mediaDir } from '@main/utils/paths'
-import { saveProject, loadProject, listProjects, deleteProject } from '@main/services/project-store'
+import {
+  patchProject,
+  saveProject,
+  loadProject,
+  listProjects,
+  deleteProject
+} from '@main/services/project-store'
 import { deleteProjectMedia } from '@main/services/media-store'
 
 export function registerProjectHandlers(ctx: IpcContext): void {
@@ -31,6 +37,20 @@ export function registerProjectHandlers(ctx: IpcContext): void {
       req: ChannelReq<IPCChannels.SAVE_PROJECT>
     ): Promise<ChannelRes<IPCChannels.SAVE_PROJECT>> => {
       const { path } = await saveProject(projectsDir(), req.project, { touchUpdatedAt: true })
+      return { path }
+    }
+  )
+
+  // project:save-patch — persist ONLY what changed (BUG-g6zq2t). Autosave uses
+  // this for the overwhelmingly common edit (clips, and nothing else), so the
+  // transcript's word array never crosses the contextBridge for a clip approval.
+  ipcMain.handle(
+    IPCChannels.SAVE_PROJECT_PATCH,
+    async (
+      _e,
+      req: ChannelReq<IPCChannels.SAVE_PROJECT_PATCH>
+    ): Promise<ChannelRes<IPCChannels.SAVE_PROJECT_PATCH>> => {
+      const { path } = await patchProject(projectsDir(), req, { touchUpdatedAt: true })
       return { path }
     }
   )

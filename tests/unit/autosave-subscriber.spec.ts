@@ -58,7 +58,9 @@ describe('startAutosave: subscribe project edits → debounced COMPOSED save', (
     // The saved payload is the COMPOSED project: live clips/transcript layered
     // over the latest document. With empty live slices it equals v2 with []/null
     // overrides — assert the load-bearing fields.
-    expect(save).toHaveBeenCalledWith(expect.objectContaining({ id: v2.id, name: 'v2' }))
+    // `save` now takes a second arg — the clips-only hint that lets the caller
+    // persist a delta (BUG-g6zq2t) — so assert on the project argument itself.
+    expect(save.mock.calls[0][0]).toMatchObject({ id: v2.id, name: 'v2' })
     stop()
   })
 
@@ -142,7 +144,7 @@ describe('startAutosave: subscribe project edits → debounced COMPOSED save', (
     stop() // flushes the pending write
     await Promise.resolve()
     expect(save).toHaveBeenCalledTimes(1)
-    expect(save).toHaveBeenCalledWith(expect.objectContaining({ id: projectFixture.id }))
+    expect(save.mock.calls[0][0]).toMatchObject({ id: projectFixture.id })
 
     // after teardown, further edits do NOT trigger saves (unsubscribed)
     useProjectStore.getState().setCurrentProject({ ...projectFixture, name: 'later' })

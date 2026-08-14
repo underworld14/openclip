@@ -195,7 +195,11 @@ test('Wave-1 spine: import → transcribe → clips → save → reload → load
 
   // ── restored transcript + clips RENDER after load ──
   await expect(win.getByTestId('transcript-panel')).toBeVisible()
-  await expect(win.getByText('Hello world!')).toBeVisible()
+  // Scoped to the transcript panel: the caption gallery (FEAT-0s2tnc) previews
+  // every template on the user's OWN words, so a bare page-wide text query now
+  // matches a dozen thumbnails as well. The assertion always meant "the
+  // transcript came back", so say that.
+  await expect(win.getByTestId('transcript-panel').getByText('Hello world!').first()).toBeVisible()
   await expect(win.getByTestId('clip-card').first()).toBeVisible()
   expect(await win.getByTestId('clip-card').count()).toBe(generated.count)
 

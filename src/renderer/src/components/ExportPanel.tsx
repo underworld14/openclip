@@ -44,31 +44,6 @@ const EXPORT_DIMENSIONS: Record<AspectRatio, string> = {
   '16:9': '1920×1080'
 }
 
-/** A selectable caption-template chip (Part K gallery). */
-function TemplateChip(props: {
-  label: string
-  title?: string
-  active: boolean
-  onClick: () => void
-}): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      data-testid="caption-template-chip"
-      data-active={props.active}
-      title={props.title}
-      onClick={props.onClick}
-      className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
-        props.active
-          ? 'border-primary bg-primary text-primary-foreground'
-          : 'border-border bg-background hover:bg-accent'
-      }`}
-    >
-      {props.label}
-    </button>
-  )
-}
-
 export function ExportPanel(): React.JSX.Element {
   const currentProject = useProjectStore((s) => s.currentProject)
   const clips = useProjectStore((s) => s.clips)
@@ -411,27 +386,19 @@ export function ExportPanel(): React.JSX.Element {
             </span>
           </label>
 
-          {/* Caption template gallery (Part K). Persisted on the project so the
-              export + the WYSIWYG preview agree. A chip per template. */}
+          {/* The PICKER moved out to CaptionStylePanel, beside the preview
+              (FEAT-0s2tnc): 13 name-only chips inside a modal were not a way to
+              choose the most visible thing the app produces. What stays here is
+              the read-out — the export dialog must still say what will be burned,
+              and a user who opens it to check should not have to close it again
+              to find out. */}
           {captionsEnabled && hasWords && (
-            <div className="flex flex-col gap-1.5" data-testid="caption-template-gallery">
-              <span className="text-xs text-muted-foreground">Caption template:</span>
-              <div className="flex flex-wrap gap-1.5">
-                <TemplateChip
-                  label="Default"
-                  active={captionTemplateId === ''}
-                  onClick={() => setProjectSettings({ captionTemplateId: '' })}
-                />
-                {CAPTION_PRESETS.map((p) => (
-                  <TemplateChip
-                    key={p.id}
-                    label={p.name}
-                    title={p.description}
-                    active={captionTemplateId === p.id}
-                    onClick={() => setProjectSettings({ captionTemplateId: p.id })}
-                  />
-                ))}
-              </div>
+            <div className="flex items-center gap-2 text-xs" data-testid="caption-template-readout">
+              <span className="text-muted-foreground">Caption template:</span>
+              <span className="font-medium" data-testid="caption-template-name">
+                {CAPTION_PRESETS.find((p) => p.id === captionTemplateId)?.name ?? 'Default'}
+              </span>
+              <span className="text-muted-foreground">· change it beside the preview</span>
             </div>
           )}
 

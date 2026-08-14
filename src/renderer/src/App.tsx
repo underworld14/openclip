@@ -32,6 +32,7 @@ import { ImportPanel } from '@renderer/components/ImportPanel'
 import { TranscriptPanel } from '@renderer/components/TranscriptPanel'
 import { ClipSidebar } from '@renderer/components/ClipSidebar'
 import { PreviewPlayer } from '@renderer/components/PreviewPlayer'
+import { CaptionStylePanel } from '@renderer/components/CaptionStylePanel'
 import { Timeline } from '@renderer/components/Timeline'
 import { ExportPanel } from '@renderer/components/ExportPanel'
 import { SettingsPanel } from '@renderer/components/SettingsPanel'
@@ -327,6 +328,10 @@ function App(): React.JSX.Element {
             </div>
             <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-3">
               <PreviewPlayer />
+              {/* The caption gallery lives HERE, next to the preview, rather than
+                buried in the Export dialog (FEAT-0s2tnc): it is a design surface,
+                and the thing it changes is the thing on screen right above it. */}
+              {hasTranscript && <CaptionStylePanel />}
               <Timeline />
               {hasTranscript && <TranscriptPanel />}
             </div>

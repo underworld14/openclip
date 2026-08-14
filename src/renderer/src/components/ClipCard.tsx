@@ -8,6 +8,7 @@
  */
 
 import type { Clip } from '@shared/schema'
+import { toast } from 'sonner'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { Button } from '@renderer/components/ui/button'
 import { clipViewModel } from '@renderer/components/clipView'
@@ -19,6 +20,7 @@ export interface ClipCardProps {
 export function ClipCard({ clip }: ClipCardProps): React.JSX.Element {
   const approveClip = useProjectStore((s) => s.approveClip)
   const rejectClip = useProjectStore((s) => s.rejectClip)
+  const restoreClip = useProjectStore((s) => s.restoreClip)
   const selectClip = useProjectStore((s) => s.selectClip)
   const selectedClipId = useProjectStore((s) => s.selectedClipId)
 
@@ -116,12 +118,33 @@ export function ClipCard({ clip }: ClipCardProps): React.JSX.Element {
           <Button
             size="sm"
             variant="ghost"
+            data-testid="clip-reject"
             onClick={(e) => {
               e.stopPropagation()
               rejectClip(clip.id)
+              // Reject is reversible now, but the user cannot know that unless we
+              // say so — and the card vanishes from the list the moment they
+              // click (FEAT-k28j7h). The toast is where the undo lives.
+              toast('Clip hidden', {
+                description: clip.title,
+                action: { label: 'Undo', onClick: () => restoreClip(clip.id) }
+              })
             }}
           >
             Reject
+          </Button>
+        )}
+        {vm.isRejected && (
+          <Button
+            size="sm"
+            variant="secondary"
+            data-testid="clip-restore"
+            onClick={(e) => {
+              e.stopPropagation()
+              restoreClip(clip.id)
+            }}
+          >
+            Restore
           </Button>
         )}
       </div>

@@ -494,11 +494,15 @@ export function ExportPanel(): React.JSX.Element {
                 value={clip.id}
                 onChange={(e) => selectClip(e.target.value)}
               >
-                {clips.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.title}
-                  </option>
-                ))}
+                {/* Hidden clips stay out of the picker — Reject means "not this
+                    one" (FEAT-k28j7h). They are restorable from the sidebar. */}
+                {clips
+                  .filter((c) => c.status !== 'rejected')
+                  .map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.title}
+                    </option>
+                  ))}
               </select>
             </label>
           )}

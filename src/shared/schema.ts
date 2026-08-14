@@ -130,7 +130,15 @@ export type Caption = z.infer<typeof Caption>
 // Clip (PRD §9.3) — note editedStart/editedEnd for the minimal-timeline trim
 // ============================================================================
 
-export const ClipStatus = z.enum(['suggested', 'approved', 'edited', 'exported'])
+/**
+ * `rejected` is HIDDEN, not deleted (FEAT-k28j7h). Reject used to splice the clip
+ * out of the store, and autosave persisted that ~800ms later — a single misclick
+ * destroyed an AI result permanently, with no confirmation and no undo anywhere
+ * in the app. Adding a status keeps the clip on disk and makes the action
+ * reversible. Persistence schemas are `looseObject`, so a project written by an
+ * older build (which cannot produce this value) still loads unchanged.
+ */
+export const ClipStatus = z.enum(['suggested', 'approved', 'edited', 'exported', 'rejected'])
 export type ClipStatus = z.infer<typeof ClipStatus>
 
 /**

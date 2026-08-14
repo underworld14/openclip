@@ -38,7 +38,14 @@ export interface ClipsSlice {
   selectClip: (id: string | null) => void
   /** Approve / reject a suggested clip (PRD §6.3 clip cards). */
   approveClip: (id: string) => void
+  /**
+   * Hide a clip. Sets `status:'rejected'` — it does NOT delete (FEAT-k28j7h):
+   * the clip stays in the project so the action can be undone, and so a user who
+   * changes their mind has not lost an AI result to one misclick.
+   */
   rejectClip: (id: string) => void
+  /** Put a rejected clip back in the list (the undo half of `rejectClip`). */
+  restoreClip: (id: string) => void
   /** Mark clip(s) exported after a (batch) export completes (Part K, Step 4). */
   markExported: (ids: string | string[]) => void
   /** Run BYOK AI clip detection via the bridge and seed the clip list. */
@@ -90,7 +97,10 @@ export const createClipsSlice: StateCreator<ProjectStore, [], [], ClipsSlice> = 
   selectClip: (selectedClipId) => set({ selectedClipId }),
   approveClip: (id) =>
     set((s) => ({ clips: s.clips.map((c) => (c.id === id ? { ...c, status: 'approved' } : c)) })),
-  rejectClip: (id) => set((s) => ({ clips: s.clips.filter((c) => c.id !== id) })),
+  rejectClip: (id) =>
+    set((s) => ({ clips: s.clips.map((c) => (c.id === id ? { ...c, status: 'rejected' } : c)) })),
+  restoreClip: (id) =>
+    set((s) => ({ clips: s.clips.map((c) => (c.id === id ? { ...c, status: 'suggested' } : c)) })),
   markExported: (ids) => {
     const set_ = new Set(Array.isArray(ids) ? ids : [ids])
     set((s) => ({

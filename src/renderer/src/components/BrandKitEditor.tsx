@@ -58,6 +58,8 @@ export function BrandKitEditor(): React.JSX.Element {
   const setActiveBrandId = useProjectStore((s) => s.setActiveBrandId)
 
   const [draft, setDraft] = useState<BrandTemplate | null>(null)
+  /** Two-step delete guard (FEAT-k28j7h). Reset whenever the selection changes. */
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
 
   useEffect(() => {
     if (!loaded) void load()
@@ -103,7 +105,10 @@ export function BrandKitEditor(): React.JSX.Element {
           variant="ghost"
           className="h-6 px-2 text-xs"
           data-testid="brand-new"
-          onClick={() => setDraft(freshBrand())}
+          onClick={() => {
+            setConfirmingDelete(false)
+            setDraft(freshBrand())
+          }}
         >
           New
         </Button>
@@ -118,7 +123,10 @@ export function BrandKitEditor(): React.JSX.Element {
               type="button"
               data-testid="brand-chip"
               data-active={b.id === draft?.id}
-              onClick={() => setDraft(b)}
+              onClick={() => {
+                setConfirmingDelete(false)
+                setDraft(b)
+              }}
               className={`rounded-full border px-2.5 py-1 text-xs ${
                 b.id === draft?.id
                   ? 'border-primary bg-primary text-primary-foreground'
@@ -262,14 +270,43 @@ export function BrandKitEditor(): React.JSX.Element {
             >
               {activeBrandId === draft.id ? 'Active ✓' : 'Use for this project'}
             </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              data-testid="brand-delete"
-              onClick={() => void onDelete()}
-            >
-              Delete
-            </Button>
+            {/* Two-step, because this one is genuinely irreversible (FEAT-k28j7h):
+                a brand kit is hand-built (logo, colours, fonts) and deleting it
+                fired instantly from a single click, with no confirm and no undo.
+                An inline confirm rather than a dialog — the destructive action
+                and its confirmation stay in the same place on screen. */}
+            {confirmingDelete ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  data-testid="brand-delete-confirm"
+                  onClick={() => {
+                    setConfirmingDelete(false)
+                    void onDelete()
+                  }}
+                >
+                  Delete permanently
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  data-testid="brand-delete-cancel"
+                  onClick={() => setConfirmingDelete(false)}
+                >
+                  Cancel
+                </Button>
+              </>
+            ) : (
+              <Button
+                size="sm"
+                variant="destructive"
+                data-testid="brand-delete"
+                onClick={() => setConfirmingDelete(true)}
+              >
+                Delete
+              </Button>
+            )}
           </div>
         </div>
       )}

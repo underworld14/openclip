@@ -36,6 +36,8 @@ export interface ClipViewModel {
   isApproved: boolean
   canApprove: boolean
   canReject: boolean
+  /** True when Reject has hidden this clip; the card shows Restore instead. */
+  isRejected: boolean
   /** Part I — 0-100 virality total + the four sub-score bars (undefined on old clips). */
   viralityTotal?: number
   viralityBars?: ViralityBar[]
@@ -68,7 +70,9 @@ export function clipViewModel(clip: Clip): ClipViewModel {
     status: clip.status,
     isApproved: clip.status === 'approved',
     canApprove: clip.status === 'suggested' || clip.status === 'edited',
-    canReject: clip.status !== 'exported',
+    canReject: clip.status !== 'exported' && clip.status !== 'rejected',
+    /** Rejected is reversible, so the card offers the way back (FEAT-k28j7h). */
+    isRejected: clip.status === 'rejected',
     viralityTotal: clip.virality?.total,
     viralityBars: clip.virality ? viralityBars(clip.virality) : undefined,
     hookType: clip.hookType
@@ -84,4 +88,17 @@ export function clipViewModel(clip: Clip): ClipViewModel {
  */
 export function sortClipsForSidebar(clips: Clip[]): Clip[] {
   return [...clips].sort((a, b) => b.viralityScore - a.viralityScore)
+}
+
+/**
+ * Split the clip list into what the sidebar shows and what Reject has hidden
+ * (FEAT-k28j7h). Rejected clips are still in the project — they are simply not
+ * in the way — so the sidebar can offer "N hidden · Show" instead of the user
+ * having to wonder where a clip went.
+ */
+export function partitionRejected(clips: Clip[]): { visible: Clip[]; hidden: Clip[] } {
+  const visible: Clip[] = []
+  const hidden: Clip[] = []
+  for (const c of clips) (c.status === 'rejected' ? hidden : visible).push(c)
+  return { visible, hidden }
 }

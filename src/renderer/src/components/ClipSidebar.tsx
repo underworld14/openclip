@@ -7,10 +7,10 @@
  * (`sortClipsForSidebar`), unit-tested without a DOM.
  */
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { ClipCard } from '@renderer/components/ClipCard'
-import { sortClipsForSidebar } from '@renderer/components/clipView'
+import { partitionRejected, sortClipsForSidebar } from '@renderer/components/clipView'
 import { Button } from '@renderer/components/ui/button'
 import { Progress } from '@renderer/components/ui/progress'
 
@@ -23,16 +23,22 @@ export function ClipSidebar(): React.JSX.Element {
   const provisionalClips = useProjectStore((s) => s.provisionalClips)
   const cancelGenerate = useProjectStore((s) => s.cancelGenerate)
 
+  // Rejected clips are hidden, not deleted (FEAT-k28j7h). Keep them one click
+  // away rather than gone, so Reject stops being a destructive action.
+  const [showHidden, setShowHidden] = useState(false)
+
   // Memoize the sort so it only re-runs when the clips array changes — not on every
   // selection/approval re-render (audit fix openclip-don).
-  const ordered = useMemo(() => sortClipsForSidebar(clips), [clips])
+  const { visible, hidden } = useMemo(() => partitionRejected(clips), [clips])
+  const ordered = useMemo(() => sortClipsForSidebar(visible), [visible])
+  const orderedHidden = useMemo(() => sortClipsForSidebar(hidden), [hidden])
   const provisional = useMemo(() => sortClipsForSidebar(provisionalClips), [provisionalClips])
   const showProvisional = generating && provisional.length > 0
 
   return (
     <div data-testid="clip-sidebar" className="flex h-full flex-col gap-2 p-3">
       <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Clips {clips.length > 0 && <span className="text-foreground">({clips.length})</span>}
+        Clips {visible.length > 0 && <span className="text-foreground">({visible.length})</span>}
       </h2>
 
       {/* Was the bare text "Generating clips…" for a 2-6 minute operation with no
@@ -66,7 +72,7 @@ export function ClipSidebar(): React.JSX.Element {
         </p>
       )}
 
-      {!generating && clips.length === 0 && (
+      {!generating && visible.length === 0 && hidden.length === 0 && (
         <p className="text-sm text-muted-foreground">No clips yet — run “Auto Generate Clips”.</p>
       )}
 
@@ -82,6 +88,27 @@ export function ClipSidebar(): React.JSX.Element {
             </div>
           ))
         : ordered.map((clip) => <ClipCard key={clip.id} clip={clip} />)}
+
+      {/* Rejected clips live here rather than being destroyed (FEAT-k28j7h). */}
+      {!showProvisional && hidden.length > 0 && (
+        <div className="flex flex-col gap-2 border-t pt-2" data-testid="hidden-clips">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 justify-start px-2 text-[11px] text-muted-foreground"
+            data-testid="hidden-clips-toggle"
+            onClick={() => setShowHidden((v) => !v)}
+          >
+            {hidden.length} hidden · {showHidden ? 'Hide' : 'Show'}
+          </Button>
+          {showHidden &&
+            orderedHidden.map((clip) => (
+              <div key={clip.id} className="opacity-60" data-testid="hidden-clip">
+                <ClipCard clip={clip} />
+              </div>
+            ))}
+        </div>
+      )}
     </div>
   )
 }

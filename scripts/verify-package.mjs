@@ -263,6 +263,53 @@ if (existsSync(asarUnpacked)) {
 }
 log('nonfree scan OK: no --enable-nonfree marker in ffmpeg/ffprobe, app.asar, or unpacked binaries')
 
+// 3c) app.asar must not carry the dead onnxruntime-web payload (BUG-t1xj4d).
+// onnxruntime-web ships every wasm build variant plus sourcemaps — ~95 MB that
+// is never read, because the runtime points `ort.env.wasm.wasmPaths` at the
+// separate <Resources>/onnx copy. Users were downloading it on every install and
+// every update. This is a SIZE regression guard, so it asserts both the absence
+// of those files and a ceiling on the archive, and a positive control so a
+// future over-broad filter cannot quietly delete the wasm the app does use.
+const ASAR_MAX_BYTES = 110 * 1024 * 1024
+if (existsSync(asarPath)) {
+  const asarBytes = statSync(asarPath).size
+  let deadOnnx = []
+  try {
+    const asar = await import('@electron/asar')
+    deadOnnx = asar
+      .listPackage(asarPath)
+      .filter((p) => /onnxruntime-web[/\\]dist[/\\].*\.(wasm|map)$/.test(p))
+  } catch {
+    log('note: @electron/asar unavailable — checking archive size only')
+  }
+  if (deadOnnx.length > 0) {
+    fail(
+      `app.asar carries ${deadOnnx.length} dead onnxruntime-web file(s) the app never reads ` +
+        `(the runtime loads wasm from <Resources>/onnx). Check the ` +
+        `'!node_modules/onnxruntime-web/dist/*' entries in electron-builder.yml \`files\`.\n  ` +
+        deadOnnx.slice(0, 5).join('\n  ')
+    )
+  }
+  if (asarBytes > ASAR_MAX_BYTES) {
+    fail(
+      `app.asar is ${(asarBytes / 1024 / 1024).toFixed(1)} MB, over the ` +
+        `${ASAR_MAX_BYTES / 1024 / 1024} MB ceiling. Something large was added to the ` +
+        `bundle — check for a dependency shipping prebuilt binaries or sourcemaps.`
+    )
+  }
+  log(`app.asar size OK: ${(asarBytes / 1024 / 1024).toFixed(1)} MB, no dead onnxruntime payload`)
+}
+// Positive control: the wasm + model the app ACTUALLY loads must still be there.
+// Asserted again below with the other onnx checks; named here so an over-broad
+// asar filter fails with a message about the filter rather than a puzzling
+// runtime error.
+for (const required of ['ort-wasm-simd-threaded.wasm', 'face_detection_yunet_2023mar.onnx']) {
+  const p = join(resourcesDir, 'onnx', required)
+  if (!existsSync(p)) {
+    fail(`the onnx asset the app actually loads is missing: ${p} (over-broad packaging filter?)`)
+  }
+}
+
 // 4) bundled libass font present (fontsdir for deterministic caption burns)
 const font = join(resourcesDir, 'fonts', 'DejaVuSans.ttf')
 if (!existsSync(font)) fail(`bundled caption font missing: ${font}`)

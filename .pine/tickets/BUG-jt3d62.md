@@ -1,10 +1,10 @@
 ---
 id: BUG-jt3d62
 title: Settings 'force CPU' (PRD §14) is not wired to exports — no CPU fallback path, and it costs export E2E coverage on CI
-status: todo
+status: done
 priority: medium
 created: "2026-08-09T04:28:47Z"
-updated: "2026-08-09T04:28:47Z"
+updated: "2026-08-14T11:53:18Z"
 ---
 
 # Description
@@ -68,3 +68,89 @@ The Setting is stored and displayed but never reaches `exportClip`.
 - `tests/e2e/export.e2e.spec.ts`, `tests/e2e/timeline.e2e.spec.ts`
 
 # Attachments
+
+## Work Evidence
+
+Closed by `pine close --evidence` on 2026-08-14.
+
+- Base: `8533c6bc` (last commit at or before ticket created 2026-08-09)
+- Commits (2):
+  - `100abace` — feat(export): wire 'force CPU' end to end, probe the encoder, fall back automatically (BUG-jt3d62, FEAT-5hnsby)
+  - `14e19185` — fix(ci): the E2E exports need a usable GPU encoder too (BUG-zcqyb7)
+- Files changed (base → working tree):
+
+```
+ .github/workflows/ci.yml                           |  25 +-
+ .pine/memory/ci.md                                 |  13 +-
+ .pine/memory/renderer.md                           |   5 +-
+ .pine/tickets/BUG-2smqpv.md                        | 223 ++++++-
+ .pine/tickets/BUG-e06a9d.md                        | 220 ++++++-
+ .pine/tickets/BUG-jt3d62.md                        |  70 ++
+ .pine/tickets/BUG-y6y5mf.md                        | 226 ++++++-
+ .pine/tickets/BUG-yxvrwx.md                        | 220 ++++++-
+ .pine/tickets/BUG-zcqyb7.md                        | 117 +++-
+ .pine/tickets/FEAT-26tkya.md                       | 101 ++-
+ .pine/tickets/FEAT-7ffxsg.md                       | 216 +++++-
+ .pine/tickets/FEAT-d8b6bj.md                       | 212 +++++-
+ CODE_OF_CONDUCT.md                                 | 131 ++++
+ CONTRIBUTING.md                                    | 191 ++++++
+ LICENSE                                            |  31 +
+ README.md                                          | 163 +++++
+ THIRD-PARTY-LICENSES.md                            |  49 ++
+ build/licenses/ffmpeg/COPYING.GPLv3                | 674 +++++++++++++++++++
+ build/licenses/ffmpeg/README.md                    |  69 ++
+ docs/PACKAGING.md                                  |  71 +-
+ docs/screenshots/01-welcome.png                    | Bin 0 -> 32645 bytes
+ docs/screenshots/02-editor.png                     | Bin 0 -> 92473 bytes
+ electron-builder.yml                               |  25 +
+ package-lock.json                                  | 730 +++++++++++++++++++--
+ package.json                                       |  13 +-
+ scripts/bundle-binaries.mjs                        |  57 ++
+ scripts/capture-screenshots.mjs                    | 130 ++++
+ scripts/verify-package.mjs                         |  60 +-
+ src/main/index.ts                                  |  10 +
+ src/main/ipc/job-start-validation.ts               |  28 +-
+ src/main/ipc/settings.ts                           |  98 ++-
+ src/main/ipc/system.ts                             |   6 +-
+ src/main/services/ass-captions.ts                  |  50 +-
+ src/main/services/encoder-probe.ts                 |  64 ++
+ src/main/services/ffmpeg-caption.ts                |   8 +-
+ src/main/services/ffmpeg-export.ts                 |  25 +
+ src/main/services/jobs/export-runner.ts            |  92 ++-
+ src/main/services/openrouter-models.ts             |  37 +-
+ src/main/utils/paths.ts                            |  29 +-
+ src/renderer/src/assets/index.css                  |  29 +
+ src/renderer/src/components/ExportPanel.tsx        |  10 +-
+ src/renderer/src/components/SettingsPanel.tsx      | 535 ++++++++-------
+ src/renderer/src/components/batch-export.ts        |   7 +
+ src/renderer/src/components/settingsView.ts        |  27 +
+ src/renderer/src/components/ui/dialog.tsx          |  25 +-
+ src/renderer/src/hooks/jobPort.ts                  |  25 +-
+ src/renderer/src/hooks/useImportController.ts      |  10 +
+ .../src/stores/projectStore/exportSlice.ts         |   7 +
+ src/shared/channels.ts                             |  12 +
+ src/shared/jobs.ts                                 |  15 +
+ tests/e2e/export.e2e.spec.ts                       |  27 +-
+ tests/e2e/timeline.e2e.spec.ts                     |  27 +-
+ tests/e2e/vertical-slice.e2e.spec.ts               |  75 ++-
+ tests/fixtures/contract/index.ts                   |  19 +-
+ tests/harness/renderer-env.ts                      |  59 ++
+ tests/mocks/openclip.ts                            |  27 +-
+ tests/unit/ai-ipc.spec.ts                          |  14 +-
+ tests/unit/ass-playres.serial.spec.ts              | 116 ++++
+ tests/unit/ass-playres.spec.ts                     | 127 ++++
+ tests/unit/dialog-scroll.spec.tsx                  | 101 +++
+ tests/unit/force-cpu.spec.ts                       | 160 +++++
+ tests/unit/import-panel-drop.spec.tsx              | 136 ++++
+ tests/unit/job-port-window-delivery.spec.tsx       |  81 +++
+ tests/unit/openrouter-curated.serial.spec.ts       | 111 ++++
+ tests/unit/project-id-path-safety.spec.ts          | 104 +++
+ tests/unit/settings-ipc.spec.ts                    | 134 ++++
+ tests/unit/settings-panel-model-draft.spec.tsx     | 141 ++++
+ tests/unit/settings-tabs.spec.tsx                  |  74 +++
+ tests/unit/use-import-controller.spec.tsx          | 145 ++++
+ tests/unit/use-readiness.spec.tsx                  | 117 ++++
+ tsconfig.test.json                                 |   1 +
+ vitest.config.ts                                   |  12 +-
+ 72 files changed, 6575 insertions(+), 424 deletions(-)
+```

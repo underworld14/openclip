@@ -14,7 +14,9 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ensureFixtures, ffmpegAvailable, fixturesDir, resolveFfmpeg } from '../harness/fixtures'
-import { detectMotion, detectReframe } from '@main/services/reframe-detect'
+import { cpus } from 'node:os'
+import type * as OrtModule from 'onnxruntime-web'
+import { detectMotion, detectReframe, probeReframeModel } from '@main/services/reframe-detect'
 import { REFRAME_MODEL_FILE } from '@main/utils/paths'
 
 const ONNX_DIR = join(process.cwd(), 'build', 'onnx')
@@ -137,3 +139,34 @@ describe.skipIf(!HAVE_FFMPEG)(
     }, 30_000)
   }
 )
+
+/**
+ * Detection throughput (BUG-t1xj4d). `numThreads` was pinned to 1, measured at
+ * 20.63 ms per frame against 7.70 ms threaded — 2.7x slower than the machine can
+ * manage, adding ~1.8 s per 60 s clip and lengthening the window in which
+ * detection starves the main process's event loop.
+ *
+ * Asserted as a THROUGHPUT ceiling rather than an exact thread count, because the
+ * count is deliberately machine-dependent (half the cores, capped at 4) and a
+ * single-core host is a legitimate configuration. The ceiling is generous — the
+ * point is to catch a silent revert to single-threaded, not to police ms.
+ */
+describe.skipIf(!HAVE)('@serial reframe — detection throughput', () => {
+  let prev: string | undefined
+  beforeAll(() => {
+    prev = process.env.OPENCLIP_ONNX_DIR
+    process.env.OPENCLIP_ONNX_DIR = ONNX_DIR
+  })
+  afterAll(() => {
+    if (prev === undefined) delete process.env.OPENCLIP_ONNX_DIR
+    else process.env.OPENCLIP_ONNX_DIR = prev
+  })
+
+  it('uses more than one wasm thread on a multi-core host', async () => {
+    if (cpus().length < 4) return // legitimately single-threaded there
+    await probeReframeModel()
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const ort = require('onnxruntime-web') as typeof OrtModule
+    expect(ort.env.wasm.numThreads).toBeGreaterThan(1)
+  }, 120_000)
+})

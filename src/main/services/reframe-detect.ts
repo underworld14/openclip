@@ -27,6 +27,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import { cpus } from 'node:os'
 import { ffmpegPath, reframeModelPath, reframeWasmDir } from '@main/utils/paths'
 import { assertSafePathArg } from '@main/utils/safe-arg'
 import type { FaceBox, SampleFrame, MotionTimeline, ReframePlan } from '@shared/reframe-plan'
@@ -694,8 +695,25 @@ async function* streamFfmpegStdout(opts: {
 }
 
 /**
+ * How many WASM threads onnxruntime may use for face detection (BUG-t1xj4d).
+ *
+ * This was pinned to 1, which measured 20.63 ms per frame against 7.70 ms when
+ * threaded — 2.7x slower than the machine could manage, adding ~1.8 s per 60 s
+ * clip and lengthening the window in which detection starves the main process's
+ * event loop.
+ *
+ * Capped at half the cores (max 4) rather than all of them: detection runs in
+ * the MAIN process alongside IPC, and the export it feeds is also spawning
+ * ffmpeg. Taking every core would trade a detection speedup for a laggier app
+ * and a slower encode. Floors at 1 so a single-core machine still works.
+ */
+function ortThreads(): number {
+  return Math.max(1, Math.min(4, cpus().length >> 1))
+}
+
+/**
  * Build the real (async) YuNet detector backed by a single lazily-created
- * `onnxruntime-web` InferenceSession (WASM, single-thread, `wasmPaths` =
+ * `onnxruntime-web` InferenceSession (WASM, `wasmPaths` =
  * `reframeWasmDir()`). The session is created on the first frame and reused for
  * the rest of the pass. Each call preprocesses one 640x640x3 RGB frame into NCHW
  * [1,3,640,640] float32 (plain `/255` normalize), runs the model, and
@@ -715,7 +733,7 @@ function defaultYuNetDetector(
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       ortMod = require('onnxruntime-web') as typeof OrtModule
       ortMod.env.wasm.wasmPaths = reframeWasmDir() + '/'
-      ortMod.env.wasm.numThreads = 1
+      ortMod.env.wasm.numThreads = ortThreads()
     }
     if (!sessionP) sessionP = ortMod.InferenceSession.create(reframeModelPath())
     return sessionP
@@ -774,7 +792,7 @@ export async function probeReframeModel(modelSize = 640): Promise<{ outputNames:
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const ort = require('onnxruntime-web') as typeof OrtModule
   ort.env.wasm.wasmPaths = reframeWasmDir() + '/'
-  ort.env.wasm.numThreads = 1
+  ort.env.wasm.numThreads = ortThreads()
   const session = await ort.InferenceSession.create(reframeModelPath())
   const data = new Float32Array(3 * modelSize * modelSize)
   const tensor = new ort.Tensor('float32', data, [1, 3, modelSize, modelSize])

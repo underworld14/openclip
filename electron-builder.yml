@@ -44,6 +44,19 @@ files:
   # of the asar stops documentation that merely *discusses* `--enable-nonfree`
   # from tripping verify-package's byte-scan for a real nonfree ffmpeg binary.
   - '!*.md'
+  # Dead weight inside app.asar (BUG-t1xj4d). onnxruntime-web ships every wasm
+  # build variant (~74 MB) plus sourcemaps (~21 MB), and NONE of them are read at
+  # runtime: `reframe-detect.ts` sets `ort.env.wasm.wasmPaths` to
+  # `reframeWasmDir()` → `<Resources>/onnx`, the separate 13 MB copy staged by
+  # bundle-binaries.mjs. Users were downloading ~95 MB of files the app never
+  # opens, on every install and every update. The JS entry graph
+  # (`dist/ort.node.min.js`, the package `main`) is deliberately kept.
+  - '!node_modules/onnxruntime-web/dist/**/*.map'
+  - '!node_modules/onnxruntime-web/dist/*.wasm'
+  - '!node_modules/onnxruntime-web/docs/**'
+  # lucide-react is compiled INTO the renderer chunk by vite, so its node_modules
+  # copy (~39 MB of per-icon modules) is dead in the packaged app too.
+  - '!node_modules/lucide-react/**'
 # Populate resources/{ffmpeg,whisper}/<plat-arch> from node_modules / the whisper
 # build output before the app is packed (keeps large binaries out of git — plan E.6).
 beforePack: build/bundle-binaries.cjs

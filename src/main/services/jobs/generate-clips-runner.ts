@@ -96,6 +96,12 @@ export function createGenerateClipsRunner(
         targetPlatform: params.targetPlatform,
         minDuration: params.minDuration ?? 15,
         maxDuration: params.maxDuration ?? 90,
+        // Pre-flight targeting (FEAT-n762y6). `segments` arrive already sliced to
+        // `range`; the range itself is carried so the prompt can tell the model
+        // it is looking at a window of a longer video, not the whole thing.
+        range: params.range,
+        keywords: params.keywords,
+        customPrompt: params.customPrompt,
         model: params.model,
         cache: deps.cache,
         signal,

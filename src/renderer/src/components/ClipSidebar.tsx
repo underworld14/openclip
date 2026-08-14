@@ -14,7 +14,16 @@ import { partitionRejected, sortClipsForSidebar } from '@renderer/components/cli
 import { Button } from '@renderer/components/ui/button'
 import { Progress } from '@renderer/components/ui/progress'
 
-export function ClipSidebar(): React.JSX.Element {
+export interface ClipSidebarProps {
+  /**
+   * Reopen the Generate pre-flight panel, pre-filled with the last run's config
+   * (FEAT-n762y6). Optional so the component still mounts bare in tests and in
+   * any caller that has no panel to open.
+   */
+  onRegenerate?: () => void
+}
+
+export function ClipSidebar({ onRegenerate }: ClipSidebarProps = {}): React.JSX.Element {
   const clips = useProjectStore((s) => s.clips)
   const generating = useProjectStore((s) => s.generating)
   const generateError = useProjectStore((s) => s.generateError)
@@ -38,9 +47,28 @@ export function ClipSidebar(): React.JSX.Element {
 
   return (
     <div data-testid="clip-sidebar" className="flex h-full flex-col gap-2 p-3">
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        Clips {visible.length > 0 && <span className="text-foreground">({visible.length})</span>}
-      </h2>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Clips {visible.length > 0 && <span className="text-foreground">({visible.length})</span>}
+        </h2>
+        {/* Regenerate (FEAT-n762y6): the PRD asks for "regenerate with a different
+          prompt/style" and no affordance existed anywhere — a user who wanted
+          funny clips instead of educational ones had no way to ask. Reopens the
+          pre-flight panel pre-filled, so changing one field is one click plus
+          one edit. Hidden while a run is in flight (Cancel owns that state) and
+          before the first run (the header button is the entry point then). */}
+        {onRegenerate && !generating && clips.length > 0 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-xs"
+            data-testid="regenerate-clips"
+            onClick={onRegenerate}
+          >
+            Regenerate
+          </Button>
+        )}
+      </div>
 
       {/* Was the bare text "Generating clips…" for a 2-6 minute operation with no
           way out (FEAT-c0zn3j). Map-reduce always knew its chunk count; nothing

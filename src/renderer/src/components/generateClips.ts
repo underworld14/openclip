@@ -16,29 +16,53 @@
 
 import type { Project, Settings } from '@shared/schema'
 import type { GenerateClipsRequest } from '@shared/channels'
+import {
+  defaultPreflight,
+  normalizePreflight,
+  sliceSegmentsToRange,
+  type PreflightConfig
+} from '@shared/generate-preflight'
 
 /**
  * PURE: build the AI clip-generation request from the open project + app
- * settings. Segments only — the transcript `words` stay local (PRD §16).
+ * settings, optionally overridden by the pre-flight panel (FEAT-n762y6).
+ *
+ * Segments only — the transcript `words` stay local (PRD §16) — and sliced to
+ * the analysis window before they leave, so a user who asked about ten minutes
+ * of a three-hour stream is not billed for the other two hours fifty.
+ *
+ * `preflight` is OPTIONAL: with it absent this reproduces the pre-panel
+ * behaviour exactly (project settings + app settings), which is what keeps every
+ * existing caller and its tests honest.
  */
 export function buildGenerateClipsRequest(
   project: Project,
-  settings: Settings
+  settings: Settings,
+  preflight?: PreflightConfig
 ): GenerateClipsRequest {
+  const cfg = normalizePreflight(
+    preflight ?? defaultPreflight(project, settings),
+    project.sourceVideo.duration
+  )
   return {
     projectId: project.id,
     provider: settings.aiProvider,
     model: settings.model,
-    segments: project.transcript.segments,
+    segments: sliceSegmentsToRange(project.transcript.segments, cfg.range),
     videoTitle: project.name,
     durationSeconds: project.sourceVideo.duration,
-    clipStyle: project.settings.clipStyle,
-    numClips: settings.maxClips,
+    clipStyle: cfg.clipStyle,
+    numClips: cfg.numClips,
     targetPlatform: project.settings.targetPlatform,
     // Pass the user's clip-length bounds so the handler honours them instead of its
     // old hard-coded 15/90 (audit fix openclip-t0v).
-    minDuration: project.settings.minDuration,
-    maxDuration: project.settings.maxDuration
+    minDuration: cfg.minDuration,
+    maxDuration: cfg.maxDuration,
+    // Omitted rather than sent empty, so an untargeted run produces the same
+    // request — and therefore the same cache key — it always did.
+    ...(cfg.range ? { range: cfg.range } : {}),
+    ...(cfg.keywords.length > 0 ? { keywords: cfg.keywords } : {}),
+    ...(cfg.customPrompt ? { customPrompt: cfg.customPrompt } : {})
   }
 }
 
@@ -47,6 +71,8 @@ export interface GenerateClipsHandlerDeps {
   getProject: () => Project | null
   getSettings: () => Settings
   generateClips: (req: GenerateClipsRequest) => Promise<void>
+  /** The pre-flight panel's config, when the user configured the run (FEAT-n762y6). */
+  getPreflight?: () => PreflightConfig | undefined
   /**
    * Surface for the "nothing to generate from" precondition. The button's enabled
    * state (`hasTranscript`) and this handler's precondition (a composable project)
@@ -68,6 +94,8 @@ export function createGenerateClipsHandler(deps: GenerateClipsHandlerDeps): () =
       deps.onError?.('No project is open — import a video before generating clips.')
       return
     }
-    await deps.generateClips(buildGenerateClipsRequest(project, deps.getSettings()))
+    await deps.generateClips(
+      buildGenerateClipsRequest(project, deps.getSettings(), deps.getPreflight?.())
+    )
   }
 }

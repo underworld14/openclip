@@ -282,6 +282,27 @@ export interface JobParams {
      */
     minDuration?: number
     maxDuration?: number
+    /**
+     * Analyse only this span of the source (FEAT-n762y6). The renderer slices
+     * `segments` to it before sending, so this field is carried for the PROMPT
+     * and the cache key — the model is told which window it is looking at, and
+     * two runs over different windows of one transcript don't collide.
+     *
+     * Absent ⇒ the whole video. Without it a 3-hour stream had to be sent whole,
+     * on a key the user pays for, to ask about ten minutes of it.
+     */
+    range?: { start: number; end: number }
+    /**
+     * Keyword targeting (FEAT-n762y6) — spans mentioning these are favoured.
+     * UNTRUSTED user text: fenced in the prompt like the title and transcript.
+     */
+    keywords?: string[]
+    /**
+     * Free-text targeting ("find the parts about pricing"). Also UNTRUSTED and
+     * also fenced — it is the user's own text, but the fencing that protects the
+     * transcript costs nothing here and keeps one rule for all injected data.
+     */
+    customPrompt?: string
   }
 }
 

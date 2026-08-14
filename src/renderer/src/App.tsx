@@ -39,6 +39,12 @@ import { ModelDownloadDialog } from '@renderer/components/ModelDownloadDialog'
 import { Toaster } from '@renderer/components/ui/sonner'
 import { toast } from 'sonner'
 import { createGenerateClipsHandler } from '@renderer/components/generateClips'
+import { GeneratePreflightDialog } from '@renderer/components/GeneratePreflightDialog'
+import {
+  defaultPreflight,
+  preflightToProjectSettings,
+  type PreflightConfig
+} from '@shared/generate-preflight'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useJobsStore } from '@renderer/stores/jobsStore'
 import { useUiStore } from '@renderer/stores/uiStore'
@@ -104,20 +110,53 @@ function App(): React.JSX.Element {
 
   const generating = useProjectStore((s) => s.generating)
 
+  // The PRE-FLIGHT panel (FEAT-n762y6). Generate used to fire straight off the
+  // header button with zero configuration; it now opens a panel whose fields are
+  // all defaulted, so the primary action is still one press away.
+  const [preflightOpen, setPreflightOpen] = useState(false)
+  const [preflight, setPreflight] = useState<PreflightConfig | null>(null)
+
   // The "Auto Generate Clips" header action: build the request from the open
   // project + app settings (segments only — words stay local) and dispatch the
   // clipsSlice action. The ClipSidebar already surfaces generating/generateError.
-  const handleGenerateClips = createGenerateClipsHandler({
-    // composeProject() so the request's segments come from the LIVE transcript
-    // slice (the same source `hasTranscript` gates on), not a possibly-stale
-    // currentProject.transcript.
-    getProject: () => useProjectStore.getState().composeProject(),
-    getSettings: () => useSettingsStore.getState().settings,
-    generateClips: (req) => useProjectStore.getState().generateClips(req),
-    // The button enables on `hasTranscript` while the handler needs a composable
-    // project; if those ever disagree the click must not dead-end (BUG-19bt2k).
-    onError: (message) => toast.error('Cannot generate clips', { description: message })
-  })
+  // Built AT DISPATCH with the config in scope, rather than once per render off
+  // a `preflight` that may be a render behind the press that produced it.
+  const runGenerateClips = (config?: PreflightConfig): Promise<void> =>
+    createGenerateClipsHandler({
+      // composeProject() so the request's segments come from the LIVE transcript
+      // slice (the same source `hasTranscript` gates on), not a possibly-stale
+      // currentProject.transcript.
+      getProject: () => useProjectStore.getState().composeProject(),
+      getSettings: () => useSettingsStore.getState().settings,
+      generateClips: (req) => useProjectStore.getState().generateClips(req),
+      // The button enables on `hasTranscript` while the handler needs a composable
+      // project; if those ever disagree the click must not dead-end (BUG-19bt2k).
+      onError: (message) => toast.error('Cannot generate clips', { description: message }),
+      getPreflight: () => config
+    })()
+
+  /** Open the panel, seeded from the last run (or the project defaults). */
+  const openPreflight = (): void => {
+    const project = useProjectStore.getState().composeProject()
+    if (!project) {
+      toast.error('Cannot generate clips', {
+        description: 'No project is open — import a video before generating clips.'
+      })
+      return
+    }
+    setPreflight(preflight ?? defaultPreflight(project, useSettingsStore.getState().settings))
+    setPreflightOpen(true)
+  }
+
+  /** Submit the panel: remember the config, persist it, and run. */
+  const handlePreflightGenerate = (config: PreflightConfig): void => {
+    setPreflight(config)
+    setPreflightOpen(false)
+    // Persisted onto the project so a later Regenerate — in this session or the
+    // next — opens where the user left off rather than back at the defaults.
+    useProjectStore.getState().setProjectSettings(preflightToProjectSettings(config))
+    void runGenerateClips(config)
+  }
 
   // Wire the debounced autosave subscriber (Wave-1 integration) once for the app
   // lifetime; tears down on unmount.
@@ -272,7 +311,7 @@ function App(): React.JSX.Element {
                     readiness.blockingReason ??
                     (!hasTranscript ? 'Transcribe a video first.' : 'Generate clips with AI')
                   }
-                  onClick={handleGenerateClips}
+                  onClick={openPreflight}
                 >
                   <Sparkles className="size-4" /> Auto Generate Clips
                 </Button>
@@ -296,7 +335,7 @@ function App(): React.JSX.Element {
           {/* RIGHT — translucent clip sidebar (vibrancy). */}
           <aside className="vibrant-sidebar w-72 shrink-0 border-l border-border/60">
             <ScrollArea className="h-full">
-              <ClipSidebar />
+              <ClipSidebar onRegenerate={openPreflight} />
             </ScrollArea>
           </aside>
         </div>
@@ -371,6 +410,20 @@ function App(): React.JSX.Element {
           importCtl.discardPending()
         }}
       />
+
+      {/* The Generate pre-flight panel (FEAT-n762y6). Rendered only while open so
+        it re-seeds from `preflight` on every open — Regenerate must show the
+        LAST run's values, not the ones from two runs ago. */}
+      {preflightOpen && preflight && (
+        <GeneratePreflightDialog
+          open={preflightOpen}
+          duration={useProjectStore.getState().currentProject?.sourceVideo.duration ?? 0}
+          initial={preflight}
+          segments={useProjectStore.getState().transcript?.segments ?? []}
+          onCancel={() => setPreflightOpen(false)}
+          onGenerate={handlePreflightGenerate}
+        />
+      )}
 
       {/* App-wide toasts (autosave failures, etc.). Mounted once. */}
       <Toaster />

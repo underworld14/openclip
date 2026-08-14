@@ -9,6 +9,11 @@
  * (not the store action) → assert clip cards render, proving onClick → handler →
  * generateClips fires end to end. The AI provider is the deterministic fake transport
  * (OPENCLIP_FAKE_TRANSCRIBE), so no key/network is needed.
+ *
+ * The button now opens the PRE-FLIGHT panel first (FEAT-n762y6), so the chain under test
+ * is one link longer: click → panel → Generate → clips. The panel's own design rule is
+ * asserted here in the only place it can be end to end — the run below configures NOTHING,
+ * so if any field were ever made mandatory this test would hang on a disabled button.
  */
 
 import { test, expect, _electron as electron } from '@playwright/test'
@@ -90,9 +95,31 @@ test('the Auto Generate Clips header button is wired: click → clips render (op
     await expect(button).toBeEnabled()
     await button.click()
 
+    // …which now opens the pre-flight panel, pressable immediately with no edits.
+    const panel = win.getByTestId('generate-preflight')
+    await expect(panel).toBeVisible()
+    await win.getByTestId('preflight-submit').click()
+    await expect(panel).toBeHidden()
+
     await expect(win.getByTestId('clip-card').first()).toBeVisible({ timeout: 15000 })
     const clipCount = await win.evaluate(() => window.__openclipTest!.store.getState().clips.length)
     expect(clipCount).toBeGreaterThan(0)
+
+    // Regenerate reopens the panel pre-filled with what the last run used — the
+    // PRD §6.3 criterion that had no affordance at all before this ticket.
+    await win.getByTestId('regenerate-clips').click()
+    await expect(panel).toBeVisible()
+    await win.getByTestId('preflight-style-funny').click()
+    await win.getByTestId('preflight-submit').click()
+    await expect(panel).toBeHidden()
+    // The choice is persisted onto the project, so the NEXT open starts there.
+    await expect
+      .poll(() =>
+        win.evaluate(
+          () => window.__openclipTest!.store.getState().currentProject?.settings.clipStyle
+        )
+      )
+      .toBe('funny')
   } finally {
     await app.close()
   }

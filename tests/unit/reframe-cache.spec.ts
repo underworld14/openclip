@@ -316,6 +316,71 @@ describe('export runner: a cache HIT skips planning entirely', () => {
   })
 })
 
+describe('export runner: a MANUAL crop override', () => {
+  it('skips detection entirely — the user has already decided', async () => {
+    // Auto-reframe was "un-overridable" (FEAT-kzej8t): a wrong-speaker lock had
+    // no recourse but switching reframing off. With an override, running the
+    // face pipeline to discard its answer would be the most expensive no-op in
+    // the whole export.
+    const planReframe = vi.fn(async () => PLAN)
+    const seen: (unknown | undefined)[] = []
+    const exportClip: Deps['exportClip'] = async (o) => {
+      seen.push(o.reframePlan)
+      return { outputPath: '/tmp/out.mp4', width: 1080, height: 1920, durationMs: 1 }
+    }
+    const runner = runnerWith({
+      exportClip,
+      planReframe,
+      readReframePlan: () => undefined,
+      writeReframePlan: () => {}
+    })
+    await runner(
+      { ...EXPORT_PARAMS, reframeCropX: 400, sourceResolution: { width: 1920, height: 1080 } },
+      EMIT as never,
+      CTX as never
+    )
+
+    expect(planReframe).not.toHaveBeenCalled()
+    // A 9:16 window over a 1080-high source is 608 wide, pinned at the given x.
+    expect(seen[0]).toEqual({ mode: 'static', cropW: 608, cropH: 1080, cropX: 400 })
+  })
+
+  it('clamps an override that would hang the window off the source', async () => {
+    const seen: (unknown | undefined)[] = []
+    const exportClip: Deps['exportClip'] = async (o) => {
+      seen.push(o.reframePlan)
+      return { outputPath: '/tmp/out.mp4', width: 1080, height: 1920, durationMs: 1 }
+    }
+    const runner = runnerWith({
+      exportClip,
+      planReframe: async () => PLAN,
+      readReframePlan: () => undefined,
+      writeReframePlan: () => {}
+    })
+    await runner(
+      { ...EXPORT_PARAMS, reframeCropX: 99_999, sourceResolution: { width: 1920, height: 1080 } },
+      EMIT as never,
+      CTX as never
+    )
+    expect((seen[0] as { cropX: number }).cropX).toBe(1920 - 608)
+  })
+
+  it('does not touch the plan CACHE for an override', async () => {
+    // An override is not a detection result; writing it would poison the cache
+    // for the same clip once the override is cleared.
+    const writeReframePlan = vi.fn()
+    const readReframePlan = vi.fn(() => undefined)
+    const runner = runnerWith({
+      planReframe: async () => PLAN,
+      readReframePlan,
+      writeReframePlan
+    })
+    await runner({ ...EXPORT_PARAMS, reframeCropX: 400 }, EMIT as never, CTX as never)
+    expect(writeReframePlan).not.toHaveBeenCalled()
+    expect(readReframePlan).not.toHaveBeenCalled()
+  })
+})
+
 describe('export runner: the face/motion children are PID-tracked', () => {
   it('threads trackPid/untrackPid into planReframe', async () => {
     // These passes spawn ffmpeg directly (they need stdout, which

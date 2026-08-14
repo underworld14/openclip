@@ -165,6 +165,13 @@ export interface JobParams {
      * crop left to move inside a letterboxed frame.
      */
     fitMode?: 'fill' | 'letterbox' | 'blur'
+    /**
+     * Manual reframe override — the crop window's left edge in absolute source
+     * pixels (FEAT-kzej8t). Replaces the computed plan with a static crop there
+     * AND skips face detection, which is the slowest phase of an export.
+     * Absent ⇒ the detector decides.
+     */
+    reframeCropX?: number
     /** Absolute path the user chose to write the final clip to. */
     outputPath: string
     /**

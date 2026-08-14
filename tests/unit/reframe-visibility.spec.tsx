@@ -23,7 +23,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, cleanup, act, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, act, fireEvent, waitFor } from '@testing-library/react'
 import { installRendererEnv } from '../harness/renderer-env'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { PreviewPlayer } from '@renderer/components/PreviewPlayer'
@@ -306,6 +306,81 @@ describe('the plan is fetched, once, and refetched when it changes', () => {
     })
     expect(useProjectStore.getState().reframePlan).toBeNull()
     expect(useProjectStore.getState().reframePlanFor).toBeNull()
+  })
+})
+
+describe('the crop is OVERRIDABLE — the ticket’s title complaint', () => {
+  const shiftOf = (): string => (screen.getByTestId('preview-video') as HTMLElement).style.transform
+
+  /** A drag to `frac` across the frame. jsdom gives every rect zero size, so it is stubbed. */
+  function dragTo(frac: number): void {
+    const frame = screen.getByTestId('preview-frame')
+    frame.getBoundingClientRect = () => ({ left: 0, width: 1000, top: 0, height: 500 }) as DOMRect
+    // jsdom has no pointer capture.
+    ;(frame as HTMLElement & { setPointerCapture: (id: number) => void }).setPointerCapture =
+      () => {}
+    act(() => {
+      fireEvent.pointerDown(frame, { clientX: frac * 1000, pointerId: 1 })
+    })
+  }
+
+  it('records a manual crop from a drag, in SOURCE pixels', () => {
+    // When the detector locks onto the wrong speaker there was no recourse but
+    // to switch reframing off entirely and accept a centre crop.
+    useProjectStore.setState({ reframeMode: 'auto' })
+    render(<PreviewPlayer />)
+    dragTo(0.25)
+    // Frame width 1920, 9:16 crop of a 1080-high source = 608 wide. A pointer a
+    // quarter across wants the window CENTRED at 480, so its left edge is 176.
+    expect(useProjectStore.getState().clips[0].reframeCropX).toBe(176)
+  })
+
+  it('clamps the window inside the source rather than hanging it off the edge', () => {
+    useProjectStore.setState({ reframeMode: 'auto' })
+    render(<PreviewPlayer />)
+    dragTo(0)
+    expect(useProjectStore.getState().clips[0].reframeCropX).toBe(0)
+    dragTo(1)
+    expect(useProjectStore.getState().clips[0].reframeCropX).toBe(1920 - 608)
+  })
+
+  it('does NOT arm the drag when reframing is off', () => {
+    useProjectStore.setState({ reframeMode: 'off' })
+    render(<PreviewPlayer />)
+    dragTo(0.25)
+    expect(useProjectStore.getState().clips[0].reframeCropX).toBeUndefined()
+  })
+
+  it('the override WINS over the computed plan, in the preview', async () => {
+    window.openclip.video.planReframe = (async () => ({ plan: PAN })) as never
+    useProjectStore.setState({ reframeMode: 'auto' })
+    render(<PreviewPlayer />)
+    await waitFor(() => expect(useProjectStore.getState().reframePlan).toEqual(PAN))
+    const planned = shiftOf()
+    dragTo(0.75)
+    await waitFor(() => expect(shiftOf()).not.toBe(planned))
+    // …and the badge says so, rather than still claiming to follow a speaker.
+    expect(screen.getByTestId('reframe-badge').getAttribute('data-reframe-state')).toBe('manual')
+    expect(screen.getByTestId('reframe-badge').textContent).toMatch(/manual/i)
+  })
+
+  it('offers a way back to the detector’s own choice', () => {
+    // Without one, a stray drag pins the crop permanently with no sign of how to
+    // undo it.
+    useProjectStore.setState({ reframeMode: 'auto' })
+    render(<PreviewPlayer />)
+    dragTo(0.25)
+    expect(useProjectStore.getState().clips[0].reframeCropX).toBe(176)
+    act(() => {
+      fireEvent.click(screen.getByTestId('reframe-clear-manual'))
+    })
+    expect(useProjectStore.getState().clips[0].reframeCropX).toBeUndefined()
+  })
+
+  it('hides the reset button when there is no override to reset', () => {
+    useProjectStore.setState({ reframeMode: 'auto' })
+    render(<PreviewPlayer />)
+    expect(screen.queryByTestId('reframe-clear-manual')).toBeNull()
   })
 })
 

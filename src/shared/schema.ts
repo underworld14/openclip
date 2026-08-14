@@ -170,6 +170,20 @@ export const Clip = z.looseObject({
   editedEnd: z.number().optional(), // timeline trim (overrides endTime on export)
   captions: z.array(Caption).optional(),
   thumbnailPath: z.string().optional(),
+  /**
+   * Manual auto-reframe override: the crop window's LEFT EDGE in absolute source
+   * pixels, fixed for the whole clip (FEAT-kzej8t).
+   *
+   * The ticket's title complaint — auto-reframe was "un-overridable". When the
+   * detector locks onto the wrong speaker there was no way to say so; the only
+   * recourse was to turn reframing off entirely and accept a centre crop.
+   *
+   * Set, it REPLACES the computed plan with a static crop at this x, which also
+   * skips the face-detection pass entirely — an override is a decision already
+   * made, and paying for analysis to discard it would be pure waste. Absent ⇒
+   * the detector decides, exactly as before.
+   */
+  reframeCropX: z.number().optional(),
   // Part I — optional 4-D breakdown + opening-hook type (absent on old projects).
   virality: ClipVirality.optional(),
   hookType: z.string().optional(),

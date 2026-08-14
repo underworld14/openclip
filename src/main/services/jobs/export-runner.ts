@@ -254,6 +254,26 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
           if (params.fitMode && params.fitMode !== 'fill') return null
           if (!(params.reframe && params.reframe !== 'off' && params.sourceResolution)) return null
 
+          // A MANUAL override short-circuits detection entirely (FEAT-kzej8t).
+          // The user has already decided where the crop goes; running the face
+          // pipeline to discard its answer would be the most expensive no-op in
+          // the export. Built here rather than in the planner because it is not
+          // a plan — it is the absence of one.
+          if (typeof params.reframeCropX === 'number') {
+            const { width, height } = outputDimensions(params.aspectRatio)
+            const cropH = params.sourceResolution.height
+            const cropW = Math.round((cropH * width) / height / 2) * 2
+            return {
+              mode: 'static',
+              cropW,
+              cropH,
+              cropX: Math.max(
+                0,
+                Math.min(Math.round(params.reframeCropX), params.sourceResolution.width - cropW)
+              )
+            }
+          }
+
           // The plan CACHE (FEAT-rmh08k). `docs/auto-reframe-design.md:50` asked
           // for this and nothing implemented it, so re-exporting the same clip
           // after nudging a caption colour re-ran the whole face pipeline: a 2fps

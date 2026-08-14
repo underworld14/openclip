@@ -18,7 +18,7 @@
  * the burn is libass-exact). Transport / seek / playhead-sync are unchanged.
  */
 
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useBrandStore, activeBrand } from '@renderer/stores/brandStore'
 import { resolveBounds } from '@shared/clip-bounds'
@@ -105,15 +105,67 @@ export function PreviewPlayer(): React.JSX.Element {
    * expressed against the element's own width — which is what `translateX(%)`
    * resolves against.
    */
+  /**
+   * The MANUAL crop override, when the user has dragged one (FEAT-kzej8t).
+   *
+   * The ticket's title complaint: auto-reframe was "un-overridable". When the
+   * detector locked onto the wrong speaker there was no recourse but to switch
+   * reframing off and accept a centre crop. Dragging the preview sets a fixed
+   * crop for the clip, which the export honours (and which skips detection).
+   */
+  const manualCropX = clip?.reframeCropX
+  const updateClip = useProjectStore((s) => s.updateClip)
+  const [dragging, setDragging] = useState(false)
+
+  /** The crop window width the override uses — the same one the runner derives. */
+  const cropW = useMemo(() => {
+    if (!sourceVideo) return 0
+    const [aw, ah] = aspect.split(':').map(Number)
+    return Math.round(((sourceVideo.resolution.height * aw) / ah / 2) * 2) / 1
+  }, [sourceVideo, aspect])
+
   const reframeShiftPct = useMemo(() => {
-    if (reframeMode === 'off' || !reframePlan || !sourceVideo) return 0
+    if (reframeMode === 'off' || !sourceVideo) return 0
+    // A manual override wins over the computed plan, in the preview exactly as
+    // it does in the export.
+    if (typeof manualCropX === 'number' && cropW > 0) {
+      const centre = manualCropX + cropW / 2
+      return -((centre - sourceVideo.resolution.width / 2) / sourceVideo.resolution.width) * 100
+    }
+    if (!reframePlan) return 0
     const cropX = cropXAt(reframePlan, Math.max(0, playhead - (bounds?.start ?? 0)))
     if (cropX === null) return 0
-    const cropW = reframePlan.mode === 'split' ? 0 : reframePlan.cropW
-    if (!(cropW > 0)) return 0
-    const windowCentre = cropX + cropW / 2
+    const planW = reframePlan.mode === 'split' ? 0 : reframePlan.cropW
+    if (!(planW > 0)) return 0
+    const windowCentre = cropX + planW / 2
     return -((windowCentre - sourceVideo.resolution.width / 2) / sourceVideo.resolution.width) * 100
-  }, [reframeMode, reframePlan, sourceVideo, playhead, bounds])
+  }, [reframeMode, reframePlan, sourceVideo, playhead, bounds, manualCropX, cropW])
+
+  /**
+   * Drag horizontally to place the crop.
+   *
+   * The pointer's x within the FRAME maps to the crop window's centre in source
+   * pixels — so the frame you are looking at is the frame you get. Clamped to the
+   * source so the window can never hang off the edge.
+   */
+  const onCropPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
+    if (reframeMode === 'off' || !clip || !sourceVideo || !(cropW > 0)) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    setDragging(true)
+    applyCropFromPointer(e)
+  }
+
+  const applyCropFromPointer = (e: React.PointerEvent<HTMLDivElement>): void => {
+    if (!clip || !sourceVideo || !(cropW > 0)) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    if (rect.width <= 0) return
+    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
+    const centre = frac * sourceVideo.resolution.width
+    const x = Math.round(
+      Math.min(Math.max(0, centre - cropW / 2), sourceVideo.resolution.width - cropW)
+    )
+    updateClip(clip.id, { reframeCropX: x })
+  }
   const captionTemplateId = currentProject?.settings.captionTemplateId ?? ''
   const autoEmoji = currentProject?.settings.autoEmoji ?? 'off'
   const brand = activeBrand(brands, currentProject?.activeBrandId)
@@ -199,7 +251,15 @@ export function PreviewPlayer(): React.JSX.Element {
       <div className="flex w-full items-center justify-center">
         <div
           data-testid="preview-frame"
-          className="relative h-[60vh] max-h-[640px] overflow-hidden rounded-md bg-black"
+          // Dragging places the reframe crop by hand (FEAT-kzej8t). Only armed
+          // while reframing is on; otherwise the frame behaves exactly as before.
+          onPointerDown={onCropPointerDown}
+          onPointerMove={(e) => dragging && applyCropFromPointer(e)}
+          onPointerUp={() => setDragging(false)}
+          onPointerCancel={() => setDragging(false)}
+          className={`relative h-[60vh] max-h-[640px] overflow-hidden rounded-md bg-black ${
+            reframeMode !== 'off' ? 'cursor-ew-resize' : ''
+          }`}
           style={{ aspectRatio: cssAspectRatio(aspect), containerType: 'inline-size' }}
         >
           {src ? (
@@ -268,7 +328,9 @@ export function PreviewPlayer(): React.JSX.Element {
                 <span
                   data-testid="reframe-badge"
                   data-reframe-state={
-                    reframePlanError?.reason ?? (reframePlan ? reframePlan.mode : 'pending')
+                    typeof manualCropX === 'number'
+                      ? 'manual'
+                      : (reframePlanError?.reason ?? (reframePlan ? reframePlan.mode : 'pending'))
                   }
                   title={reframePlanError?.message}
                   className={`absolute right-1.5 top-1.5 rounded px-1.5 py-0.5 text-[10px] ${
@@ -277,18 +339,34 @@ export function PreviewPlayer(): React.JSX.Element {
                       : 'bg-black/70 text-white/90'
                   }`}
                 >
-                  {reframePlanError?.reason === 'detect-failed'
-                    ? 'Face detection failed — centre crop'
-                    : reframePlanError?.reason === 'no-face'
-                      ? 'No face found — centre crop'
-                      : reframePlan?.mode === 'pan'
-                        ? 'Following speaker'
-                        : reframePlan?.mode === 'split'
-                          ? 'Split screen'
-                          : reframePlan?.mode === 'static'
-                            ? 'Locked on speaker'
-                            : 'Analysing…'}
+                  {typeof manualCropX === 'number'
+                    ? 'Manual crop'
+                    : reframePlanError?.reason === 'detect-failed'
+                      ? 'Face detection failed — centre crop'
+                      : reframePlanError?.reason === 'no-face'
+                        ? 'No face found — centre crop'
+                        : reframePlan?.mode === 'pan'
+                          ? 'Following speaker'
+                          : reframePlan?.mode === 'split'
+                            ? 'Split screen'
+                            : reframePlan?.mode === 'static'
+                              ? 'Locked on speaker'
+                              : 'Analysing…'}
                 </span>
+              )}
+              {/* Undo the override. Without a way back, one stray drag would
+                permanently pin the crop with no sign of how to restore the
+                detector's own choice (FEAT-kzej8t). */}
+              {reframeMode !== 'off' && typeof manualCropX === 'number' && clip && (
+                <button
+                  type="button"
+                  data-testid="reframe-clear-manual"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => updateClip(clip.id, { reframeCropX: undefined })}
+                  className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-1.5 py-0.5 text-[10px] text-white/90 hover:bg-black/90"
+                >
+                  Reset crop
+                </button>
               )}
             </>
           ) : (

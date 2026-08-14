@@ -152,6 +152,9 @@ export function buildExportParams(args: {
     // Auto-reframe (Part J): pass the source pixel size + fps so the runner's
     // face-detection step needn't re-ffprobe. Only meaningful when reframe != off.
     reframe: args.reframe,
+    // A manual crop override, when the user has set one (FEAT-kzej8t). It
+    // replaces the computed plan AND skips detection.
+    reframeCropX: args.clip.reframeCropX,
     sourceResolution: {
       width: args.source.resolution.width,
       height: args.source.resolution.height

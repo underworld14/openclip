@@ -378,9 +378,30 @@ export type ReframeRunner = (opts: {
   args: string[]
   binPath?: string
   signal?: AbortSignal
+  /**
+   * PID hooks so the sidecar can SIGKILL this child on quit (FEAT-rmh08k).
+   * OPTIONAL on the seam so every existing fake runner in the specs — which
+   * simply ignores them — stays valid.
+   */
+  onSpawn?: (pid: number) => void
+  onExit?: (pid: number) => void
 }) => Promise<{ stdout?: Buffer; stderr: string }>
 
+/**
+ * Frames per second sampled for face detection. Exported so the plan CACHE can
+ * put it in its key (FEAT-rmh08k) — a plan computed at a different sample rate
+ * is a different plan, and a key that omits it would serve the wrong one.
+ */
+export const DEFAULT_SAMPLE_FPS = 2
+
 export interface DetectReframeOptions {
+  /**
+   * PID hooks so the sidecar can SIGKILL this ffmpeg child on quit (FEAT-rmh08k).
+   * These passes spawn directly (they need stdout, which `runFfmpeg` discards)
+   * and so were the only ffmpeg children in the app with no kill-on-quit backstop.
+   */
+  onSpawn?: (pid: number) => void
+  onExit?: (pid: number) => void
   sourcePath: string
   /** Absolute clip start/end (seconds). */
   startTime: number
@@ -435,7 +456,7 @@ export interface DetectReframeResult {
  * it to `detectMotion` (the live path) too, or collapse the two onto one entry point.
  */
 export async function detectReframe(opts: DetectReframeOptions): Promise<DetectReframeResult> {
-  const sampleFps = opts.sampleFps ?? 2
+  const sampleFps = opts.sampleFps ?? DEFAULT_SAMPLE_FPS
   const modelSize = opts.modelSize ?? 640
   const dur = opts.endTime - opts.startTime
   if (!(dur > 0)) return { samples: [] }
@@ -473,29 +494,46 @@ export async function detectReframe(opts: DetectReframeOptions): Promise<DetectR
       const { stdout } = await opts.run({
         args: sampleArgv,
         binPath: opts.binPath,
-        signal: opts.signal
+        signal: opts.signal,
+        onSpawn: opts.onSpawn,
+        onExit: opts.onExit
       })
       samples = await detectFromFrameChunks(stdout ? [stdout] : [], detectOpts)
     } else {
       samples = await detectFromFrameChunks(
-        streamFfmpegStdout({ args: sampleArgv, binPath: opts.binPath, signal: opts.signal }),
+        streamFfmpegStdout({
+          args: sampleArgv,
+          binPath: opts.binPath,
+          signal: opts.signal,
+          onSpawn: opts.onSpawn,
+          onExit: opts.onExit
+        }),
         detectOpts
       )
     }
 
     if (!opts.motionRois) return { samples }
 
-    // Pass 2 — per-side motion energy.
-    const motionArgv = motionArgs(
-      opts.sourcePath,
-      opts.startTime,
-      opts.endTime,
-      opts.motionRois.left,
-      opts.motionRois.right
-    )
-    const { stderr } = await run({ args: motionArgv, binPath: opts.binPath, signal: opts.signal })
-    const groups = parseMotionMetadata(stderr)
-    const motion = splitMotionSeries(groups, opts.startTime)
+    // Pass 2 — per-side motion energy, DELEGATED to `detectMotion` (FEAT-rmh08k).
+    //
+    // This branch used to inline `motionArgs` → run → `parseMotionMetadata` →
+    // `splitMotionSeries`, which is `detectMotion` verbatim. Production calls
+    // `detectMotion`; only the unit spec reached this branch — so the two copies
+    // could drift apart with the spec still green against the stale one, which is
+    // the worst version of duplicated logic. One implementation now, exercised by
+    // both callers.
+    const motion = await detectMotion({
+      sourcePath: opts.sourcePath,
+      startTime: opts.startTime,
+      endTime: opts.endTime,
+      left: opts.motionRois.left,
+      right: opts.motionRois.right,
+      signal: opts.signal,
+      binPath: opts.binPath,
+      onSpawn: opts.onSpawn,
+      onExit: opts.onExit,
+      run
+    })
     return { samples, motion }
   } finally {
     if (ownDetector) await (detector as { dispose?: () => Promise<void> }).dispose?.()
@@ -560,6 +598,9 @@ async function defaultRunFfmpegCaptureStdout(opts: {
   args: string[]
   binPath?: string
   signal?: AbortSignal
+  /** PID tracking, mirroring `ffmpeg-core.runFfmpeg` (FEAT-rmh08k). */
+  onSpawn?: (pid: number) => void
+  onExit?: (pid: number) => void
 }): Promise<{ stdout?: Buffer; stderr: string }> {
   // The frame-sampling pass writes raw video to stdout, which the trunk
   // `runFfmpeg` discards; spawn directly so we can collect it. Motion-only callers
@@ -567,6 +608,15 @@ async function defaultRunFfmpegCaptureStdout(opts: {
   const bin = opts.binPath ?? ffmpegPath()
   return new Promise((resolve, reject) => {
     const child = spawn(bin, opts.args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    // Register with the sidecar so app-quit has an OS-level SIGKILL backstop for
+    // this child too (FEAT-rmh08k). These spawns bypass `ffmpeg-core.runFfmpeg`
+    // to capture stdout, and bypassed its PID tracking with it — so the reframe
+    // and motion passes were the only ffmpeg children in the app that a quit
+    // could orphan.
+    if (typeof child.pid === 'number') opts.onSpawn?.(child.pid)
+    const untrack = (): void => {
+      if (typeof child.pid === 'number') opts.onExit?.(child.pid)
+    }
     const out: Buffer[] = []
     let stderr = ''
     const onAbort = (): void => {
@@ -582,10 +632,14 @@ async function defaultRunFfmpegCaptureStdout(opts: {
     })
     child.on('error', (err) => {
       opts.signal?.removeEventListener('abort', onAbort)
+      untrack()
       reject(err)
     })
     child.on('close', (code) => {
       opts.signal?.removeEventListener('abort', onAbort)
+      // Untrack BEFORE resolving: the OS can recycle this pid the moment the
+      // child exits, and a later quit must not SIGKILL whatever inherited it.
+      untrack()
       if (opts.signal?.aborted) {
         reject(new Error('ffmpeg aborted'))
         return
@@ -652,9 +706,13 @@ async function* streamFfmpegStdout(opts: {
   args: string[]
   binPath?: string
   signal?: AbortSignal
+  /** PID tracking, mirroring `ffmpeg-core.runFfmpeg` (FEAT-rmh08k). */
+  onSpawn?: (pid: number) => void
+  onExit?: (pid: number) => void
 }): AsyncGenerator<Buffer> {
   const bin = opts.binPath ?? ffmpegPath()
   const child = spawn(bin, opts.args, { stdio: ['ignore', 'pipe', 'pipe'] })
+  if (typeof child.pid === 'number') opts.onSpawn?.(child.pid)
   let stderr = ''
   child.stderr?.on('data', (b: Buffer) => {
     stderr += b.toString()
@@ -688,9 +746,12 @@ async function* streamFfmpegStdout(opts: {
     opts.signal?.removeEventListener('abort', onAbort)
     // Tear the child down on ANY early exit — not just abort (review follow-up to
     // openclip-l41): if the consumer (detectFromFrameChunks → YuNet) throws mid-stream, the
-    // generator's return() runs this finally; without a kill the ffmpeg child is orphaned
-    // (the reframe spawns aren't PID-tracked). kill() on an already-exited child is a no-op.
+    // generator's return() runs this finally; without a kill the ffmpeg child is orphaned.
+    // kill() on an already-exited child is a no-op.
     if (!child.killed) child.kill('SIGKILL')
+    // …and drop it from the sidecar's kill list, so a later quit cannot SIGKILL a
+    // pid the OS has since recycled (FEAT-rmh08k).
+    if (typeof child.pid === 'number') opts.onExit?.(child.pid)
   }
 }
 
@@ -805,6 +866,13 @@ export async function probeReframeModel(modelSize = 640): Promise<{ outputNames:
 // ============================================================================
 
 export interface DetectMotionOptions {
+  /**
+   * PID hooks so the sidecar can SIGKILL this ffmpeg child on quit (FEAT-rmh08k).
+   * These passes spawn directly (they need stdout, which `runFfmpeg` discards)
+   * and so were the only ffmpeg children in the app with no kill-on-quit backstop.
+   */
+  onSpawn?: (pid: number) => void
+  onExit?: (pid: number) => void
   sourcePath: string
   startTime: number
   endTime: number
@@ -817,11 +885,18 @@ export interface DetectMotionOptions {
 
 /** Run ONLY the per-side motion pass → a `MotionTimeline` (absolute source times). */
 export async function detectMotion(opts: DetectMotionOptions): Promise<MotionTimeline> {
-  const run =
-    opts.run ??
-    ((a) => defaultRunFfmpegCaptureStdout({ args: a.args, binPath: a.binPath, signal: a.signal }))
+  // Forward the WHOLE options object, not a hand-picked subset: the previous
+  // three-field spread silently dropped `onSpawn`/`onExit`, which would have left
+  // the motion child untracked while looking wired up (FEAT-rmh08k).
+  const run = opts.run ?? defaultRunFfmpegCaptureStdout
   const argv = motionArgs(opts.sourcePath, opts.startTime, opts.endTime, opts.left, opts.right)
-  const { stderr } = await run({ args: argv, binPath: opts.binPath, signal: opts.signal })
+  const { stderr } = await run({
+    args: argv,
+    binPath: opts.binPath,
+    signal: opts.signal,
+    onSpawn: opts.onSpawn,
+    onExit: opts.onExit
+  })
   return splitMotionSeries(parseMotionMetadata(stderr), opts.startTime)
 }
 
@@ -877,6 +952,9 @@ export interface PlanReframeOptions {
   motion?: typeof detectMotion
   /** Face-sampling sub-progress, so 'analyzing' is not a frozen 0% (FEAT-8559h1). */
   onFrame?: (framesDone: number, frameBudget: number) => void
+  /** PID hooks, threaded into BOTH the face pass and the motion pass (FEAT-rmh08k). */
+  onSpawn?: (pid: number) => void
+  onExit?: (pid: number) => void
 }
 
 /**
@@ -898,7 +976,9 @@ export async function planReframe(opts: PlanReframeOptions): Promise<ReframePlan
     sampleFps: opts.sampleFps,
     signal: opts.signal,
     binPath: opts.binPath,
-    onFrame: opts.onFrame
+    onFrame: opts.onFrame,
+    onSpawn: opts.onSpawn,
+    onExit: opts.onExit
   })
   const filtered = filterFaceOutliers(samples, opts.source)
   if (filtered.length === 0) return null
@@ -922,7 +1002,9 @@ export async function planReframe(opts: PlanReframeOptions): Promise<ReframePlan
         left: rois.left,
         right: rois.right,
         signal: opts.signal,
-        binPath: opts.binPath
+        binPath: opts.binPath,
+        onSpawn: opts.onSpawn,
+        onExit: opts.onExit
       })
     } catch {
       motion = undefined // motion pass failed → planner falls back to static-on-dominant
@@ -933,7 +1015,15 @@ export async function planReframe(opts: PlanReframeOptions): Promise<ReframePlan
   // `-ss`-rebased 0-based PTS, NOT the absolute source time. detectReframe stamps
   // sample/motion times absolute (startTime-offset), so we subtract startTime here
   // → the pan `xExpr` is authored in clip-relative time and lines up with the cut.
-  const rebasedSamples = samples.map((s) => ({ ...s, timeMs: s.timeMs - opts.startTime * 1000 }))
+  //
+  // Rebasing the FILTERED set (FEAT-rmh08k): this used to rebase the raw samples
+  // and let `buildReframePlan` filter them a second time, so the same two-pass
+  // outlier filter ran twice per export over the same faces — and the clusters
+  // that decided whether to pay for the motion pass were derived from a
+  // separately-computed set than the clusters that built the plan. Identical
+  // output (the filter is purely spatial; `timeMs` is carried, never read), one
+  // pass instead of two, one set of clusters instead of two.
+  const rebasedSamples = filtered.map((s) => ({ ...s, timeMs: s.timeMs - opts.startTime * 1000 }))
   const rebasedMotion: MotionTimeline | undefined = motion
     ? { ...motion, times: motion.times.map((t) => t - opts.startTime) }
     : undefined
@@ -943,6 +1033,7 @@ export async function planReframe(opts: PlanReframeOptions): Promise<ReframePlan
     motion: rebasedMotion,
     source: opts.source,
     aspect: opts.aspect,
-    mode: opts.mode
+    mode: opts.mode,
+    preFiltered: true
   })
 }

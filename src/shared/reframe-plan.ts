@@ -83,6 +83,20 @@ export interface BuildReframePlanArgs {
   aspect: AspectRatio
   /** 'auto' → static/pan (1–2 speakers); 'split' → force 2-up split when 2 faces. */
   mode: Exclude<ReframeMode, 'off'>
+  /**
+   * `samples` have ALREADY been through `filterFaceOutliers` (FEAT-rmh08k).
+   *
+   * `planReframe` has to filter before it can cluster — the clusters decide
+   * whether the expensive motion pass runs at all — and then handed the RAW
+   * samples here, so the same O(n) two-pass filter ran twice per export over the
+   * same faces.
+   *
+   * This flag rather than "just filter here too": the σ gate is computed ACROSS
+   * the surviving set, so re-running it on an already-pruned set has a tighter σ
+   * and can prune further. Skipping it keeps the plan identical to what the
+   * double call produced, instead of subtly narrower.
+   */
+  preFiltered?: boolean
 }
 
 // ============================================================================
@@ -644,7 +658,7 @@ export function reduceKeyframes(
  */
 export function buildReframePlan(args: BuildReframePlanArgs): ReframePlan | null {
   const { source, aspect, mode } = args
-  const samples = filterFaceOutliers(args.samples, source)
+  const samples = args.preFiltered ? args.samples : filterFaceOutliers(args.samples, source)
   if (samples.length === 0) return null
 
   const { cropW, cropH } = cropWidthFor(source, aspect)

@@ -58,7 +58,11 @@ const paramsByKind = {
     aspectRatio: z.enum(ASPECTS),
     // Selects the ENCODER, so it is a spawn-affecting value: validate it here
     // rather than letting looseObject wave through a non-boolean (BUG-jt3d62).
-    forceCpu: z.boolean().optional()
+    forceCpu: z.boolean().optional(),
+    // Selects the FILTERGRAPH, for the same reason (FEAT-bd87vz). An unrecognised
+    // value would fall through `fitChain`'s default to `fill` and silently
+    // centre-crop — a wrong export rather than a rejected request.
+    fitMode: z.enum(['fill', 'letterbox', 'blur']).optional()
   }),
   'model-download': z.looseObject({ model: z.enum(WHISPER_MODELS) }),
   'url-download': z.looseObject({

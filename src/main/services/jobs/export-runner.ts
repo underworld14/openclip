@@ -23,7 +23,7 @@
  * runner. The fontsdir comes from trunk-frozen `paths.fontsDir()`.
  */
 
-import { rmSync } from 'node:fs'
+import { rmSync, statSync } from 'node:fs'
 import type { JobResult, JobParams } from '@shared/jobs'
 import type { JobRunner, JobEmitter, JobRunnerContext } from '@main/services/sidecar-manager'
 import {
@@ -37,10 +37,23 @@ import {
   writeSidecarSubtitles
 } from '@main/services/ffmpeg-caption'
 import { detectSilences as defaultDetectSilences } from '@main/services/silence-detect'
-import { planReframe as defaultPlanReframe } from '@main/services/reframe-detect'
+import {
+  planReframe as defaultPlanReframe,
+  DEFAULT_SAMPLE_FPS
+} from '@main/services/reframe-detect'
+import {
+  reframeCacheKey,
+  readReframePlan as defaultReadReframePlan,
+  writeReframePlan as defaultWriteReframePlan
+} from '@main/services/reframe-cache'
 import { computeKeepRanges, removesAnything, type Range } from '@shared/keep-ranges'
 import type { ReframePlan } from '@shared/reframe-plan'
-import { fontsDir as defaultFontsDir, jobTempDir, TEMP_NAMES } from '@main/utils/paths'
+import {
+  cacheDirFor as defaultCacheDirFor,
+  fontsDir as defaultFontsDir,
+  jobTempDir,
+  TEMP_NAMES
+} from '@main/utils/paths'
 
 export interface ExportRunnerDeps {
   /** The cut+reframe+re-encode service (injected for tests). */
@@ -98,7 +111,24 @@ export interface ExportRunnerDeps {
     mode: 'auto' | 'split'
     signal?: AbortSignal
     onFrame?: (framesDone: number, frameBudget: number) => void
+    /** PID hooks for the face/motion ffmpeg children (FEAT-rmh08k). */
+    onSpawn?: (pid: number) => void
+    onExit?: (pid: number) => void
   }) => Promise<ReframePlan | null>
+  /**
+   * The reframe-plan cache (FEAT-rmh08k), injected so the runner's specs stay
+   * off the filesystem — and so a test can assert that a HIT skips planning
+   * entirely, which is the whole point of the feature.
+   */
+  cacheDirFor?: (projectId: string) => string
+  readReframePlan?: (dir: string, key: string) => { plan: ReframePlan | null } | undefined
+  writeReframePlan?: (dir: string, key: string, plan: ReframePlan | null) => void
+  /**
+   * Source mtime for the cache key. Injected for the same reason; the default
+   * returns 0 when the file cannot be stat'd, which is a stable key rather than
+   * a throw — a missing source will fail later, in the encode, with a real error.
+   */
+  sourceMtimeMs?: (sourcePath: string) => number
   /** Resolve the per-job temp .ass path (injected for tests). */
   resolveAssPath?: (projectId: string, jobId: string, clipId: string) => string
   /**
@@ -147,6 +177,21 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
   const writeClipCaptions = deps.writeClipCaptions ?? defaultWriteClipCaptions
   const detectSilences = deps.detectSilences ?? defaultDetectSilences
   const planReframe = deps.planReframe ?? defaultPlanReframe
+  // The reframe-plan cache (FEAT-rmh08k).
+  const cacheDirFor = deps.cacheDirFor ?? defaultCacheDirFor
+  const readPlan = deps.readReframePlan ?? defaultReadReframePlan
+  const writePlan = deps.writeReframePlan ?? defaultWriteReframePlan
+  const sourceMtimeMs =
+    deps.sourceMtimeMs ??
+    ((p: string): number => {
+      try {
+        return statSync(p).mtimeMs
+      } catch {
+        // A stable key beats a throw: a source that cannot be stat'd will fail
+        // in the encode, with an error that says so.
+        return 0
+      }
+    })
   const resolveAssPath =
     deps.resolveAssPath ??
     ((projectId, jobId, clipId) =>
@@ -208,8 +253,46 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
           // the whole export. Skip it rather than paying for an ignored result.
           if (params.fitMode && params.fitMode !== 'fill') return null
           if (!(params.reframe && params.reframe !== 'off' && params.sourceResolution)) return null
+
+          // The plan CACHE (FEAT-rmh08k). `docs/auto-reframe-design.md:50` asked
+          // for this and nothing implemented it, so re-exporting the same clip
+          // after nudging a caption colour re-ran the whole face pipeline: a 2fps
+          // decode, YuNet on every sampled frame, and a second motion pass.
+          //
+          // `null` is cached too — "no usable face, centre-crop" costs exactly as
+          // much to compute as a plan does — which is why the hit is an object
+          // wrapper rather than the plan itself.
+          const cache = ((): { dir: string; key: string } | null => {
+            try {
+              return {
+                dir: cacheDirFor(params.projectId),
+                key: reframeCacheKey({
+                  clipId: params.clipId,
+                  startTime: params.startTime,
+                  endTime: params.endTime,
+                  sourceMtimeMs: sourceMtimeMs(params.sourcePath),
+                  sampleFps: DEFAULT_SAMPLE_FPS,
+                  aspect: params.aspectRatio,
+                  mode: params.reframe
+                })
+              }
+            } catch {
+              // Resolving the cache location is not allowed to break the export.
+              // The whole module holds this rule; this is the one call that sits
+              // outside it, because it reaches Electron's `app` for the temp root.
+              return null
+            }
+          })()
+          const hit = cache ? readPlan(cache.dir, cache.key) : undefined
+          if (hit) {
+            // Jump the bar past the phase we just skipped, so a cached export
+            // does not look stalled at 0% before encoding starts.
+            emit.progress(ANALYZE_PROGRESS_CEILING, 'analyzing')
+            return hit.plan
+          }
+
           try {
-            return await planReframe({
+            const plan = await planReframe({
               sourcePath: params.sourcePath,
               startTime: params.startTime,
               endTime: params.endTime,
@@ -217,6 +300,13 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
               aspect: params.aspectRatio,
               mode: params.reframe,
               signal: ctx.signal,
+              // Give the sidecar an OS-level kill backstop for the face/motion
+              // ffmpeg children too (FEAT-rmh08k). They spawn directly rather
+              // than through `ffmpeg-core.runFfmpeg` (they need stdout, which it
+              // discards) and so were the only ffmpeg children in the app that a
+              // quit or a crash could orphan.
+              onSpawn: (pid) => ctx.trackPid(pid),
+              onExit: (pid) => ctx.untrackPid?.(pid),
               // Face sampling is the long pole of 'analyzing'. Map it into the
               // 0..ANALYZE_PROGRESS_CEILING band so the bar visibly moves
               // instead of sitting at 0 for the slowest phase (FEAT-8559h1);
@@ -230,6 +320,8 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
                   'analyzing'
                 )
             })
+            if (cache) writePlan(cache.dir, cache.key, plan)
+            return plan
           } catch (e) {
             // Best-effort → static center-crop (never block the export). LOG it, though:
             // a missing/broken model is otherwise indistinguishable from "no faces found".

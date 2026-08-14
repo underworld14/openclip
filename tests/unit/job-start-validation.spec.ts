@@ -35,6 +35,30 @@ describe('validateJobStart (openclip-qki)', () => {
     expect((out.params as { captions?: unknown }).captions).toBeDefined()
   })
 
+  it('rejects an unrecognised fitMode rather than silently centre-cropping', () => {
+    // `fitMode` selects the FILTERGRAPH, so it is spawn-affecting in exactly the
+    // way `forceCpu` selects the encoder (FEAT-bd87vz). Waved through by
+    // `looseObject`, a junk value falls to `fitChain`'s `fill` default and the
+    // user gets a cropped export instead of an error.
+    const base = {
+      projectId: 'p1',
+      clipId: 'c1',
+      sourcePath: '/src/in.mp4',
+      outputPath: '/out/clip.mp4',
+      startTime: 1,
+      endTime: 5,
+      aspectRatio: '9:16' as const
+    }
+    for (const fitMode of ['letterbox', 'blur', 'fill'] as const) {
+      expect(validateJobStart({ kind: 'export', params: { ...base, fitMode } }).kind).toBe('export')
+    }
+    expect(() =>
+      validateJobStart({ kind: 'export', params: { ...base, fitMode: 'stretch' } })
+    ).toThrow(/INPUT_INVALID/)
+    // …and absent stays valid: it means `fill`, the historical behaviour.
+    expect(validateJobStart({ kind: 'export', params: base }).kind).toBe('export')
+  })
+
   it('rejects an unknown job kind', () => {
     expect(() => validateJobStart({ kind: 'rm-rf', params: {} })).toThrow(/INPUT_INVALID/)
   })

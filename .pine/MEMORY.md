@@ -11,3 +11,5 @@ Ticket-scoped one-shots still use `pine learn --scope ticket`.
 ## Gotchas
 
 ## Log
+- 2026-08-14: A live probe of the packaged app catches wiring gaps that green unit tests, typecheck and lint all miss — twice in one run a feature was fully implemented and tested with the final render never wired up (the clip poster <img> was never added to ClipCard; the plain -vf export path never passed fitMode through). Drive the built app with Playwright and MEASURE the result before calling a UI feature done.
+- 2026-08-14: window.openclip is frozen by contextBridge, so a Playwright probe cannot stub bridge methods from inside the renderer — the assignment silently does nothing. Stub at the main-process boundary (env overrides like OPENCLIP_FFMPEG) or assert against the real IPC.

@@ -115,6 +115,15 @@ export enum IPCChannels {
   JOB_PORT = 'job:port',
   // System
   OPEN_FOLDER = 'system:open-folder',
+  /**
+   * Extract a poster frame at a clip's IN point (FEAT-71ay4e).
+   *
+   * `generateThumbnail` has existed in `ffmpeg-export.ts` since it was written,
+   * with ZERO callers, and `Clip.thumbnailPath` was never populated — so every
+   * clip card was text-only and the user had to click in and scrub to judge a
+   * suggestion. This is the missing caller.
+   */
+  CLIP_THUMBNAIL = 'video:clip-thumbnail',
   SHOW_SAVE_DIALOG = 'system:save-dialog',
   /**
    * Write a transcript to disk as SRT / WebVTT / plain text (FEAT-vwvgs0).
@@ -420,6 +429,17 @@ export interface ChannelMap {
       clip?: { start: number; end: number }
     },
     { path: string }
+  >
+  [IPCChannels.CLIP_THUMBNAIL]: ChannelPayload<
+    {
+      projectId: string
+      clipId: string
+      sourcePath: string
+      /** Absolute seconds to grab the frame at (the clip's effective IN point). */
+      atTime: number
+      aspectRatio: '9:16' | '1:1' | '4:5' | '16:9'
+    },
+    { thumbnailPath: string }
   >
   [IPCChannels.SHOW_SAVE_DIALOG]: ChannelPayload<
     { defaultPath?: string; filters?: Array<{ name: string; extensions: string[] }> },

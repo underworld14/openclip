@@ -90,9 +90,12 @@ function cspHeader(): string {
       // and may eval; without these the renderer can't boot in dev (see above).
       "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob:",
+      `img-src 'self' data: blob: ${MEDIA_SCHEME}:`,
       // The privileged `openclip-media:` scheme serves the source video to the
       // preview <video> (PRD §6.6); it bypasses CSP itself but is listed here too.
+      // `img-src` carries it as well, for the clip poster frames (FEAT-71ay4e) —
+      // same scheme, same per-path allow-list in `media-protocol.ts`, so this
+      // grants no reach the <video> did not already have.
       `media-src 'self' blob: file: ${MEDIA_SCHEME}:`,
       "connect-src 'self' ws: http: https:",
       "font-src 'self' data:"
@@ -102,7 +105,7 @@ function cspHeader(): string {
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
+    `img-src 'self' data: blob: ${MEDIA_SCHEME}:`,
     `media-src 'self' blob: file: ${MEDIA_SCHEME}:`,
     // ── CSP TIGHTENING (audit fix — revert THIS LINE alone to restore `https:`) ──
     // The renderer makes NO direct outbound network requests: every AI provider

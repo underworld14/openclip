@@ -5,7 +5,7 @@
  * (react-refresh/only-export-components).
  */
 
-import type { Clip, ClipVirality } from '@shared/schema'
+import type { Clip, ClipVirality, TranscriptSegment } from '@shared/schema'
 import { formatSeconds } from '@renderer/components/format-time'
 
 /** Format absolute seconds as M:SS (no hours rollover). Thin wrapper over the single
@@ -44,6 +44,14 @@ export interface ClipViewModel {
   suggestedCaption?: string
   /** AI-suggested hashtags, when the project has them. */
   hashtags?: string[]
+  /**
+   * What is actually SAID in the clip, from the transcript. Undefined when there
+   * is no transcript (or no words in the span) — the card then shows nothing
+   * rather than an empty quote block.
+   */
+  excerpt?: string
+  /** Poster frame extracted at the clip's IN point, when one has been made. */
+  thumbnailPath?: string
   /** Part I — 0-100 virality total + the four sub-score bars (undefined on old clips). */
   viralityTotal?: number
   viralityBars?: ViralityBar[]
@@ -61,8 +69,42 @@ export function viralityBars(v: ClipVirality): ViralityBar[] {
   ]
 }
 
+/**
+ * The clip's ACTUAL spoken words, from the transcript inside its bounds
+ * (FEAT-71ay4e).
+ *
+ * The card showed the AI's title and its pitch — and never a syllable of what is
+ * actually said in the span. To judge a suggestion the user had to click each
+ * card and scrub. This is the cheapest credibility win available: the transcript
+ * is already in the store, and seeing the real words next to the AI's claim about
+ * them is what makes the claim checkable.
+ *
+ * Partial overlaps count: a segment straddling the IN point is part of what the
+ * viewer will hear.
+ */
+export function clipExcerpt(
+  segments: TranscriptSegment[] | undefined,
+  start: number,
+  end: number,
+  maxChars = 240
+): string | undefined {
+  if (!segments || segments.length === 0) return undefined
+  const text = segments
+    .filter((s) => s.end > start && s.start < end)
+    .map((s) => s.text.trim())
+    .filter(Boolean)
+    .join(' ')
+    .trim()
+  if (!text) return undefined
+  if (text.length <= maxChars) return text
+  // Cut on a word boundary — a mid-word truncation reads as corruption.
+  const cut = text.slice(0, maxChars)
+  const lastSpace = cut.lastIndexOf(' ')
+  return `${(lastSpace > maxChars * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`
+}
+
 /** Derive the renderable view model from a Clip (PRD §9.3). */
-export function clipViewModel(clip: Clip): ClipViewModel {
+export function clipViewModel(clip: Clip, segments?: TranscriptSegment[]): ClipViewModel {
   const start = clip.editedStart ?? clip.startTime
   const end = clip.editedEnd ?? clip.endTime
   return {
@@ -94,6 +136,8 @@ export function clipViewModel(clip: Clip): ClipViewModel {
      */
     suggestedCaption: clip.suggestedCaption,
     hashtags: clip.hashtags,
+    excerpt: clipExcerpt(segments, start, end),
+    thumbnailPath: clip.thumbnailPath,
     viralityTotal: clip.virality?.total,
     viralityBars: clip.virality ? viralityBars(clip.virality) : undefined,
     hookType: clip.hookType

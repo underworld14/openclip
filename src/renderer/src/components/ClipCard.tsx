@@ -7,11 +7,13 @@
  * buttons wired to the projectStore.
  */
 
+import { useState } from 'react'
 import type { Clip } from '@shared/schema'
 import { toast } from 'sonner'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { Button } from '@renderer/components/ui/button'
 import { clipViewModel } from '@renderer/components/clipView'
+import { sourceMediaUrl } from '@renderer/components/source-media'
 
 export interface ClipCardProps {
   clip?: Clip
@@ -21,8 +23,14 @@ export function ClipCard({ clip }: ClipCardProps): React.JSX.Element {
   const approveClip = useProjectStore((s) => s.approveClip)
   const rejectClip = useProjectStore((s) => s.rejectClip)
   const restoreClip = useProjectStore((s) => s.restoreClip)
+  // The transcript, for the excerpt: the card showed the AI's pitch and never a
+  // syllable of what is actually said in the span (FEAT-71ay4e).
+  const transcript = useProjectStore((s) => s.transcript)
   const selectClip = useProjectStore((s) => s.selectClip)
   const selectedClipId = useProjectStore((s) => s.selectedClipId)
+  // The source path, for the hover preview (FEAT-71ay4e).
+  const sourcePath = useProjectStore((s) => s.currentProject?.sourceVideo.path ?? null)
+  const [hovering, setHovering] = useState(false)
 
   if (!clip) {
     return (
@@ -32,14 +40,22 @@ export function ClipCard({ clip }: ClipCardProps): React.JSX.Element {
     )
   }
 
-  const vm = clipViewModel(clip)
+  const vm = clipViewModel(clip, transcript?.segments)
   const selected = selectedClipId === clip.id
+  // `#t=start,end` scopes the hover preview to the clip's own span, so the user
+  // sees THIS clip rather than the top of the source (FEAT-71ay4e).
+  const base = sourceMediaUrl(sourcePath)
+  const previewSrc = base
+    ? `${base}#t=${clip.editedStart ?? clip.startTime},${clip.editedEnd ?? clip.endTime}`
+    : null
 
   return (
     <div
       data-testid="clip-card"
       data-clip-id={clip.id}
       data-selected={selected}
+      onMouseEnter={() => setHovering(true)}
+      onMouseLeave={() => setHovering(false)}
       // A PLAIN CONTAINER (FEAT-ybhdhz). It used to carry role="button" +
       // tabIndex + an Enter/Space handler while nesting real <Button>s for
       // Approve and Reject — interactive controls inside an interactive control,
@@ -59,6 +75,39 @@ export function ClipCard({ clip }: ClipCardProps): React.JSX.Element {
         onClick={() => selectClip(clip.id)}
         className="flex flex-col gap-1 text-left"
       >
+        {/* The poster frame at the clip's IN point (FEAT-71ay4e). Results were a
+          wall of identical text cards; a frame is what makes one scannable from
+          another. Served over the privileged `openclip-media:` scheme — the JPEG
+          lives in the per-project cache dir and was granted at generation. */}
+        {vm.thumbnailPath &&
+          (hovering && previewSrc ? (
+            /* Mounted ONLY while hovered (FEAT-71ay4e). The ticket asks for at
+              most 2-3 concurrent <video> elements; mounting on hover caps it at
+              one, without an IntersectionObserver to keep in sync. The `#t=`
+              fragment scopes playback to the clip's own span. */
+            <video
+              data-testid="clip-preview"
+              src={previewSrc}
+              muted
+              loop
+              autoPlay
+              playsInline
+              preload="metadata"
+              aria-hidden="true"
+              className="mb-1 aspect-[9/16] w-16 shrink-0 self-start rounded object-cover"
+            />
+          ) : (
+            <img
+              data-testid="clip-thumbnail"
+              src={sourceMediaUrl(vm.thumbnailPath) ?? undefined}
+              alt=""
+              // Decorative: the title, range and excerpt already name the clip, so
+              // an alt here would just be read twice by a screen reader.
+              aria-hidden="true"
+              loading="lazy"
+              className="mb-1 aspect-[9/16] w-16 shrink-0 self-start rounded object-cover"
+            />
+          ))}
         <div className="flex items-center justify-between gap-2">
           <span className="line-clamp-2 font-medium">{vm.title}</span>
           <span
@@ -80,6 +129,16 @@ export function ClipCard({ clip }: ClipCardProps): React.JSX.Element {
           )}
         </div>
         <p className="line-clamp-2 text-xs text-muted-foreground">{vm.hook}</p>
+        {/* What is ACTUALLY said, so the AI's claim about the span is checkable at
+          a glance rather than by clicking in and scrubbing (FEAT-71ay4e). */}
+        {vm.excerpt && (
+          <p
+            className="line-clamp-2 border-l-2 border-border pl-2 text-[11px] italic text-muted-foreground/80"
+            data-testid="clip-excerpt"
+          >
+            {vm.excerpt}
+          </p>
+        )}
       </button>
 
       {vm.viralityBars && (

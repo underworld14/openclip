@@ -88,6 +88,43 @@ export function detectedToClip(d: DetectedClip, index: number): Clip {
   }
 }
 
+/**
+ * Extract a poster frame per clip and fold the paths back into the store
+ * (FEAT-71ay4e).
+ *
+ * Best-effort per clip: one failed frame-grab must not cost the others their
+ * thumbnails, and none of it can be allowed to fail the generation the user
+ * actually asked for. Runs sequentially rather than fanning out — this is N
+ * ffmpeg spawns against one disk, and a burst of them would compete with
+ * whatever the user does next.
+ */
+async function generateThumbnails(
+  get: () => ProjectStore,
+  set: (partial: Partial<ProjectStore>) => void
+): Promise<void> {
+  const project = get().currentProject
+  const source = project?.sourceVideo
+  if (!project || !source) return
+  for (const clip of get().clips) {
+    if (clip.thumbnailPath) continue
+    try {
+      const { thumbnailPath } = await window.openclip.video.clipThumbnail({
+        projectId: project.id,
+        clipId: clip.id,
+        sourcePath: source.path,
+        atTime: clip.editedStart ?? clip.startTime,
+        aspectRatio: project.settings.aspectRatio
+      })
+      // Re-read: the user may have rejected or re-generated while this ran.
+      const live = get().clips
+      if (!live.some((c) => c.id === clip.id)) continue
+      set({ clips: live.map((c) => (c.id === clip.id ? { ...c, thumbnailPath } : c)) })
+    } catch {
+      // A missing poster frame is a cosmetic loss; the clip is still usable.
+    }
+  }
+}
+
 export const createClipsSlice: StateCreator<ProjectStore, [], [], ClipsSlice> = (set, get) => ({
   clips: [],
   selectedClipId: null,
@@ -164,6 +201,11 @@ export const createClipsSlice: StateCreator<ProjectStore, [], [], ClipsSlice> = 
         // clips AND say why there might be fewer than requested.
         generateWarnings: result.warnings ?? []
       })
+      // Poster frames, after the clips are on screen (FEAT-71ay4e). Deliberately
+      // NOT awaited: the cards render immediately and each thumbnail fills in as
+      // it lands. Blocking the results on N ffmpeg frame-grabs would trade the
+      // thing the user is waiting for against a nicety.
+      void generateThumbnails(get, set)
     } catch (err) {
       set({
         generating: false,

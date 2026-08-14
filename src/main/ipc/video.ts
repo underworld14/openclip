@@ -20,14 +20,17 @@
  */
 
 import { dialog, shell } from 'electron'
-import { statSync } from 'node:fs'
+import { statSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { IPCChannels } from '@shared/channels'
-import type { ImportVideoResult } from '@shared/channels'
+import type { ChannelReq, ChannelRes, ImportVideoResult } from '@shared/channels'
 import type { IpcContext } from './index'
 import { registerRunner, hasRunner } from '@main/services/sidecar-manager'
 import { exportRunner } from '@main/services/jobs/export-runner'
 import { urlDownloadRunner } from '@main/services/jobs/url-download-runner'
 import { probeVideo } from '@main/utils/ffprobe'
+import { generateThumbnail } from '@main/services/ffmpeg-export'
+import { cacheDirFor } from '@main/utils/paths'
 
 export function registerVideoHandlers(ctx: IpcContext): void {
   // Plug the streaming export runner into the sidecar's JOB_RUNNERS registry
@@ -37,6 +40,35 @@ export function registerVideoHandlers(ctx: IpcContext): void {
   // renderer half (import-pipeline URL branch) is built by a later agent; expose
   // the runner now. Guarded so a test re-import doesn't throw.
   if (!hasRunner('url-download')) registerRunner('url-download', urlDownloadRunner)
+
+  // ── Clip poster frame (FEAT-71ay4e) ──────────────────────────────────────
+  // `generateThumbnail` has existed in ffmpeg-export.ts with ZERO callers and
+  // `Clip.thumbnailPath` was never written, so every clip card was text-only and
+  // judging a suggestion meant clicking in and scrubbing. This is the caller.
+  //
+  // Frames land in the project's content-addressed cache dir (temp, PRD §17) and
+  // are GRANTED to the media scheme so the renderer's <img> can load them — the
+  // same allow-list the preview <video> goes through, so this adds no new way to
+  // read arbitrary files.
+  ctx.ipcMain.handle(
+    IPCChannels.CLIP_THUMBNAIL,
+    async (
+      _e,
+      req: ChannelReq<IPCChannels.CLIP_THUMBNAIL>
+    ): Promise<ChannelRes<IPCChannels.CLIP_THUMBNAIL>> => {
+      const dir = cacheDirFor(req.projectId)
+      mkdirSync(dir, { recursive: true })
+      const outputPath = join(dir, `thumb-${req.clipId}.jpg`)
+      await generateThumbnail({
+        sourcePath: req.sourcePath,
+        outputPath,
+        atTime: req.atTime,
+        aspectRatio: req.aspectRatio
+      })
+      ctx.mediaAccess.grant(outputPath)
+      return { thumbnailPath: outputPath }
+    }
+  )
 
   // ── System: save dialog (PRD §10.1) ──────────────────────────────────────
   // Ask the user where to write the exported clip. Returns { canceled, filePath }.

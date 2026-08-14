@@ -1,10 +1,10 @@
 ---
 id: BUG-zcqyb7
 title: 'CI red on main: Linux gates job runs macOS-only GPU smokes; macOS npm ci hits GitHub rate limit'
-status: testing
+status: doing
 priority: high
 created: "2026-08-09T04:07:07Z"
-updated: "2026-08-09T04:14:00Z"
+updated: "2026-08-14T10:41:34Z"
 ---
 
 # Description

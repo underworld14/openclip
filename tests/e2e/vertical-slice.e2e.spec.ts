@@ -27,16 +27,45 @@ import { join } from 'node:path'
 // listen for the preload's forwarded `window.postMessage` tagged with the jobId
 // and resolve the LIVE MessagePort. Inlined here so `win.evaluate` (which runs
 // in the main world, where the bundled module is not importable) can use it.
+//
+// It MUST buffer for either arrival order, exactly like the production registry
+// does — the port is NOT delivered after `jobs.start()` resolves. main/index.ts
+// posts it (`senderFrame.postMessage(JOB_PORT, …, [port2])`, :245) BEFORE the
+// JOB_START handler returns `{ jobId }`, so the forwarded `window.postMessage`
+// routinely lands FIRST. A shim that only subscribes after awaiting `start()`
+// misses it and hangs forever (the 60s CI timeout in BUG-zcqyb7) — it only ever
+// "passed" on machines where the invoke reply happened to win the race. So:
+// install the listener ONCE at evaluate-time, before any job starts, and stash
+// ports by jobId for a waiter that may not exist yet.
 const ACQUIRE_PORT_SHIM = `
-  function acquireJobPort(jobId) {
-    return new Promise((resolve) => {
-      window.addEventListener('message', function onMsg(ev) {
-        const d = ev.data
-        if (d && d.__openclip === 'openclip:job-port' && d.jobId === jobId) {
-          window.removeEventListener('message', onMsg)
-          resolve(ev.ports[0])
-        }
-      })
+  const __ready = new Map()
+  const __waiters = new Map()
+  window.addEventListener('message', function (ev) {
+    const d = ev.data
+    if (!d || d.__openclip !== 'openclip:job-port' || typeof d.jobId !== 'string') return
+    const port = ev.ports[0]
+    if (!port) return
+    const waiter = __waiters.get(d.jobId)
+    if (waiter) {
+      __waiters.delete(d.jobId)
+      waiter(port)
+    } else {
+      __ready.set(d.jobId, port)
+    }
+  })
+  function acquireJobPort(jobId, timeoutMs) {
+    const existing = __ready.get(jobId)
+    if (existing) {
+      __ready.delete(jobId)
+      return Promise.resolve(existing)
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(function () {
+        __waiters.delete(jobId)
+        reject(new Error('acquireJobPort(' + jobId + '): no per-job MessagePort arrived within ' +
+          timeoutMs + 'ms — main never transferred it (see the main-process senderFrame log)'))
+      }, timeoutMs || 15000)
+      __waiters.set(jobId, function (port) { clearTimeout(timer); resolve(port) })
     })
   }
 `
@@ -82,7 +111,8 @@ test('transcribe streams progress + a fixed transcript to the renderer over the 
 
   const result = await win.evaluate(async (acquireSrc) => {
     const acquireJobPort = new Function(acquireSrc + '; return acquireJobPort')() as (
-      jobId: string
+      jobId: string,
+      timeoutMs?: number
     ) => Promise<MessagePort>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const oc = (window as any).openclip
@@ -90,7 +120,9 @@ test('transcribe streams progress + a fixed transcript to the renderer over the 
     const { jobId } = await oc.jobs.start('transcribe', { projectId: 'p1', wavPath, model: 'base' })
 
     // Acquire the LIVE per-job port delivered out-of-band (the contextBridge fix).
-    const port = await acquireJobPort(jobId)
+    // Bounded: a bare `await` here turns any delivery failure into an opaque 60s
+    // Playwright timeout with no error context (BUG-zcqyb7). Fail with the reason.
+    const port = await acquireJobPort(jobId, 15_000)
 
     // REGRESSION GUARD: the port must be a REAL MessagePort, not a cloned Object.
     const portType = Object.prototype.toString.call(port) // "[object MessagePort]"
@@ -101,16 +133,33 @@ test('transcribe streams progress + a fixed transcript to the renderer over the 
 
     const events: string[] = []
     let done: unknown = null
-    await new Promise<void>((resolve) => {
+    // Also bounded: every job terminates with done xor error (the jobs.ts invariant),
+    // so a silent stall here is a real contract violation and must be reported as one
+    // rather than as a nondescript suite timeout.
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () =>
+          reject(
+            new Error(
+              `job ${jobId}: stream never terminated within 15000ms — saw [${events.join(', ')}] ` +
+                `but no done/error (violates the jobs.ts done-xor-error invariant)`
+            )
+          ),
+        15_000
+      )
       port.onmessage = (ev: MessageEvent): void => {
         const d = ev.data as { t: string; result?: unknown }
         if (d.t === 'job-id') return
         events.push(d.t)
         if (d.t === 'done') {
           done = d.result
+          clearTimeout(timer)
           resolve()
         }
-        if (d.t === 'error') resolve()
+        if (d.t === 'error') {
+          clearTimeout(timer)
+          resolve()
+        }
       }
       port.start()
     })

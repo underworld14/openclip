@@ -249,6 +249,16 @@ function wireJobControlPlane(): void {
       // openclip-jp1 belt-and-suspenders; the renderer's acquireJobPort timeout is
       // the primary guard). Close the orphaned port and cancel the just-started job
       // so it doesn't run consumer-less to completion.
+      //
+      // LOG IT (BUG-zcqyb7): this branch used to be entirely silent, which makes the
+      // resulting renderer-side stall indistinguishable from a wedged sidecar — the
+      // consumer just waits out acquireJobPort's timeout with no clue why. One line
+      // here is the difference between "flaky hang" and a diagnosable cause.
+      console.error(
+        `[jobs] ${jobId}: senderFrame was null at JOB_START — the per-job MessagePort ` +
+          `could not be transferred, so the job was cancelled and the renderer will ` +
+          `see acquireJobPort time out.`
+      )
       port2.close()
       sidecar.cancel(jobId)
     }

@@ -16,15 +16,40 @@ import type { ModelInfo } from '@shared/channels'
 
 /**
  * Curated, recommended OpenRouter models for clip detection — the single update
- * point. All are strong + structured-output-capable. Stale slugs degrade
- * gracefully (only pinned when present in the live list). Verify/refresh against
- * https://openrouter.ai/models as the catalog evolves.
+ * point. All are strong + structured-output-capable.
+ *
+ * A hardcoded list in a BYOK app has a guaranteed expiry date, and this one had
+ * already rotted: it shipped `anthropic/claude-opus-4.1` as the app's *second*
+ * recommendation, and `openai/gpt-4.1` alongside `openai/gpt-5` — models their
+ * vendors have since superseded (BUG-2smqpv).
+ *
+ * Worth recording precisely, because it changes what this guards against: those
+ * slugs were checked against the live catalogue and BOTH still resolve on
+ * OpenRouter. The reported failure mode — "the user takes our top recommendation
+ * and the provider hard-fails" — did not reproduce; OpenRouter keeps serving
+ * models past their first-party retirement. The real defect is quieter: the app
+ * was putting its own name behind stale advice, steering users onto superseded
+ * models that cost more and reason worse than their replacements.
+ *
+ * Two things keep that from being silent:
+ *
+ *  1. **It degrades safely by construction.** `orderForPicker` pins a slug only
+ *     when it appears in the LIVE `/models` response, so a retired id is quietly
+ *     dropped from "Recommended" rather than offered. The picker never invents a
+ *     model — it can only re-order what OpenRouter actually returned.
+ *  2. **A live check can prove it.** `openrouter-curated.serial.spec.ts` fetches
+ *     the real catalogue and fails naming any curated id that no longer exists.
+ *     It self-skips without network (like the other real-dependency smokes), so
+ *     run it deliberately when refreshing this list.
+ *
+ * To refresh: run `OPENCLIP_CHECK_OPENROUTER=1 npx vitest run
+ * tests/unit/openrouter-curated.serial.spec.ts`, then cross-check the survivors
+ * against https://openrouter.ai/models.
  */
 export const RECOMMENDED_OPENROUTER_MODELS: readonly string[] = [
-  'anthropic/claude-sonnet-4.5',
-  'anthropic/claude-opus-4.1',
+  'anthropic/claude-opus-5',
+  'anthropic/claude-sonnet-5',
   'openai/gpt-5',
-  'openai/gpt-4.1',
   'google/gemini-2.5-pro',
   'google/gemini-2.5-flash',
   'deepseek/deepseek-chat-v3.1',

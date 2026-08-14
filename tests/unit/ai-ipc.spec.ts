@@ -25,6 +25,10 @@ import { IPCChannels } from '@shared/channels'
 import type { ChannelMap, ChannelReq, ChannelRes } from '@shared/channels'
 import type { RawTransport } from '@main/services/ai-client'
 import { clipSchemaFixture, transcriptSegmentsFixture } from '../fixtures/contract'
+import { RECOMMENDED_OPENROUTER_MODELS } from '@main/services/openrouter-models'
+
+/** The first curated OpenRouter pin, read from the source of truth. */
+const CURATED_TOP = RECOMMENDED_OPENROUTER_MODELS[0]
 
 // ── Fakes ─────────────────────────────────────────────────────────────────────
 function fakeSafe(available = true): SafeStorageLike {
@@ -301,9 +305,13 @@ describe('ai handler: AI_LIST_MODELS (Part H — fetcher injected, no network)',
       keyGivenToFetcher = apiKey
       return [
         { id: 'b/other', name: 'Other', supported_parameters: ['structured_outputs'] },
+        // Read the curated id from the source of truth rather than hardcoding one:
+        // this spec is about the handler's ordering + key handling, and pinning a
+        // specific model here made it fail the moment the shortlist was refreshed
+        // (BUG-2smqpv), for a reason that had nothing to do with what it tests.
         {
-          id: 'anthropic/claude-sonnet-4.5',
-          name: 'Claude',
+          id: CURATED_TOP,
+          name: 'Curated Top',
           supported_parameters: ['structured_outputs']
         },
         { id: 'tools/only', name: 'ToolsOnly', supported_parameters: ['tools'] } // dropped
@@ -317,7 +325,7 @@ describe('ai handler: AI_LIST_MODELS (Part H — fetcher injected, no network)',
     })
     expect(res.provider).toBe('openrouter')
     // Curated pin first; non-structured dropped.
-    expect(res.models[0].id).toBe('anthropic/claude-sonnet-4.5')
+    expect(res.models[0].id).toBe(CURATED_TOP)
     expect(res.models[0].recommended).toBe(true)
     expect(res.models.some((m) => m.id === 'tools/only')).toBe(false)
     // Key was used main-side; never in the response.

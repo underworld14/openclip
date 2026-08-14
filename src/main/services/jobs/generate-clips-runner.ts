@@ -113,7 +113,10 @@ export function createGenerateClipsRunner(
       }
 
       emit.progress(100, 'analyzing')
-      return result.value
+      // Carry non-fatal warnings (a chunk that failed while others succeeded)
+      // through to the renderer, so a partial run stops looking complete
+      // (BUG-yq6qbw).
+      return result.warnings?.length ? { ...result.value, warnings: result.warnings } : result.value
     } catch (err) {
       // A deadline abort with the job itself NOT cancelled is the hung-provider
       // case this ticket exists for. Name it, and mark it retriable: a different

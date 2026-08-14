@@ -596,3 +596,122 @@ describe('mapReduceGenerate: signal + onChunk', () => {
     expect(received).toBe(controller.signal)
   })
 })
+
+/**
+ * Partial chunk failure used to be completely silent (BUG-yq6qbw).
+ *
+ * A 1h+ podcast is analysed in chunks. If one is refused, rate-limited into a
+ * malformed body, truncated or content-filtered, its clips vanished — the run
+ * returned `ok:true` with fewer clips and no error, no warning and no log. The
+ * user concluded the AI found nothing in the second half of their video. Worse,
+ * the partial result was written to the cache, so re-clicking Generate returned
+ * the same degraded set WITHOUT re-calling the provider: they could not retry
+ * their way out within the session.
+ */
+describe('mapReduceGenerate: partial chunk failure is not silent', () => {
+  /** A valid one-clip response at `start`. */
+  const okChunk = (start: number): string =>
+    JSON.stringify({
+      clips: [
+        {
+          start_time: start,
+          end_time: start + 20,
+          title: `clip ${start}`,
+          hook: 'h',
+          virality_score: 7,
+          virality: {
+            hook_score: 18,
+            engagement_score: 18,
+            value_score: 17,
+            shareability_score: 17,
+            total_score: 70,
+            hook_type: 'contrast'
+          },
+          clip_type: 'hook',
+          keywords: [],
+          suggested_caption: 'c',
+          hashtags: []
+        }
+      ],
+      analysis: {
+        total_duration: 200,
+        clips_found: 1,
+        best_clip_index: 0,
+        overall_virality_potential: 'high'
+      }
+    })
+
+  const runWith = async (
+    transport: RawTransport,
+    over: { cache?: Map<string, unknown>; cacheKey?: string } = {}
+  ): ReturnType<typeof mapReduceGenerate> =>
+    mapReduceGenerate(transport, {
+      segments: makeSegments(40),
+      system: 'S',
+      buildUserPrompt: (chunkSegs) => 'analyze ' + chunkSegs.length,
+      chunkOptions: { maxTokens: 120, overlapSeconds: 10 },
+      duration: 200,
+      minDuration: 5,
+      maxDuration: 60,
+      maxClips: 5,
+      ...over
+    })
+
+  /**
+   * First chunk succeeds, everything after refuses. Note the ladder makes a
+   * SECOND transport call per failing chunk (the repair rung), so a transport
+   * keyed on "call === 2" would accidentally let chunk 2 succeed on its repair —
+   * which is exactly the trap that made the first draft of this test pass for
+   * the wrong reason.
+   */
+  const firstOkRestRefuse = (): RawTransport => {
+    let call = 0
+    return async () => {
+      call += 1
+      return call === 1 ? { rawText: okChunk(5) } : { rawText: 'sorry, I cannot help with that' }
+    }
+  }
+
+  it('reports how many chunks failed when SOME chunks succeed', async () => {
+    const r = await runWith(firstOkRestRefuse())
+
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    // Still returns the clips it DID find — a partial answer is still an answer.
+    expect(r.value.clips.length).toBeGreaterThan(0)
+    // …but says so, with the count and the reason.
+    expect(r.warnings?.length).toBe(1)
+    expect(r.warnings![0]).toMatch(/^\d+ of \d+ transcript sections failed AI analysis/i)
+    expect(r.warnings![0]).toMatch(/fewer clips than requested/i)
+    // The count is real, not a placeholder: every chunk after the first refused.
+    const [, failed, total] = /^(\d+) of (\d+)/.exec(r.warnings![0])!
+    expect(Number(failed)).toBe(Number(total) - 1)
+  })
+
+  it('does NOT cache a partial result, so Generate can be retried', async () => {
+    const cache = new Map<string, unknown>()
+    const first = await runWith(firstOkRestRefuse(), { cache, cacheKey: 'k' })
+    expect(first.ok).toBe(true)
+    expect(cache.has('k')).toBe(false) // the whole point — a retry must re-call
+
+    // A clean second run caches normally.
+    const clean: RawTransport = async () => ({ rawText: okChunk(5) })
+    const second = await runWith(clean, { cache, cacheKey: 'k' })
+    expect(second.ok).toBe(true)
+    expect(second.ok && second.warnings).toBeUndefined()
+    expect(cache.has('k')).toBe(true)
+  })
+
+  it('still fails outright when EVERY chunk fails — a warning is not enough there', async () => {
+    const allFail: RawTransport = async () => ({ rawText: 'refused' })
+    const r = await runWith(allFail)
+    expect(r.ok).toBe(false)
+  })
+
+  it('carries no warnings on a fully successful run', async () => {
+    const good: RawTransport = async () => ({ rawText: okChunk(5) })
+    const r = await runWith(good)
+    expect(r.ok).toBe(true)
+    expect(r.ok && r.warnings).toBeUndefined()
+  })
+})

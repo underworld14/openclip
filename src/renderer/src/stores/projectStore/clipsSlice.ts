@@ -19,6 +19,12 @@ export interface ClipsSlice {
   selectedClipId: string | null
   generating: boolean
   generateError: string | null
+  /**
+   * NON-FATAL problems from the last run (BUG-yq6qbw) — e.g. "2 of 3 transcript
+   * sections failed AI analysis". Distinct from `generateError`: the run
+   * succeeded and there ARE clips, they are just fewer than asked for.
+   */
+  generateWarnings: string[]
   /** 0..100 across the transcript's chunks while a generation runs. */
   generatePct: number
   /** "chunk 2 of 6" — what the sidebar shows instead of a bare spinner. */
@@ -87,6 +93,7 @@ export const createClipsSlice: StateCreator<ProjectStore, [], [], ClipsSlice> = 
   selectedClipId: null,
   generating: false,
   generateError: null,
+  generateWarnings: [],
   generatePct: 0,
   generateChunk: null,
   generateJobId: null,
@@ -122,6 +129,7 @@ export const createClipsSlice: StateCreator<ProjectStore, [], [], ClipsSlice> = 
     set({
       generating: true,
       generateError: null,
+      generateWarnings: [],
       generatePct: 0,
       generateChunk: null,
       provisionalClips: []
@@ -151,7 +159,10 @@ export const createClipsSlice: StateCreator<ProjectStore, [], [], ClipsSlice> = 
         generating: false,
         generatePct: 100,
         generateChunk: null,
-        generateJobId: null
+        generateJobId: null,
+        // A partial run is a success with a caveat, not a failure — show the
+        // clips AND say why there might be fewer than requested.
+        generateWarnings: result.warnings ?? []
       })
     } catch (err) {
       set({

@@ -43,6 +43,23 @@ import type {
   WordTimestamp
 } from './schema'
 
+/**
+ * The clip-detection result, plus any NON-FATAL problems worth telling the user
+ * about (BUG-yq6qbw).
+ *
+ * `warnings` deliberately lives HERE and not on `ClipSchema`: that schema is a
+ * `z.strictObject` handed to the provider as its structured-output JSON Schema,
+ * so adding a field would change what OpenAI/Anthropic/Ollama are asked to
+ * produce. This wrapper is the app's own channel, invisible to the model.
+ *
+ * The case it exists for: a long podcast is analysed in chunks, one chunk is
+ * refused or truncated, and the run still succeeds with fewer clips. That used
+ * to be indistinguishable from "the AI found nothing there".
+ */
+export interface GenerateClipsResult extends ClipSchema {
+  warnings?: string[]
+}
+
 // ============================================================================
 // Job taxonomy
 // ============================================================================
@@ -305,8 +322,14 @@ export interface JobResult {
    * duration and the user's min/max, de-overlapped and ranked to `numClips`.
    * Identical to what the `ai:generate-clips` invoke returns — the two entry
    * points share one `runGenerate` core.
+   *
+   * `warnings` carries NON-FATAL problems (BUG-yq6qbw): a long transcript is
+   * analysed in chunks, and one chunk failing used to leave a successful-looking
+   * run with fewer clips and no signal at all. It rides here rather than on
+   * `ClipSchema` because that schema is the strict JSON Schema handed to the
+   * provider — adding a field would change what the model is asked to produce.
    */
-  'generate-clips': ClipSchema
+  'generate-clips': GenerateClipsResult
 }
 
 // ============================================================================

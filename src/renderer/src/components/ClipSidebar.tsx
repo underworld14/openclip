@@ -18,6 +18,7 @@ export function ClipSidebar(): React.JSX.Element {
   const clips = useProjectStore((s) => s.clips)
   const generating = useProjectStore((s) => s.generating)
   const generateError = useProjectStore((s) => s.generateError)
+  const generateWarnings = useProjectStore((s) => s.generateWarnings)
   const generatePct = useProjectStore((s) => s.generatePct)
   const generateChunk = useProjectStore((s) => s.generateChunk)
   const provisionalClips = useProjectStore((s) => s.provisionalClips)
@@ -70,6 +71,20 @@ export function ClipSidebar(): React.JSX.Element {
         <p className="text-sm text-destructive" role="alert" data-testid="generate-error">
           {generateError}
         </p>
+      )}
+
+      {/* NON-FATAL: the run succeeded and there ARE clips, just fewer than asked
+          for because a chunk failed. Amber rather than red, and it does not
+          replace the results — a partial answer is still an answer, but the user
+          must be told it is partial (BUG-yq6qbw). */}
+      {generateWarnings.length > 0 && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2" role="status">
+          {generateWarnings.map((w) => (
+            <p key={w} className="text-xs text-amber-600" data-testid="generate-warning">
+              {w}
+            </p>
+          ))}
+        </div>
       )}
 
       {!generating && visible.length === 0 && hidden.length === 0 && (

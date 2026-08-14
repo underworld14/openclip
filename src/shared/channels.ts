@@ -22,7 +22,6 @@ import type {
   Project,
   Settings,
   AIProvider,
-  ClipSchema,
   SourceVideo,
   BrandTemplate,
   // AI title/caption outputs — inferred from their z.strictObject schemas (openclip-xgk).
@@ -39,7 +38,7 @@ export type {
   EnhancedCaption,
   EnhanceCaptionsResult
 } from './schema'
-import type { WhisperModelSize, JobKind, JobParams } from './jobs'
+import type { WhisperModelSize, JobKind, JobParams, GenerateClipsResult } from './jobs'
 
 // ============================================================================
 // IPCChannels — verbatim from PRD §10.1
@@ -322,7 +321,7 @@ export interface ChannelMap {
   >
 
   // --- AI (BYOK) ---
-  [IPCChannels.GENERATE_CLIPS]: ChannelPayload<GenerateClipsRequest, ClipSchema>
+  [IPCChannels.GENERATE_CLIPS]: ChannelPayload<GenerateClipsRequest, GenerateClipsResult>
   [IPCChannels.GENERATE_TITLES]: ChannelPayload<GenerateTitlesRequest, GenerateTitlesResult>
   [IPCChannels.ENHANCE_CAPTIONS]: ChannelPayload<EnhanceCaptionsRequest, EnhanceCaptionsResult>
   [IPCChannels.AI_LIST_MODELS]: ChannelPayload<ListModelsRequest, ListModelsResult>

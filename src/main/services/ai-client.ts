@@ -255,7 +255,7 @@ export interface AiError {
 }
 
 export type LadderResult =
-  | { ok: true; value: z.infer<typeof ClipSchema> }
+  | { ok: true; value: z.infer<typeof ClipSchema>; warnings?: string[] }
   | { ok: false; error: AiError }
 
 /** Build the rung-3 repair prompt that echoes the Zod errors back to the model. */
@@ -542,6 +542,11 @@ export async function mapReduceGenerate(
   const chunks = chunkSegments(req.segments, req.chunkOptions)
   const all: DetectedClip[] = []
   let lastError: AiError | null = null
+  // A chunk that fails used to vanish without a trace (BUG-yq6qbw): a refusal,
+  // a rate-limit-mangled body, a truncation or a content filter on ONE chunk of a
+  // long podcast produced "success" with half the clips and no error, no toast
+  // and no log. The user concluded the AI found nothing in the second half.
+  let failedChunks = 0
 
   for (let i = 0; i < chunks.length; i += 1) {
     // Cooperative cancel between chunks. Each chunk is a paid round-trip (two
@@ -561,6 +566,7 @@ export async function mapReduceGenerate(
       req.onChunk?.(i, chunks.length, result.value.clips)
     } else {
       lastError = result.error
+      failedChunks += 1
       req.onChunk?.(i, chunks.length, [])
     }
   }
@@ -593,7 +599,21 @@ export async function mapReduceGenerate(
     }
   }
 
-  if (req.cache && req.cacheKey) req.cache.set(req.cacheKey, value)
+  // DO NOT CACHE A PARTIAL RESULT (BUG-yq6qbw). Caching it poisoned the session:
+  // re-clicking Generate returned the same degraded set without re-calling the
+  // provider, so the user could not retry their way out of a transient failure.
+  if (req.cache && req.cacheKey && failedChunks === 0) req.cache.set(req.cacheKey, value)
+
+  if (failedChunks > 0) {
+    const detail = lastError ? ` (${lastError.message})` : ''
+    const warning =
+      `${failedChunks} of ${chunks.length} transcript sections failed AI analysis${detail} — ` +
+      `you may be seeing fewer clips than requested. Try Generate again.`
+    // Main-side log as well as the renderer warning: a support question about
+    // "why only 4 clips" should be answerable from the logs alone.
+    console.warn(`[ai] ${warning}`)
+    return { ok: true, value, warnings: [warning] }
+  }
   return { ok: true, value }
 }
 

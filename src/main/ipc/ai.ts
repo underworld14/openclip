@@ -208,7 +208,10 @@ export function registerAiHandlers(ctx: IpcContext): void {
       // Surface the typed error code so the renderer can branch on it.
       throw new Error(`${result.error.code}: ${result.error.message}`)
     }
-    return result.value
+    // Carry any non-fatal warnings (e.g. a chunk that failed while others
+    // succeeded) alongside the clips, so a partial run stops looking like a
+    // complete one (BUG-yq6qbw).
+    return result.warnings?.length ? { ...result.value, warnings: result.warnings } : result.value
   })
 
   // GENERATE_TITLES is PRD §7.4 (v1.0 polish) and is NOT built yet. It answers

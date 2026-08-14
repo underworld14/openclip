@@ -66,6 +66,44 @@ export type { RebasedWord } from '@shared/caption-layout'
  * export canvas so Fontsize/Margins are in output pixels (PlayResX/Y). */
 export const ASS_PLAY_RES = { x: 1080, y: 1920 } as const
 
+/**
+ * The design width every caption size is authored against. PlayResX is PINNED to
+ * this on every aspect ratio; only PlayResY varies (BUG-y6y5mf).
+ *
+ * WHY pin the width. libass scales the whole script by `realWidth / PlayResX`, so
+ * pinning X makes a Fontsize of N always occupy N/1080 of the frame's WIDTH —
+ * which is exactly how the live preview sizes it (`caption-css.ts` emits
+ * `fontSize/1080 * 100` in `cqw`, container-query *width* units). Preview and
+ * export therefore agree on every aspect, which is the property that was broken.
+ *
+ * What was wrong before: PlayResY was hardcoded to 1920 regardless of output. On
+ * a 4:5 export (1080×1350) libass scaled the script by 1350/1920 = 0.70, so a
+ * 64px caption rendered at 45px — measured at 44.5% of frame width instead of
+ * 63.2%, and sitting ~25px higher off the bottom than the preview showed. The
+ * user got captions ~30% smaller than the size they picked, with no warning.
+ * 16:9 was worse still (20.2% vs 63.2%).
+ *
+ * Note this is NOT "PlayRes = output dimensions". That alternative keeps a
+ * Fontsize of N at N real pixels on every aspect, which reads correct on the
+ * three 1080-wide canvases and then disagrees with the preview by 1.78× on 16:9
+ * (1920 wide). Pinning the width is what makes the two surfaces agree.
+ */
+export const ASS_CANVAS_WIDTH = 1080
+
+/**
+ * PlayRes for an output canvas: width pinned to the design width, height scaled
+ * to preserve the canvas's aspect ratio.
+ */
+export function playResFor(canvas: { width: number; height: number }): {
+  x: number
+  y: number
+} {
+  return {
+    x: ASS_CANVAS_WIDTH,
+    y: Math.round((ASS_CANVAS_WIDTH * canvas.height) / canvas.width)
+  }
+}
+
 /** The highlight (karaoke-fill) color words turn once spoken. */
 const HIGHLIGHT_COLOR_ASS = '&H0000FFFF' // opaque yellow (BGR: 00 FF FF)
 
@@ -361,6 +399,12 @@ export interface BuildAssOptions {
   /** Caption style; defaults to DEFAULT_CAPTION_STYLE. */
   style?: CaptionStyle
   /**
+   * The export canvas these captions will be burned onto, so PlayResY matches
+   * its aspect ratio (BUG-y6y5mf). Omitted ⇒ the 9:16 default, which keeps every
+   * existing caller and the golden `.ass` fixtures byte-for-byte identical.
+   */
+  canvas?: { width: number; height: number }
+  /**
    * Max words per caption line before a new Dialogue line starts (readability).
    * Default 7 (typical short-form caption chunk). Lines also break on a long
    * silence gap (`gapBreakSec`).
@@ -407,6 +451,8 @@ export function buildAss(opts: BuildAssOptions): string {
   // Part K: a template may request a tighter line length; absent ⇒ 7 (byte-compat).
   const maxWords = opts.maxWordsPerLine ?? style.wordsPerLine ?? 7
   const gapBreak = opts.gapBreakSec ?? 0.8
+  // Width pinned, height per the real canvas — see playResFor (BUG-y6y5mf).
+  const playRes = opts.canvas ? playResFor(opts.canvas) : ASS_PLAY_RES
 
   // Jump-cut export → remap words onto the compressed timeline; else the normal
   // scope-to-clip path (Part I.4).
@@ -439,8 +485,8 @@ export function buildAss(opts: BuildAssOptions): string {
     // (margins 60/60). WrapStyle 2 (no auto-wrap) would clip wide captions.
     'WrapStyle: 0',
     'ScaledBorderAndShadow: yes',
-    `PlayResX: ${ASS_PLAY_RES.x}`,
-    `PlayResY: ${ASS_PLAY_RES.y}`,
+    `PlayResX: ${playRes.x}`,
+    `PlayResY: ${playRes.y}`,
     '',
     '[V4+ Styles]',
     ASS_HEADER_FORMAT,

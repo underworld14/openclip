@@ -38,6 +38,11 @@ export interface WriteClipCaptionsOptions {
    * only when `style.autoEmoji === 'ai'`. Absent ⇒ the local dictionary.
    */
   aiEmojiMap?: Record<string, string>
+  /**
+   * The export canvas the captions will be burned onto, so PlayResY matches the
+   * aspect ratio (BUG-y6y5mf). Omitted ⇒ the 9:16 default.
+   */
+  canvas?: { width: number; height: number }
   /** Where to write the .ass (e.g. `<jobTempDir>/clip-<id>.captions.ass`). */
   assPath: string
   /**
@@ -63,7 +68,8 @@ export function writeClipCaptions(opts: WriteClipCaptionsOptions): string {
     style: opts.style,
     keywords: opts.keywords,
     aiEmojiMap: opts.aiEmojiMap,
-    keepRanges: opts.keepRanges
+    keepRanges: opts.keepRanges,
+    canvas: opts.canvas
   })
   mkdirSync(dirname(opts.assPath), { recursive: true })
   writeFileSync(opts.assPath, ass, 'utf8')

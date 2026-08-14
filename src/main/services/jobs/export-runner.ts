@@ -28,6 +28,7 @@ import type { JobResult, JobParams } from '@shared/jobs'
 import type { JobRunner, JobEmitter, JobRunnerContext } from '@main/services/sidecar-manager'
 import {
   exportClip as defaultExportClip,
+  outputDimensions,
   type ExportClipResult
 } from '@main/services/ffmpeg-export'
 import { writeClipCaptions as defaultWriteClipCaptions } from '@main/services/ffmpeg-caption'
@@ -71,6 +72,7 @@ export interface ExportRunnerDeps {
     aiEmojiMap?: Record<string, string>
     assPath: string
     keepRanges?: Range[]
+    canvas?: { width: number; height: number }
   }) => string
   /** Detect silences for jump-cuts (Part I.4 — injected for tests). */
   detectSilences?: (opts: {
@@ -247,7 +249,11 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
           keywords: params.captions.keywords,
           aiEmojiMap: params.captions.aiEmojiMap,
           assPath: resolveAssPath(params.projectId, ctx.jobId, params.clipId),
-          keepRanges
+          keepRanges,
+          // The canvas the burn lands on. Without it the .ass declared a 1080×1920
+          // script for every aspect, so libass shrank captions on any non-9:16
+          // export (BUG-y6y5mf).
+          canvas: outputDimensions(params.aspectRatio)
         })
       }
 

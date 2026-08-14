@@ -13,6 +13,7 @@
  */
 
 import { IPCChannels } from '@shared/channels'
+import { notImplemented } from '@shared/ipc-errors'
 import type {
   EnhanceCaptionsRequest,
   EnhanceCaptionsResult,
@@ -220,8 +221,13 @@ export function registerAiHandlers(ctx: IpcContext): void {
   // cannot branch on it and a UI built against it would silently render nothing
   // forever (audit fix FEAT-et1gxc).
   ctx.ipcMain.handle(IPCChannels.GENERATE_TITLES, async () => {
-    throw new Error(
-      'NOT_IMPLEMENTED: AI title generation (PRD §7.4) is not built yet. ' +
+    // Built through `notImplemented()` so the prefix lives in ONE place and
+    // callers branch with `isNotImplemented(err)` rather than string-matching
+    // (FEAT-azqfsv). `ipcMain.handle` flattens a rejection to its message, so a
+    // typed error class cannot survive the control plane — the code has to
+    // travel in the text, and the convention is what makes that safe.
+    throw notImplemented(
+      'AI title generation (PRD §7.4) is not built yet. ' +
         'Titles currently come from the clip-detection pass.'
     )
   })
@@ -237,8 +243,8 @@ export function registerAiHandlers(ctx: IpcContext): void {
       // Rewrite mode (PRD §7.5) is not built. Reject rather than answering with an
       // empty success (audit fix FEAT-et1gxc) — emoji mode below is the real path.
       if (req.mode !== 'emoji') {
-        throw new Error(
-          'NOT_IMPLEMENTED: caption rewrite (PRD §7.5) is not built yet; only mode:"emoji" is wired.'
+        throw notImplemented(
+          'caption rewrite (PRD §7.5) is not built yet; only mode:"emoji" is wired.'
         )
       }
       const apiKey = ctx.keyVault.getKey(req.provider)

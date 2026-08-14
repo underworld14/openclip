@@ -18,6 +18,16 @@ import type { PreflightResult } from '@shared/channels'
 export interface UseReadiness extends ReadinessView {
   /** Re-run the whisper-presence check (call after a model download completes). */
   refresh: () => void
+  /**
+   * The raw preflight probe, for callers that need a binary the three general
+   * chips deliberately omit (FEAT-azqfsv).
+   *
+   * `ytDlp` is the case this exists for: a missing yt-dlp only breaks URL
+   * import, so it does not belong in the always-visible chips — but it WAS
+   * reported and read by nothing at all, which is precisely how `whisperCli`
+   * ended up probed-and-ignored. `null` while the probe is in flight.
+   */
+  preflight: PreflightResult | null
 }
 
 export function useReadiness(): UseReadiness {
@@ -72,6 +82,7 @@ export function useReadiness(): UseReadiness {
       whisperModel: settings.whisperModel,
       whisperInstalled
     }),
-    refresh
+    refresh,
+    preflight
   }
 }

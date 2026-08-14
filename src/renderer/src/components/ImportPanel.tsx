@@ -15,6 +15,7 @@ import { FolderOpen, Loader2, Upload } from 'lucide-react'
 import type { WhisperModelSize } from '@shared/jobs'
 import { useImportController } from '@renderer/hooks/useImportController'
 import { isUrl } from '@renderer/components/import-pipeline'
+import { useReadiness } from '@renderer/hooks/useReadiness'
 import { stageLabel } from '@renderer/components/jobStatus'
 import { Button } from '@renderer/components/ui/button'
 import { Input } from '@renderer/components/ui/input'
@@ -38,6 +39,7 @@ export function ImportPanel({ onNeedModel }: ImportPanelProps = {}): React.JSX.E
   const [value, setValue] = useState('')
   const [dragging, setDragging] = useState(false)
   const [dropError, setDropError] = useState<string | null>(null)
+  const readiness = useReadiness()
 
   const chooseFile = async (): Promise<void> => {
     // The picker is scoped server-side to a single video file (G.7); no inputs.
@@ -47,10 +49,26 @@ export function ImportPanel({ onNeedModel }: ImportPanelProps = {}): React.JSX.E
 
   const submit = (): void => {
     const v = value.trim()
-    if (v && !ctl.busy) void ctl.importAny(v)
+    if (v && !ctl.busy && !urlBlocked) void ctl.importAny(v)
   }
 
   const looksUrl = isUrl(value)
+
+  /**
+   * Is yt-dlp actually present? (FEAT-azqfsv)
+   *
+   * `SYSTEM_PREFLIGHT` has always reported `ytDlp` and NOTHING read it —
+   * reporting something nothing reads is exactly how `whisperCli` ended up
+   * probed-and-ignored. It does not belong in the three general readiness chips
+   * (a missing yt-dlp only breaks URL import), so it is surfaced HERE, at the
+   * moment it matters: the instant a URL is in the field.
+   *
+   * `undefined` while the preflight is in flight — treated as available, because
+   * blocking a paste on a probe that has not answered yet would be worse than
+   * letting the download fail with the real error.
+   */
+  const ytDlpMissing = readiness.preflight?.ytDlp.ok === false
+  const urlBlocked = looksUrl && ytDlpMissing
 
   /**
    * Drag-and-drop import (FEAT-hmsg5h). The Welcome copy has always told the user
@@ -127,7 +145,11 @@ export function ImportPanel({ onNeedModel }: ImportPanelProps = {}): React.JSX.E
           }}
           className="flex-1"
         />
-        <Button data-testid="import-start" onClick={submit} disabled={ctl.busy || !value.trim()}>
+        <Button
+          data-testid="import-start"
+          onClick={submit}
+          disabled={ctl.busy || !value.trim() || urlBlocked}
+        >
           {ctl.busy ? (
             <Loader2 className="size-4 animate-spin" />
           ) : looksUrl ? (
@@ -137,6 +159,12 @@ export function ImportPanel({ onNeedModel }: ImportPanelProps = {}): React.JSX.E
           )}
         </Button>
       </div>
+      {urlBlocked && (
+        <p className="text-xs text-amber-600" data-testid="url-import-blocked">
+          URL download needs yt-dlp, which is missing from this install. Import a local file
+          instead, or reinstall OpenClip.
+        </p>
+      )}
 
       <div className="flex items-center gap-3 text-xs text-muted-foreground">
         <span className="h-px flex-1 bg-border" />

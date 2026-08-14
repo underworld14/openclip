@@ -24,6 +24,10 @@ import {
   deleteProject
 } from '@main/services/project-store'
 import { deleteProjectMedia } from '@main/services/media-store'
+import { serializeTranscript, subtitleExtension } from '@shared/subtitle-export'
+import { assertSafePathArg } from '@main/utils/safe-arg'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname } from 'node:path'
 
 export function registerProjectHandlers(ctx: IpcContext): void {
   const { ipcMain } = ctx
@@ -51,6 +55,32 @@ export function registerProjectHandlers(ctx: IpcContext): void {
       req: ChannelReq<IPCChannels.SAVE_PROJECT_PATCH>
     ): Promise<ChannelRes<IPCChannels.SAVE_PROJECT_PATCH>> => {
       const { path } = await patchProject(projectsDir(), req, { touchUpdatedAt: true })
+      return { path }
+    }
+  )
+
+  // transcript:export — write the transcript as SRT / VTT / plain text
+  // (FEAT-vwvgs0). PRD §6.2 lists this as an acceptance criterion and the whole
+  // tree had zero matches for srt/vtt: the app could burn captions into pixels
+  // but could not hand the user the data.
+  //
+  // Main does the SERIALIZING, not just the write. The renderer supplies a
+  // transcript and a format; it cannot ask for arbitrary bytes at an arbitrary
+  // path, and the extension is enforced here.
+  ipcMain.handle(
+    IPCChannels.EXPORT_TRANSCRIPT,
+    async (
+      _e,
+      req: ChannelReq<IPCChannels.EXPORT_TRANSCRIPT>
+    ): Promise<ChannelRes<IPCChannels.EXPORT_TRANSCRIPT>> => {
+      const text = serializeTranscript(req.transcript, req.format, req.clip)
+      const ext = `.${subtitleExtension(req.format)}`
+      const path = req.outputPath.toLowerCase().endsWith(ext)
+        ? req.outputPath
+        : `${req.outputPath}${ext}`
+      assertSafePathArg(path, 'outputPath')
+      await mkdir(dirname(path), { recursive: true })
+      await writeFile(path, text, 'utf8')
       return { path }
     }
   )

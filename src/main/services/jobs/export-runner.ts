@@ -32,7 +32,10 @@ import {
   outputDimensions,
   type ExportClipResult
 } from '@main/services/ffmpeg-export'
-import { writeClipCaptions as defaultWriteClipCaptions } from '@main/services/ffmpeg-caption'
+import {
+  writeClipCaptions as defaultWriteClipCaptions,
+  writeSidecarSubtitles
+} from '@main/services/ffmpeg-caption'
 import { detectSilences as defaultDetectSilences } from '@main/services/silence-detect'
 import { planReframe as defaultPlanReframe } from '@main/services/reframe-detect'
 import { computeKeepRanges, removesAnything, type Range } from '@shared/keep-ranges'
@@ -315,6 +318,28 @@ export function createExportRunner(deps: ExportRunnerDeps = {}): JobRunner<'expo
         )
         emit.progress(0, 'encoding')
         result = await runExport(true)
+      }
+
+      // A sidecar .srt beside every exported clip (FEAT-vwvgs0). The data was
+      // already in hand — the runner scopes and rebases the same words it burns
+      // into pixels — and shipping it costs nothing at export time while saving
+      // the user a separate round-trip when they upload. Best-effort: a failure
+      // to write the subtitle must never fail the video that already rendered.
+      if (params.captions?.words?.length) {
+        try {
+          writeSidecarSubtitles({
+            outputPath: params.outputPath,
+            words: params.captions.words,
+            clipStart: params.startTime,
+            clipEnd: params.endTime
+          })
+        } catch (e) {
+          console.warn(
+            `[export] could not write the sidecar .srt: ${
+              e instanceof Error ? e.message : String(e)
+            }`
+          )
+        }
       }
 
       emit.progress(100, 'encoding')

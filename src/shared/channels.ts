@@ -18,11 +18,13 @@
  * is exposed under `window.openclip.jobs`.
  */
 
+import type { SubtitleFormat } from './subtitle-export'
 import type {
   Project,
   Settings,
   AIProvider,
   SourceVideo,
+  Transcript,
   BrandTemplate,
   // AI title/caption outputs — inferred from their z.strictObject schemas (openclip-xgk).
   GenerateTitlesResult,
@@ -114,6 +116,18 @@ export enum IPCChannels {
   // System
   OPEN_FOLDER = 'system:open-folder',
   SHOW_SAVE_DIALOG = 'system:save-dialog',
+  /**
+   * Write a transcript to disk as SRT / WebVTT / plain text (FEAT-vwvgs0).
+   *
+   * Deliberately NOT a generic "write this string to this path": the renderer
+   * hands over the transcript and a format, main does the serializing and
+   * enforces the extension. A general-purpose text-write channel would be a
+   * standing arbitrary-file-write primitive for a compromised renderer.
+   *
+   * Lives in the `project:` namespace (→ `project.exportTranscript`) rather than
+   * getting a namespace of its own for a single method.
+   */
+  EXPORT_TRANSCRIPT = 'project:export-transcript',
   SHOW_OPEN_DIALOG = 'system:open-dialog',
   // Part K — pick an output FOLDER for batch export (Step 4) and a PNG logo for
   // the brand kit (Step 5). Both hard-scoped server-side (least-privilege, G.7):
@@ -396,6 +410,17 @@ export interface ChannelMap {
 
   // --- System ---
   [IPCChannels.OPEN_FOLDER]: ChannelPayload<{ path: string }, void>
+  [IPCChannels.EXPORT_TRANSCRIPT]: ChannelPayload<
+    {
+      transcript: Transcript
+      format: SubtitleFormat
+      /** Absolute path the user chose in the save dialog. */
+      outputPath: string
+      /** Scope + rebase to a single clip's bounds (absolute seconds). */
+      clip?: { start: number; end: number }
+    },
+    { path: string }
+  >
   [IPCChannels.SHOW_SAVE_DIALOG]: ChannelPayload<
     { defaultPath?: string; filters?: Array<{ name: string; extensions: string[] }> },
     { canceled: boolean; filePath?: string }

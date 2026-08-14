@@ -46,7 +46,7 @@ export interface OpenClipBridge {
   media: NamespaceMethods<'media'>
   /** brand:list|save|delete|set-logo → list|save|delete|setLogo (Part K) */
   brand: NamespaceMethods<'brand'>
-  /** project:save|load|list|delete */
+  /** project:save|save-patch|load|list|delete|export-transcript */
   project: NamespaceMethods<'project'>
   /** settings:get|set|api-key-status|set-api-key */
   settings: NamespaceMethods<'settings'>

@@ -18,7 +18,9 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { CaptionStyle, WordTimestamp } from '@shared/schema'
+import type { CaptionStyle, TranscriptSegment, WordTimestamp } from '@shared/schema'
+import { scopeWordsToClip, groupIntoLines } from '@shared/caption-layout'
+import { serializeTranscript } from '@shared/subtitle-export'
 import type { Range } from '@shared/keep-ranges'
 import { buildAss } from './ass-captions'
 
@@ -74,4 +76,41 @@ export function writeClipCaptions(opts: WriteClipCaptionsOptions): string {
   mkdirSync(dirname(opts.assPath), { recursive: true })
   writeFileSync(opts.assPath, ass, 'utf8')
   return opts.assPath
+}
+
+/**
+ * Write a sidecar `.srt` next to an exported clip (FEAT-vwvgs0).
+ *
+ * PRD §6.2 wants the transcript available as DATA, not only as burned pixels.
+ * The export already holds the words it is burning, scoped and rebased to this
+ * clip, so producing the subtitle file alongside costs nothing at export time —
+ * and saves the user a separate round-trip when they upload, where a real `.srt`
+ * beats baked-in text (searchable, translatable, toggleable).
+ *
+ * Word timings are grouped into readable cues with the SAME line-layout rule the
+ * karaoke burner uses, so the sidecar and the burned captions break in the same
+ * places rather than drifting apart.
+ */
+export function writeSidecarSubtitles(opts: {
+  outputPath: string
+  words: WordTimestamp[]
+  clipStart: number
+  clipEnd: number
+  /** Max words per cue. Defaults to the caption layout's 7. */
+  maxWordsPerLine?: number
+}): string {
+  const scoped = scopeWordsToClip(opts.words, opts.clipStart, opts.clipEnd)
+  const lines = groupIntoLines(scoped, opts.maxWordsPerLine ?? 7, 0.8)
+  const segments: TranscriptSegment[] = lines.map((line, i) => ({
+    id: `cue-${i}`,
+    start: line[0].start,
+    end: line[line.length - 1].end,
+    text: line.map((w) => w.word).join(' '),
+    confidence: 1
+  }))
+  const srt = serializeTranscript({ language: '', segments, words: [] }, 'srt')
+  const path = opts.outputPath.replace(/\.[^./\\]+$/, '') + '.srt'
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, srt, 'utf8')
+  return path
 }

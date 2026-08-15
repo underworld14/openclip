@@ -28,7 +28,6 @@ import type { OpenClipBridge } from '@preload/index'
 
 const NAMESPACES: Array<keyof OpenClipBridge> = [
   'video',
-  'audio',
   'ai',
   'media',
   'brand',
@@ -45,7 +44,6 @@ let realBridge: OpenClipBridge
 
 beforeAll(async () => {
   const { buildVideoApi } = await import('@preload/api/video')
-  const { buildAudioApi } = await import('@preload/api/audio')
   const { buildAiApi } = await import('@preload/api/ai')
   const { buildMediaApi } = await import('@preload/api/media')
   const { buildBrandApi } = await import('@preload/api/brand')
@@ -57,7 +55,6 @@ beforeAll(async () => {
   const { buildFilesApi } = await import('@preload/api/files')
   realBridge = {
     video: buildVideoApi(),
-    audio: buildAudioApi(),
     ai: buildAiApi(),
     media: buildMediaApi(),
     brand: buildBrandApi(),
@@ -97,7 +94,6 @@ describe('preload parity: real bridge method-set === mock method-set', () => {
       'import',
       'planReframe'
     ])
-    expect(methodKeys(realBridge.audio)).toEqual(['extract'])
     expect(methodKeys(realBridge.ai)).toEqual([
       'enhanceCaptions',
       'generateClips',

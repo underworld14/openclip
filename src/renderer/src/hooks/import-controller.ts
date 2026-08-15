@@ -409,6 +409,9 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
         if (deps.store.getCurrentProject()?.id !== projectId) return
         deps.store.hydrateTranscript(t)
       },
+      onExtractStart: (jobId) => {
+        activeJobId = jobId
+      },
       onStart: (jobId) => {
         activeJobId = jobId
       }
@@ -429,9 +432,9 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
    * video but no transcript.
    *
    * Extraction goes through the SAME per-project content-addressed WAV cache
-   * (`audio.extract`) the original import used, so re-running this after a
-   * failed transcribe (the common case) does not re-extract a multi-hour
-   * source — only whisper actually reruns.
+   * (the `extract-audio` job) the original import used, so re-running this
+   * after a failed transcribe (the common case) does not re-extract a
+   * multi-hour source — only whisper actually reruns.
    */
   async function retranscribe(projectId: string): Promise<void> {
     const project = deps.store.getCurrentProject()
@@ -462,10 +465,21 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
         deps.store.hydrateTranscript({ language: '', segments: [], words: [] })
       }
       deps.ui?.updateTask?.(taskId, { pct: 5, stage: 'extracting' })
-      const { wavPath } = await deps.bridge.audio.extract({
-        projectId,
-        sourcePath: project.sourceVideo.path
-      })
+      const { wavPath } = await drainJob(
+        deps.bridge,
+        'extract-audio',
+        { projectId, sourcePath: project.sourceVideo.path },
+        {
+          onStart: (jobId) => {
+            activeJobId = jobId
+          },
+          onProgress: (p, s) => {
+            const scaled = 5 + Math.round((p / 100) * 15)
+            set({ pct: scaled, stage: s })
+            deps.ui?.updateTask?.(taskId, { pct: scaled, stage: s })
+          }
+        }
+      )
       deps.ui?.updateTask?.(taskId, { pct: 20, stage: 'extracting' })
       const transcript = await drainJob(
         deps.bridge,

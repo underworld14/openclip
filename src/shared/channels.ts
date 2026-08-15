@@ -52,7 +52,10 @@ export enum IPCChannels {
   // NOTE: URL/YouTube import is NOT a request/response channel — it's the
   // streaming `url-download` job (jobs.start('url-download', …), see jobs.ts).
   // The old `video:import:url` channel was never handled; removed in G.7.
-  AUDIO_EXTRACT = 'audio:extract',
+  // NOTE: audio extraction is NOT a request/response channel either, as of
+  // EPIC-k83ghw / BUG-sg6kqg — it's the streaming `extract-audio` job
+  // (jobs.start('extract-audio', …), see jobs.ts). The old `audio:extract`
+  // channel had no progress, no PID tracking and no cancel; removed here.
   GENERATE_CLIPS = 'ai:generate-clips',
   GENERATE_TITLES = 'ai:generate-titles',
   ENHANCE_CAPTIONS = 'ai:enhance-captions',
@@ -370,10 +373,6 @@ export interface ChannelPayload<Req, Res> {
 export interface ChannelMap {
   // --- Video / media ---
   [IPCChannels.IMPORT_VIDEO]: ChannelPayload<{ filePath: string }, ImportVideoResult>
-  [IPCChannels.AUDIO_EXTRACT]: ChannelPayload<
-    { projectId: string; sourcePath: string },
-    { wavPath: string }
-  >
   [IPCChannels.EXPORT_CLIP]: ChannelPayload<
     { projectId: string; clipId: string; outputPath: string },
     { outputPath: string }

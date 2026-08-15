@@ -121,6 +121,11 @@ export function concurrencyFor(kind: JobKind, coreCount = cpus().length): number
       return 1 // RAM/CPU heavy — strictly serial (PRD §17)
     case 'export':
       return exportConcurrency(coreCount)
+    case 'extract-audio':
+      // Same class of ffmpeg work as export (a real-time-ish decode, not a heavy
+      // re-encode) — share its concurrency reasoning rather than serializing
+      // audio extraction across unrelated concurrent imports.
+      return exportConcurrency(coreCount)
     case 'model-download':
       return 4 // network-bound, cheap to overlap
     case 'url-download':

@@ -323,6 +323,10 @@ describe('SidecarManager concurrency math (PRD §17)', () => {
     expect(concurrencyFor('model-download', 10)).toBe(4)
     expect(concurrencyFor('url-download', 10)).toBe(2)
   })
+  it('extract-audio shares the export concurrency formula (EPIC-k83ghw / BUG-sg6kqg)', () => {
+    expect(concurrencyFor('extract-audio', 10)).toBe(exportConcurrency(10))
+    expect(concurrencyFor('extract-audio', 4)).toBe(1)
+  })
 })
 
 describe('SidecarManager.startJob drives a scripted runner to done over a real port', () => {

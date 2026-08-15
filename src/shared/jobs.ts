@@ -86,6 +86,15 @@ export type JobKind =
    * "always terminates done xor error" invariant for free.
    */
   | 'generate-clips'
+  /**
+   * 16kHz mono WAV extraction ahead of transcription (EPIC-k83ghw / BUG-sg6kqg).
+   * Was a plain `invoke` (`audio:extract`, now removed): no progress, no PID
+   * tracking, no cancel. On a multi-hour source the "Extracting audio" stage ran
+   * for minutes with the bar frozen and Cancel doing nothing — the ffmpeg child
+   * had no way to be reached. As a job it gets the same progress/cancel/PID-kill
+   * plane every other long ffmpeg operation already has.
+   */
+  | 'extract-audio'
 
 /** Typed terminal-error codes streamed in `{t:'error'}` (PRD §10.2). */
 export type JobErrorCode =
@@ -137,6 +146,15 @@ export type JobEventFor<K extends JobKind> = JobEvent<JobResult[K], JobPartial[K
 export type WhisperModelSize = 'tiny' | 'base' | 'small' | 'medium' | 'turbo' | 'large-v3'
 
 export interface JobParams {
+  /**
+   * Extract a 16kHz mono WAV from the source ahead of transcription
+   * (EPIC-k83ghw / BUG-sg6kqg). Content-addressed cached — a re-run over the
+   * same source (e.g. `retranscribe`) is a near-instant cache hit, not a re-decode.
+   */
+  'extract-audio': {
+    projectId: string
+    sourcePath: string
+  }
   /** Spawn whisper-cli over an extracted 16kHz WAV (PRD §6.2). */
   transcribe: {
     projectId: string
@@ -328,6 +346,12 @@ export interface JobParams {
 // ============================================================================
 
 export interface JobResult {
+  'extract-audio': {
+    /** Absolute path to the content-addressed 16kHz mono WAV. */
+    wavPath: string
+    /** True when a previously-extracted WAV was reused (cache hit). */
+    cached: boolean
+  }
   // FINALIZED at `contracts-v1` (Stage-4 media smoke). The terminal transcript:
   // `language` from whisper `result.language`; `segments` grouped from the word
   // stream (LLM-facing, PRD §16); `words` kept local for karaoke captions. This
@@ -376,6 +400,8 @@ export interface JobResult {
 // ============================================================================
 
 export interface JobPartial {
+  /** Extraction has no meaningful partial payload (progress-only). */
+  'extract-audio': never
   // FINALIZED at `contracts-v1` (Stage-4 media smoke). whisper-cli prints each
   // word as it is decoded (one stderr line per `transcription[]` entry under
   // `-ml 1 --split-on-word`); the runner maps those to `words` and emits any

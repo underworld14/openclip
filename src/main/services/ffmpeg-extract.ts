@@ -77,6 +77,10 @@ export interface ExtractAudioOptions {
   onProgress?: (pct: number) => void
   /** Cooperative cancel. */
   signal?: AbortSignal
+  /** Called with the ffmpeg child's PID once spawned (job PID-tracking for kill-on-quit). */
+  onSpawn?: (pid: number) => void
+  /** Called when the tracked child exits normally (pairs with `onSpawn`). */
+  onExit?: (pid: number) => void
   /** Override the ffmpeg binary (tests / smoke). */
   binPath?: string
   /** Override the base temp dir (tests). */
@@ -122,6 +126,8 @@ export async function extractAudio(opts: ExtractAudioOptions): Promise<ExtractAu
       totalDurationSec: opts.durationSec,
       binPath: opts.binPath,
       signal: opts.signal,
+      onSpawn: opts.onSpawn,
+      onExit: opts.onExit,
       onProgress: (pct) => {
         if (pct !== undefined) opts.onProgress?.(pct)
       }

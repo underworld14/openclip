@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'vitest'
 import { validateJobStart } from '@main/ipc/job-start-validation'
 import { AIProvider } from '@shared/schema'
+import type { JobKind } from '@shared/jobs'
 
 describe('validateJobStart (openclip-qki)', () => {
   it('accepts a well-formed transcribe payload', () => {
@@ -62,6 +63,60 @@ describe('validateJobStart (openclip-qki)', () => {
 
   it('rejects an unknown job kind', () => {
     expect(() => validateJobStart({ kind: 'rm-rf', params: {} })).toThrow(/INPUT_INVALID/)
+  })
+
+  // EPIC-k83ghw / BUG-sg6kqg: adding `extract-audio` to `JobKind` (jobs.ts) but
+  // forgetting this SEPARATE, hand-maintained `KIND` enum meant every real
+  // extract-audio job was rejected as INPUT_INVALID at the trust boundary — a
+  // renderer-visible break the type system cannot catch (this file's own
+  // `paramsByKind` is a plain object literal, not derived from `JobKind`). Caught
+  // by the vertical-slice E2E, not typecheck. This structural check makes the
+  // NEXT job kind fail loudly here instead of only at runtime (mirrors the
+  // `generate-clips` provider-drift lesson below).
+  it('every JobKind has a params validator (structural drift guard)', () => {
+    const kinds: JobKind[] = [
+      'extract-audio',
+      'transcribe',
+      'export',
+      'model-download',
+      'url-download',
+      'generate-clips'
+    ]
+    for (const kind of kinds) {
+      // A garbage `params` value always fails ITS kind's params schema — the
+      // point here is WHICH message comes back. "expected one of" is the
+      // envelope-level KIND rejection (this kind has no validator entry, the
+      // exact bug this guard exists for); a per-kind "params:" message proves
+      // the kind was recognised and its own validator ran.
+      let message = ''
+      try {
+        validateJobStart({ kind, params: 'not-an-object' })
+      } catch (e) {
+        message = e instanceof Error ? e.message : String(e)
+      }
+      expect(message).not.toMatch(/expected one of/)
+      expect(message).toContain(`JOB_START ${kind} params:`)
+    }
+  })
+
+  it('accepts a well-formed extract-audio payload', () => {
+    const out = validateJobStart({
+      kind: 'extract-audio',
+      params: { projectId: 'p1', sourcePath: '/src/in.mp4' }
+    })
+    expect(out.kind).toBe('extract-audio')
+  })
+
+  it('rejects extract-audio with a path-escaping projectId or an empty sourcePath', () => {
+    expect(() =>
+      validateJobStart({
+        kind: 'extract-audio',
+        params: { projectId: '../../victim', sourcePath: '/src/in.mp4' }
+      })
+    ).toThrow(/INPUT_INVALID/)
+    expect(() =>
+      validateJobStart({ kind: 'extract-audio', params: { projectId: 'p1', sourcePath: '' } })
+    ).toThrow(/INPUT_INVALID/)
   })
 
   it('rejects missing/empty security-sensitive paths', () => {

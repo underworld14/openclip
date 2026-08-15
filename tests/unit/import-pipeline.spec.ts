@@ -64,4 +64,51 @@ describe('runImportPipeline: import → extract → transcribe', () => {
       })
     ).rejects.toThrow(/whisper died|SIDECAR_CRASH/)
   })
+
+  // EPIC-k83ghw / BUG-sg6kqg: extraction used to be a plain `invoke` — no jobId,
+  // no progress, so Cancel during "Extracting audio" was a silent no-op and the
+  // bar sat frozen. It is now the `extract-audio` streaming job like every other
+  // long operation; these two tests pin exactly the behaviour that fixes.
+  it('extraction reports its own jobId (so a caller can cancel it) and advances progress', async () => {
+    const openclip = createMockOpenclip()
+    let extractJobId: string | null = null
+    const stagesSeen: string[] = []
+
+    await runImportPipeline({
+      bridge: openclip,
+      filePath: '/tmp/sample.mp4',
+      projectId: 'p1',
+      model: 'base',
+      onExtractStart: (jobId) => {
+        extractJobId = jobId
+      },
+      onProgress: (_pct, stage) => stagesSeen.push(stage)
+    })
+
+    expect(extractJobId).toMatch(/^extract-audio-/)
+    // The default mock script reports a mid-extraction progress tick before
+    // `done` — proof the bar moves instead of sitting frozen at one value.
+    expect(stagesSeen.filter((s) => s === 'extracting').length).toBeGreaterThan(1)
+  })
+
+  it('a cancelled extraction surfaces as a thrown pipeline error, not a hang', async () => {
+    const openclip = createMockOpenclip({
+      scripts: {
+        'extract-audio': {
+          steps: [
+            { t: 'progress', pct: 10, stage: 'extracting' },
+            { t: 'error', code: 'CANCELLED', message: 'job cancelled', retriable: false }
+          ]
+        }
+      }
+    })
+    await expect(
+      runImportPipeline({
+        bridge: openclip,
+        filePath: '/tmp/sample.mp4',
+        projectId: 'p1',
+        model: 'base'
+      })
+    ).rejects.toThrow(/CANCELLED/)
+  })
 })

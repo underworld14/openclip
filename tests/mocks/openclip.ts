@@ -55,7 +55,6 @@ function toMethodName(channelValue: string, prefix: string): string {
 /** Canned responses keyed by channel value. */
 const CANNED: Partial<Record<string, unknown>> = {
   [IPCChannels.IMPORT_VIDEO]: { sourceVideo: projectFixture.sourceVideo },
-  [IPCChannels.AUDIO_EXTRACT]: { wavPath: '/tmp/openclip/p1/j1/audio.16k.wav' },
   [IPCChannels.EXPORT_CLIP]: { outputPath: '/Users/me/Movies/clip-1.mp4' },
   [IPCChannels.GENERATE_CLIPS]: clipSchemaFixture,
   // NOTE: main REJECTS GENERATE_TITLES, and ENHANCE_CAPTIONS unless mode:'emoji'
@@ -143,6 +142,12 @@ function buildMockNamespace(prefix: string): Record<string, (req?: unknown) => P
 // ============================================================================
 
 const DEFAULT_SCRIPTS: { [K in JobKind]: JobScript<K> } = {
+  'extract-audio': {
+    steps: [
+      { t: 'progress', pct: 50, stage: 'extracting' },
+      { t: 'done', result: { wavPath: '/tmp/openclip/p1/j1/audio.16k.wav', cached: false } }
+    ]
+  },
   transcribe: {
     steps: [
       { t: 'progress', pct: 10, stage: 'extracting' },
@@ -261,7 +266,6 @@ export function createMockOpenclip(opts: MockOptions = {}): OpenClipBridge {
 
   return {
     video: buildMockNamespace('video') as OpenClipBridge['video'],
-    audio: buildMockNamespace('audio') as OpenClipBridge['audio'],
     ai: buildMockNamespace('ai') as OpenClipBridge['ai'],
     media: buildMockNamespace('media') as OpenClipBridge['media'],
     brand: buildMockNamespace('brand') as OpenClipBridge['brand'],

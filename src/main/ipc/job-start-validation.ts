@@ -42,6 +42,10 @@ const safeSegment = nonEmpty.refine(
 
 /** Per-kind params validators — strict on the sensitive fields, loose on the rest. */
 const paramsByKind = {
+  'extract-audio': z.looseObject({
+    projectId: safeSegment,
+    sourcePath: nonEmpty
+  }),
   transcribe: z.looseObject({
     projectId: safeSegment,
     wavPath: nonEmpty,
@@ -85,7 +89,14 @@ const paramsByKind = {
   })
 } as const
 
-const KIND = z.enum(['transcribe', 'export', 'model-download', 'url-download', 'generate-clips'])
+const KIND = z.enum([
+  'extract-audio',
+  'transcribe',
+  'export',
+  'model-download',
+  'url-download',
+  'generate-clips'
+])
 const ENVELOPE = z.object({ kind: KIND, params: z.unknown() })
 
 /**

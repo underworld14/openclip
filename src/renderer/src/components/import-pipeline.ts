@@ -52,6 +52,11 @@ export interface ImportPipelineOptions {
   onTranscript?: (transcript: JobResult['transcribe']) => void
   /** The transcribe jobId, right after start, so the caller can cancel it (openclip-2bm). */
   onStart?: (jobId: string) => void
+  /**
+   * The extract-audio jobId, right after start (EPIC-k83ghw / BUG-sg6kqg) — so
+   * Cancel works during "Extracting audio" too, not just "Transcribing".
+   */
+  onExtractStart?: (jobId: string) => void
 }
 
 export interface ImportPipelineResult {
@@ -80,9 +85,21 @@ export async function runImportPipeline(
   // transcript partials below stream into a project the user can already see.
   await opts.onProbed?.(sourceVideo)
 
-  // 2) Extract 16kHz mono WAV (PRD §6.1).
+  // 2) Extract 16kHz mono WAV (PRD §6.1) — a streaming job (EPIC-k83ghw /
+  // BUG-sg6kqg), not a plain invoke: real ffmpeg progress and a jobId Cancel
+  // can actually reach, instead of a frozen bar and a silent-no-op Cancel on
+  // a multi-hour source.
   report(12, 'extracting')
-  const { wavPath } = await bridge.audio.extract({ projectId, sourcePath: filePath })
+  const { wavPath } = await drainJob(
+    bridge,
+    'extract-audio',
+    { projectId, sourcePath: filePath },
+    {
+      onStart: opts.onExtractStart,
+      // Scale the extraction stage into the 12..25 progress band.
+      onProgress: (pct, stage) => report(12 + Math.round((pct / 100) * 13), stage)
+    }
+  )
   report(25, 'extracting')
 
   // 3) Transcribe — streaming job over a per-job MessagePort (PRD §6.2/§10.2).

@@ -4,11 +4,12 @@
  * + preload bridge + sidecar manager + per-job MessagePort handoff.
  *
  * The "sidecar" is the fake-emitter harness: launching with
- * OPENCLIP_FAKE_TRANSCRIBE makes T-Media's OWN handlers binary-free —
- * `audio.extract` returns a fixed WAV path and the registered `transcribe` job
- * runner streams a FIXED transcript (the "fake-sidecar harness emitting a fixed
- * transcript", plan E.10). No real whisper/FFmpeg binary runs here; the
- * real-binary path is covered by the @serial whisper smoke.
+ * OPENCLIP_FAKE_TRANSCRIBE makes T-Media's OWN handlers binary-free — the
+ * registered `extract-audio` job returns a fixed WAV path and the registered
+ * `transcribe` job runner streams a FIXED transcript (the "fake-sidecar
+ * harness emitting a fixed transcript", plan E.10). No real whisper/FFmpeg
+ * binary runs here; the real-binary path is covered by the @serial whisper
+ * smoke.
  *
  * BLOCKER FIXED (integration Wave-1 Stage 2): the per-job MessagePort is no
  * longer (incorrectly) returned across `contextBridge` (which clone+froze it
@@ -68,6 +69,32 @@ const ACQUIRE_PORT_SHIM = `
       __waiters.set(jobId, function (port) { clearTimeout(timer); resolve(port) })
     })
   }
+  // Drain a per-job port to its terminal event (EPIC-k83ghw / BUG-sg6kqg —
+  // audio extraction is now a streaming job like transcribe, so the fixed-WAV
+  // step needs the same acquire+drain dance instead of a plain invoke await).
+  function drainJobPort(port, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const events = []
+      const timer = setTimeout(function () {
+        reject(new Error('drainJobPort: no terminal event within ' + (timeoutMs || 15000) +
+          'ms — saw [' + events.join(', ') + ']'))
+      }, timeoutMs || 15000)
+      port.onmessage = function (ev) {
+        const d = ev.data
+        if (d.t === 'job-id') return
+        events.push(d.t)
+        if (d.t === 'done') {
+          clearTimeout(timer)
+          resolve({ events: events, result: d.result })
+        }
+        if (d.t === 'error') {
+          clearTimeout(timer)
+          reject(new Error('job failed [' + d.code + ']: ' + d.message))
+        }
+      }
+      port.start()
+    })
+  }
 `
 
 test('owned slice over the real app: audio extract + transcribe job start/cancel', async () => {
@@ -78,11 +105,24 @@ test('owned slice over the real app: audio extract + transcribe job start/cancel
   const win = await app.firstWindow()
   await win.waitForLoadState('domcontentloaded')
 
-  const out = await win.evaluate(async () => {
+  const out = await win.evaluate(async (acquireSrc) => {
+    const { acquireJobPort, drainJobPort } = new Function(
+      acquireSrc + '; return { acquireJobPort: acquireJobPort, drainJobPort: drainJobPort }'
+    )() as {
+      acquireJobPort: (jobId: string, timeoutMs?: number) => Promise<MessagePort>
+      drainJobPort: (port: MessagePort, timeoutMs?: number) => Promise<{ result: unknown }>
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const oc = (window as any).openclip
-    // 1) Audio extract → a 16kHz WAV path (PRD §6.1), over the real handler.
-    const { wavPath } = await oc.audio.extract({ projectId: 'p1', sourcePath: '/tmp/x.mp4' })
+    // 1) Audio extract → a 16kHz WAV path (PRD §6.1), over the real `extract-audio`
+    //    job (EPIC-k83ghw / BUG-sg6kqg — no longer a plain invoke).
+    const { jobId: extractJobId } = await oc.jobs.start('extract-audio', {
+      projectId: 'p1',
+      sourcePath: '/tmp/x.mp4'
+    })
+    const extractPort = await acquireJobPort(extractJobId, 15_000)
+    const { result: extractResult } = await drainJobPort(extractPort, 15_000)
+    const wavPath = (extractResult as { wavPath: string }).wavPath
     // 2) The transcribe job starts and the real main side assigns a jobId
     //    (the JOB_START control plane round-trips as a plain invoke → { jobId }).
     const { jobId } = await oc.jobs.start('transcribe', {
@@ -93,7 +133,7 @@ test('owned slice over the real app: audio extract + transcribe job start/cancel
     // 3) Cancel round-trips (request/response, never starved — PRD §10.2).
     await oc.jobs.cancel(jobId)
     return { wavPath, jobId }
-  })
+  }, ACQUIRE_PORT_SHIM)
 
   expect(out.wavPath).toContain('audio.16k.wav')
   expect(out.jobId).toMatch(/^transcribe-/)
@@ -110,13 +150,23 @@ test('transcribe streams progress + a fixed transcript to the renderer over the 
   await win.waitForLoadState('domcontentloaded')
 
   const result = await win.evaluate(async (acquireSrc) => {
-    const acquireJobPort = new Function(acquireSrc + '; return acquireJobPort')() as (
-      jobId: string,
-      timeoutMs?: number
-    ) => Promise<MessagePort>
+    const { acquireJobPort, drainJobPort } = new Function(
+      acquireSrc + '; return { acquireJobPort: acquireJobPort, drainJobPort: drainJobPort }'
+    )() as {
+      acquireJobPort: (jobId: string, timeoutMs?: number) => Promise<MessagePort>
+      drainJobPort: (port: MessagePort, timeoutMs?: number) => Promise<{ result: unknown }>
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const oc = (window as any).openclip
-    const { wavPath } = await oc.audio.extract({ projectId: 'p1', sourcePath: '/tmp/x.mp4' })
+    // Audio extract is now the `extract-audio` streaming job (EPIC-k83ghw /
+    // BUG-sg6kqg), same acquire+drain dance as transcribe below.
+    const { jobId: extractJobId } = await oc.jobs.start('extract-audio', {
+      projectId: 'p1',
+      sourcePath: '/tmp/x.mp4'
+    })
+    const extractPort = await acquireJobPort(extractJobId, 15_000)
+    const { result: extractResult } = await drainJobPort(extractPort, 15_000)
+    const wavPath = (extractResult as { wavPath: string }).wavPath
     const { jobId } = await oc.jobs.start('transcribe', { projectId: 'p1', wavPath, model: 'base' })
 
     // Acquire the LIVE per-job port delivered out-of-band (the contextBridge fix).

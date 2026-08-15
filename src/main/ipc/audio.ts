@@ -1,42 +1,26 @@
 /**
- * src/main/ipc/audio.ts — audio control-plane handler (T-Media, E.3).
+ * src/main/ipc/audio.ts — audio job wiring (T-Media, E.3; moved onto the job
+ * plane at EPIC-k83ghw / BUG-sg6kqg).
  *
- * Wires AUDIO_EXTRACT (PRD §6.1): probe the source for duration, then extract a
- * 16kHz mono WAV via FFmpeg (content-addressed cached, PRD §17). Returns the WAV
- * path so the renderer can hand it to the `transcribe` job.
+ * Registers the `extract-audio` runner with the sidecar (the startup seam, E.3:
+ * main/index.ts loops HANDLER_REGISTRARS at init). `JOB_START('extract-audio',
+ * { projectId, sourcePath })` probes the source, extracts a 16kHz mono WAV via
+ * FFmpeg (content-addressed cached, PRD §17), and streams real progress with
+ * the ffmpeg PID tracked for cooperative cancel + kill-on-quit.
  *
- * Extraction is short and request/response here; long, streaming work
- * (transcribe/export/model-download) goes through JOB_START instead (PRD §10.2).
+ * There is no request/response extract channel — like `transcribe`, extraction
+ * is a streaming job by contract (jobs.ts), so this registrar only plugs in
+ * the runner. It used to be a plain `invoke` (`audio:extract`): no progress, no
+ * PID tracking, no cancel — see BUG-sg6kqg for the user-facing symptom.
  */
 
-import { IPCChannels } from '@shared/channels'
 import type { IpcContext } from './index'
-import { extractAudio } from '@main/services/ffmpeg-extract'
-import { probeVideo } from '@main/utils/ffprobe'
+import { registerRunner, hasRunner } from '@main/services/sidecar-manager'
+import { extractAudioRunner } from '@main/services/jobs/extract-audio-runner'
 
 export function registerAudioHandlers(ctx: IpcContext): void {
-  ctx.ipcMain.handle(
-    IPCChannels.AUDIO_EXTRACT,
-    async (_e, req: { projectId: string; sourcePath: string }): Promise<{ wavPath: string }> => {
-      // E2E fake-sidecar mode (plan E.10): skip the real ffmpeg decode so the
-      // vertical-slice E2E can drive extract→transcribe without a media file.
-      if (process.env.OPENCLIP_FAKE_TRANSCRIBE) {
-        return { wavPath: `/tmp/openclip/${req.projectId}/cache/audio.16k.wav` }
-      }
-      // Probe duration so extraction progress can be computed; tolerate probe
-      // failure (extraction still works, just without a duration denominator).
-      let durationSec: number | undefined
-      try {
-        durationSec = (await probeVideo(req.sourcePath)).duration
-      } catch {
-        durationSec = undefined
-      }
-      const { wavPath } = await extractAudio({
-        projectId: req.projectId,
-        sourcePath: req.sourcePath,
-        durationSec
-      })
-      return { wavPath }
-    }
-  )
+  void ctx
+  // Plug the runner into the sidecar's JOB_RUNNERS registry (startup seam, E.4).
+  // Guarded so a re-registration (e.g. test re-import) doesn't throw.
+  if (!hasRunner('extract-audio')) registerRunner('extract-audio', extractAudioRunner)
 }

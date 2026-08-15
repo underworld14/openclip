@@ -1,6 +1,6 @@
 ---
 topic: renderer
-updated: 2026-08-15T11:30:22Z
+updated: 2026-08-15T13:32:48Z
 ---
 
 # renderer
@@ -14,3 +14,4 @@ updated: 2026-08-15T11:30:22Z
 - 2026-08-14: createMockOpenclip() calls registerJobPort() directly, so it bypasses the window-message listener in jobPort.ts. Any test that needs to prove the REAL port handoff must dispatch a tagged window 'message' event itself — a bug living only in that listener is invisible to every mock-bridge test. (cites: tests/mocks/openclip.ts)
 - 2026-08-14: Caption sizing is authored against a pinned 1080px design WIDTH: the ASS script sets PlayResX=1080 always and derives PlayResY from the export canvas, matching the preview's cqw (container-query width) units. Never set PlayRes to the raw output dimensions — that silently disagrees with the preview by 1.78x on 16:9. (cites: src/main/services/ass-captions.ts)
 - 2026-08-15: projectStore is a single GLOBAL store with no project scoping: transcriptSlice.hydrateTranscript/appendTranscriptPartial and clipsSlice.generateClips' done branch all set({...}) unconditionally, and autosave persists ~800ms later. Any long job landing after the user switches projects writes its result into the WRONG project's .ocproj. Job params/results carry no projectId to check against (EPIC-k83ghw / BUG-93txd0).
+- 2026-08-15: Adding a new JobKind to jobs.ts is not enough to make jobs.start(kind,...) work at runtime: src/main/ipc/job-start-validation.ts keeps its OWN hand-maintained z.enum(['transcribe','export',...]) KIND list + a paramsByKind map, neither derived from the JobKind type — so a new kind typechecks everywhere but gets rejected as INPUT_INVALID the first time a real JOB_START reaches main. Typecheck and unit tests (which mock the bridge) do not catch this; only an E2E/integration run against the real IPC boundary does. When adding a job kind: also add it to job-start-validation.ts's KIND enum and paramsByKind, and add a case to sidecar-manager.ts's concurrencyFor. job-start-validation.spec.ts now has a structural 'every JobKind has a params validator' guard test to catch this earlier next time.

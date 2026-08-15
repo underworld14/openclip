@@ -18,7 +18,6 @@ import type { JobsAPI } from '@shared/jobs'
 import type { NamespaceMethods } from './api/types'
 
 import { buildVideoApi } from './api/video'
-import { buildAudioApi } from './api/audio'
 import { buildAiApi } from './api/ai'
 import { buildMediaApi } from './api/media'
 import { buildBrandApi } from './api/brand'
@@ -39,8 +38,6 @@ import { installMenuCommandForwarder } from './menu-command'
 export interface OpenClipBridge {
   /** video:import, video:export → import, export */
   video: NamespaceMethods<'video'>
-  /** audio:extract → extract */
-  audio: NamespaceMethods<'audio'>
   /** ai:generate-clips, ai:generate-titles, ai:enhance-captions, ai:list-models */
   ai: NamespaceMethods<'ai'>
   /** media:adopt-source → adoptSource */
@@ -67,7 +64,6 @@ export interface OpenClipBridge {
 
 const openclip: OpenClipBridge = {
   video: buildVideoApi(),
-  audio: buildAudioApi(),
   ai: buildAiApi(),
   media: buildMediaApi(),
   brand: buildBrandApi(),

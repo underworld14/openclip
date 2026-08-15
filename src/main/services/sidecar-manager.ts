@@ -246,6 +246,18 @@ export class SidecarManager {
   }
 
   /**
+   * Active job KINDS (EPIC-k83ghw / BUG-adfj3b) — what the quit-confirmation
+   * dialog names ("An export is still running. Quit anyway?"). Split out from
+   * `activeJobIds()` because a job id is `${kind}-${timestamp}-${seq}` and
+   * several kinds (`generate-clips`, `url-download`, `model-download`)
+   * contain hyphens themselves, so the kind cannot be recovered by splitting
+   * the id string.
+   */
+  activeJobKinds(): JobKind[] {
+    return [...this.active.values()].map((j) => j.kind)
+  }
+
+  /**
    * Run a job of `kind`, streaming events to `port`. Resolves with the jobId
    * immediately so callers can hand the renderer its port; the work proceeds
    * asynchronously and always terminates the port with a done|error event.
@@ -421,11 +433,26 @@ export class SidecarManager {
    * exactly during a big export) used to trip killAll() and SIGKILL every running
    * job, surfacing CANCELLED mid-encode even though the app kept running.
    */
-  installLifecycleHooks(app: {
-    on(event: string, listener: (...args: unknown[]) => void): void
-  }): void {
+  installLifecycleHooks(
+    app: {
+      on(event: string, listener: (...args: unknown[]) => void): void
+    },
+    opts: {
+      /**
+       * Bind kill to `before-quit` too (default true). A caller that itself
+       * gates `before-quit` on a user confirmation (EPIC-k83ghw / BUG-adfj3b)
+       * passes `false`: Node calls every listener registered for one emit
+       * back-to-back regardless of another listener's `preventDefault()`, so
+       * an unconditional kill bound HERE would still fire even on a quit the
+       * user just cancelled. `will-quit` (unaffected by this flag) only fires
+       * once a quit is truly proceeding, so it stays the correct place for
+       * this class's own kill-on-quit guarantee in that case.
+       */
+      killOnBeforeQuit?: boolean
+    } = {}
+  ): void {
     const kill = (): void => this.killAll()
-    app.on('before-quit', kill)
+    if (opts.killOnBeforeQuit ?? true) app.on('before-quit', kill)
     app.on('will-quit', kill)
     process.once('SIGINT', kill)
     process.once('SIGTERM', kill)

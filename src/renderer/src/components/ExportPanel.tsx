@@ -237,7 +237,16 @@ export function ExportPanel(): React.JSX.Element {
     failed: number
   } | null>(null)
   const batchAbort = useRef<AbortController | null>(null)
-  const approvedClips = useMemo(() => clips.filter((c) => c.status === 'approved'), [clips])
+  // Once-exported clips are still eligible for a repeat batch — re-exporting
+  // to a different platform preset, or after changing the caption style, is
+  // the natural second pass and used to be permanently blocked: `markExported`
+  // moves a clip's status to 'exported', which dropped it out of THIS filter
+  // forever, so the button read "Export all approved (0)" for good after one
+  // run (EPIC-k83ghw / BUG-gasxqq).
+  const approvedClips = useMemo(
+    () => clips.filter((c) => c.status === 'approved' || c.status === 'exported'),
+    [clips]
+  )
 
   const runBatch = useCallback(async (): Promise<void> => {
     const project = composeProject()

@@ -1,14 +1,14 @@
 ---
 id: BUG-gasxqq
 title: Rejecting the selected clip leaves the preview, timeline and Export dialog pointed at it; and clips can only ever be batch-exported once
-status: todo
+status: doing
 priority: high
 labels:
     - dead-control
 parent: EPIC-k83ghw
 phase: p1
 created: "2026-08-15T11:28:11Z"
-updated: "2026-08-15T11:28:11Z"
+updated: "2026-08-15T11:49:22Z"
 ---
 
 ## Problem

@@ -142,7 +142,22 @@ export const createClipsSlice: StateCreator<ProjectStore, [], [], ClipsSlice> = 
   approveClip: (id) =>
     set((s) => ({ clips: s.clips.map((c) => (c.id === id ? { ...c, status: 'approved' } : c)) })),
   rejectClip: (id) =>
-    set((s) => ({ clips: s.clips.map((c) => (c.id === id ? { ...c, status: 'rejected' } : c)) })),
+    set((s) => {
+      const clips = s.clips.map((c) => (c.id === id ? { ...c, status: 'rejected' as const } : c))
+      // Rejecting the SELECTED clip left the preview, timeline and the export
+      // target still pointed at it — it is still `find`-able by id, only its
+      // status changed — so the picture on screen kept "editing" a clip the
+      // sidebar no longer showed as active (EPIC-k83ghw / BUG-gasxqq). Move
+      // off it: the next non-rejected clip, else the previous one, else none.
+      let selectedClipId = s.selectedClipId
+      if (selectedClipId === id) {
+        const idx = s.clips.findIndex((c) => c.id === id)
+        const after = clips.slice(idx + 1).find((c) => c.status !== 'rejected')
+        const before = [...clips.slice(0, idx)].reverse().find((c) => c.status !== 'rejected')
+        selectedClipId = (after ?? before)?.id ?? null
+      }
+      return { clips, selectedClipId }
+    }),
   restoreClip: (id) =>
     set((s) => ({ clips: s.clips.map((c) => (c.id === id ? { ...c, status: 'suggested' } : c)) })),
   markExported: (ids) => {

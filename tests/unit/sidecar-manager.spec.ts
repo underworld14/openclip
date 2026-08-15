@@ -125,6 +125,17 @@ describe('SidecarManager: a QUEUED job is settled synchronously on cancel/killAl
     expect(last.t).toBe('error')
     expect(last.code).toBe('CANCELLED')
   })
+
+  it('activeJobKinds() reports each running job by KIND, not its id (EPIC-k83ghw / BUG-adfj3b)', () => {
+    // Job ids are `${kind}-${timestamp}-${seq}`, and several kinds themselves
+    // contain a hyphen (generate-clips, url-download, model-download) — the
+    // quit-confirmation dialog needs the real kind, not a string split on '-'.
+    const mgr = new SidecarManager({ coreCount: 10, limiterFactory: neverAdmit })
+    mgr.startJob('transcribe', params, mkPort().eventPort)
+    expect(mgr.activeJobKinds()).toEqual(['transcribe'])
+    mgr.killAll()
+    expect(mgr.activeJobKinds()).toEqual([])
+  })
 })
 
 describe('SidecarManager: settle() never leaks a job when the port throws (audit fix openclip-asx)', () => {
@@ -196,6 +207,20 @@ describe('SidecarManager lifecycle hooks (audit fix openclip-032)', () => {
     expect(appEvents).toContain('will-quit')
     // A recoverable GPU/utility child crash must NOT massacre every running job.
     expect(appEvents).not.toContain('child-process-gone')
+  })
+
+  it('killOnBeforeQuit:false skips before-quit but keeps will-quit (EPIC-k83ghw / BUG-adfj3b)', () => {
+    // A caller that gates before-quit on its own confirmation dialog must be
+    // able to opt out of this class's unconditional kill on that SAME event —
+    // Node calls every listener for one emit regardless of another listener's
+    // preventDefault(), so leaving it bound would kill jobs even on a
+    // cancelled quit. will-quit only fires once quit is truly proceeding, so
+    // it stays unconditional.
+    const mgr = new SidecarManager({ coreCount: 10 })
+    const appEvents: string[] = []
+    mgr.installLifecycleHooks({ on: (e: string) => appEvents.push(e) }, { killOnBeforeQuit: false })
+    expect(appEvents).not.toContain('before-quit')
+    expect(appEvents).toContain('will-quit')
   })
 })
 

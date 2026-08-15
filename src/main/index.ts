@@ -17,11 +17,12 @@
  * fan-out track (it only loops the frozen registry).
  */
 
-import { app, shell, BrowserWindow, ipcMain, session, MessageChannelMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, session, MessageChannelMain, dialog } from 'electron'
 import { join } from 'node:path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { IPCChannels } from '@shared/channels'
+import type { JobKind } from '@shared/jobs'
 import { registerAllHandlers, type IpcContext } from './ipc'
 import { readCurrentSettings } from './ipc/settings'
 import { validateJobStart } from './ipc/job-start-validation'
@@ -275,6 +276,21 @@ function wireJobControlPlane(): void {
   })
 }
 
+/** One line naming what is running, for the quit-confirmation dialog. */
+function activeJobMessage(kinds: JobKind[]): string {
+  if (kinds.length === 1) {
+    const nouns: Partial<Record<JobKind, string>> = {
+      transcribe: 'A transcription is',
+      export: 'An export is',
+      'generate-clips': 'A clip generation is',
+      'model-download': 'A model download is',
+      'url-download': 'A video download is'
+    }
+    return `${nouns[kinds[0]] ?? 'A job is'} still running.`
+  }
+  return `${kinds.length} jobs are still running.`
+}
+
 /**
  * Quit-time autosave durability (audit fix openclip-49y): the renderer's `pagehide`
  * flush is an async IPC round-trip the unload path cannot await, so a save still inside
@@ -282,10 +298,23 @@ function wireJobControlPlane(): void {
  * ask the renderer to flush its pending debounced save (FLUSH_BEFORE_QUIT), and proceed
  * the instant it ACKs (AUTOSAVE_FLUSHED) — or after a bounded wait so a wedged/closed
  * renderer can never block quit.
+ *
+ * ALSO gates the quit on a running job (EPIC-k83ghw / BUG-adfj3b): before this,
+ * Cmd+Q or the Dock's Quit killed a 15-minute transcription or a batch export
+ * instantly, with no dialog and no way back. The check runs FIRST, synchronously
+ * (`showMessageBoxSync`, not the async variant) and in THIS single listener —
+ * Node calls every 'before-quit' listener for one emit back-to-back regardless
+ * of an earlier one's `preventDefault()`, so a second, independent listener
+ * (or an async dialog racing the rest of this function) could not reliably stop
+ * `SidecarManager`'s kill-on-quit from firing anyway. `sidecar.installLifecycleHooks`
+ * below is told NOT to bind its kill to `before-quit` for exactly this reason —
+ * it still binds to `will-quit` (which only fires once a quit is truly proceeding)
+ * and to SIGINT/SIGTERM (unconditional OS-signal safety nets), both unaffected.
  */
 function wireQuitAutosaveFlush(): void {
   let quitFlushDone = false
   let resolveQuitFlush: (() => void) | null = null
+  let jobsConfirmed = false
 
   ipcMain.handle(IPCChannels.AUTOSAVE_FLUSHED, (): { ok: boolean } => {
     resolveQuitFlush?.()
@@ -294,6 +323,27 @@ function wireQuitAutosaveFlush(): void {
 
   app.on('before-quit', (e) => {
     if (quitFlushDone) return // second pass (after we re-quit) → let it through
+    if (!jobsConfirmed) {
+      const kinds = sidecar.activeJobKinds()
+      if (kinds.length > 0) {
+        e.preventDefault()
+        const win = BrowserWindow.getFocusedWindow() ?? mainWindow
+        const opts = {
+          type: 'question' as const,
+          buttons: ['Quit Anyway', 'Cancel'],
+          defaultId: 1,
+          cancelId: 1,
+          message: activeJobMessage(kinds),
+          detail: 'Quitting now stops it immediately — this cannot be undone.'
+        }
+        const idx =
+          win && !win.isDestroyed()
+            ? dialog.showMessageBoxSync(win, opts)
+            : dialog.showMessageBoxSync(opts)
+        if (idx !== 0) return // "Cancel" — leave the quit aborted, nothing else runs
+      }
+      jobsConfirmed = true
+    }
     const wc = mainWindow?.webContents
     if (!wc || wc.isDestroyed()) return // no renderer to flush → quit normally
     e.preventDefault()
@@ -333,7 +383,10 @@ app.whenReady().then(async () => {
   } catch {
     // Falls back to the built-in array limiter if p-queue can't load.
   }
-  sidecar.installLifecycleHooks(app)
+  // `killOnBeforeQuit: false` — `wireQuitAutosaveFlush` below owns `before-quit`
+  // (it gates on the job-running confirmation first); `will-quit`/SIGINT/SIGTERM
+  // stay bound here, unconditional (EPIC-k83ghw / BUG-adfj3b).
+  sidecar.installLifecycleHooks(app, { killOnBeforeQuit: false })
   wireQuitAutosaveFlush()
 
   installCsp()

@@ -65,6 +65,35 @@ describe('rejectClip: the clip survives', () => {
     expect(visible.map((c) => c.id)).toEqual(['a', 'c'])
     expect(hidden.map((c) => c.id)).toEqual(['b'])
   })
+
+  // EPIC-k83ghw / BUG-gasxqq: rejecting the SELECTED clip used to leave the
+  // preview/timeline/export target pointed at it — it stays `find`-able by
+  // id, only its status changes, so nothing downstream noticed the reject.
+  describe('rejecting the SELECTED clip moves the selection', () => {
+    it('to the next non-rejected clip', () => {
+      useProjectStore.setState({ clips: [clip('a'), clip('b'), clip('c')], selectedClipId: 'b' })
+      act(() => useProjectStore.getState().rejectClip('b'))
+      expect(useProjectStore.getState().selectedClipId).toBe('c')
+    })
+
+    it('to the previous non-rejected clip when it was the last one', () => {
+      useProjectStore.setState({ clips: [clip('a'), clip('b'), clip('c')], selectedClipId: 'c' })
+      act(() => useProjectStore.getState().rejectClip('c'))
+      expect(useProjectStore.getState().selectedClipId).toBe('b')
+    })
+
+    it('to null when it was the only clip', () => {
+      useProjectStore.setState({ clips: [clip('a')], selectedClipId: 'a' })
+      act(() => useProjectStore.getState().rejectClip('a'))
+      expect(useProjectStore.getState().selectedClipId).toBeNull()
+    })
+
+    it('leaves an unrelated selection untouched', () => {
+      useProjectStore.setState({ clips: [clip('a'), clip('b')], selectedClipId: 'a' })
+      act(() => useProjectStore.getState().rejectClip('b'))
+      expect(useProjectStore.getState().selectedClipId).toBe('a')
+    })
+  })
 })
 
 describe('ClipSidebar: hidden clips are one click away, not gone', () => {

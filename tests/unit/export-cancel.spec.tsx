@@ -86,6 +86,32 @@ describe('single-clip export: cancel', () => {
   })
 })
 
+describe('batch export re-eligibility (EPIC-k83ghw / BUG-gasxqq)', () => {
+  it('stays enabled for an already-exported clip — a repeat batch is not permanently blocked', () => {
+    // markExported flips status to 'exported'. The batch button used to filter
+    // on status === 'approved' only, so ONE successful batch dropped every clip
+    // out of the count forever: "Export all approved (0)" for good, even though
+    // re-exporting the same clips to a different preset is the natural next step.
+    useProjectStore.setState({
+      currentProject: projectFixture,
+      clips: [{ ...clipFixture, status: 'exported' }],
+      selectedClipId: clipFixture.id
+    })
+    render(<ExportPanel />)
+    expect((screen.getByTestId('batch-export-start') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('stays disabled with nothing approved or exported', () => {
+    useProjectStore.setState({
+      currentProject: projectFixture,
+      clips: [{ ...clipFixture, status: 'suggested' }],
+      selectedClipId: clipFixture.id
+    })
+    render(<ExportPanel />)
+    expect((screen.getByTestId('batch-export-start') as HTMLButtonElement).disabled).toBe(true)
+  })
+})
+
 describe('dismissing the dialog mid-export', () => {
   it('leaves the job active in the app-level registry, not stranded', async () => {
     bridge = installRendererEnv({ scripts: { export: SLOW_EXPORT } })

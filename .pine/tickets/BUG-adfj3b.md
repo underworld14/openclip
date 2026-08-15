@@ -1,14 +1,14 @@
 ---
 id: BUG-adfj3b
 title: Quitting or closing the window during a job kills it instantly with no confirmation
-status: todo
+status: doing
 priority: high
 labels:
     - data-loss
 parent: EPIC-k83ghw
 phase: p0
 created: "2026-08-15T11:28:11Z"
-updated: "2026-08-15T11:28:11Z"
+updated: "2026-08-15T11:49:22Z"
 ---
 
 ## Problem

@@ -17,12 +17,21 @@ import { join } from 'node:path'
 
 let dir: string
 let mediaRoot: string
+let tempRoot: string
 
-// Mock the trunk-frozen paths module so projectsDir()/mediaDir() point at our temp
-// dirs (the real ones call Electron app.getPath('userData'), unavailable here).
+// Mock the trunk-frozen paths module so projectsDir()/mediaDir()/tempRootFor()
+// point at our temp dirs (the real ones call Electron app.getPath, unavailable
+// here). tempRootFor mirrors the real one's single-segment guard (BUG-08sb0x /
+// BUG-hqbett) so a malformed id is rejected the same way here as in prod.
 vi.mock('@main/utils/paths', () => ({
   projectsDir: (): string => dir,
-  mediaDir: (): string => mediaRoot
+  mediaDir: (): string => mediaRoot,
+  tempRootFor: (id: string): string => {
+    if (!id || /[\\/]/.test(id) || id === '.' || id === '..' || id.includes('\0')) {
+      throw new Error(`unsafe project id: ${JSON.stringify(id)}`)
+    }
+    return join(tempRoot, id)
+  }
 }))
 
 import { registerProjectHandlers } from '@main/ipc/project'
@@ -65,9 +74,11 @@ function makeFakeContext(): {
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'openclip-ipc-'))
   mediaRoot = await mkdtemp(join(tmpdir(), 'openclip-media-'))
+  tempRoot = await mkdtemp(join(tmpdir(), 'openclip-temp-'))
 })
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true })
+  await rm(tempRoot, { recursive: true, force: true })
   await rm(mediaRoot, { recursive: true, force: true })
   vi.clearAllMocks()
 })
@@ -167,6 +178,40 @@ describe('registerProjectHandlers wires the project channels', () => {
 
     await expect(stat(owned)).rejects.toThrow() // owned media reclaimed
     await expect(stat(userOriginal)).resolves.toBeTruthy() // user's original untouched
+  })
+
+  it('DELETE reclaims the per-project TEMP cache (WAV extract + poster frames — BUG-08sb0x)', async () => {
+    const { mkdir, writeFile, stat } = await import('node:fs/promises')
+    const { ctx, invoke } = makeFakeContext()
+    registerProjectHandlers(ctx)
+    await invoke(IPCChannels.SAVE_PROJECT, { project: projectFixture })
+
+    // The content-addressed cache dir sweepOrphanTemp deliberately NEVER sweeps:
+    // the WAV extract plus a clip poster frame, plus another project's cache
+    // (untouched sibling).
+    const cache = join(tempRoot, projectFixture.id, 'cache')
+    await mkdir(cache, { recursive: true })
+    await writeFile(join(cache, 'audio.16k.wav'), 'wav')
+    await writeFile(join(cache, 'thumb-clip-1.jpg'), 'jpg')
+    const otherProjectCache = join(tempRoot, 'other-project', 'cache')
+    await mkdir(otherProjectCache, { recursive: true })
+    await writeFile(join(otherProjectCache, 'audio.16k.wav'), 'wav')
+
+    await invoke(IPCChannels.DELETE_PROJECT, { id: projectFixture.id })
+
+    await expect(stat(join(tempRoot, projectFixture.id))).rejects.toThrow() // whole temp root gone
+    await expect(stat(otherProjectCache)).resolves.toBeTruthy() // sibling project untouched
+  })
+
+  it('DELETE with no temp cache on disk still succeeds (nothing to reclaim)', async () => {
+    const { ctx, invoke } = makeFakeContext()
+    registerProjectHandlers(ctx)
+    await invoke(IPCChannels.SAVE_PROJECT, { project: projectFixture })
+
+    const del = (await invoke(IPCChannels.DELETE_PROJECT, { id: projectFixture.id })) as {
+      deleted: boolean
+    }
+    expect(del).toEqual({ deleted: true })
   })
 
   it('LOAD of a tampered/missing project rejects (typed error propagates over IPC)', async () => {

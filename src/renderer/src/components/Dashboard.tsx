@@ -211,9 +211,17 @@ export function Dashboard(): React.JSX.Element {
               {confirmingDelete === row.id && (
                 <div
                   data-testid="project-delete-confirm"
-                  className="absolute right-0 top-full z-10 mt-1 flex items-center gap-2 rounded-md border bg-popover px-2 py-1.5 text-xs shadow-md"
+                  className="absolute right-0 top-full z-10 mt-1 flex max-w-64 items-center gap-2 rounded-md border bg-popover px-2 py-1.5 text-xs shadow-md"
                 >
-                  <span>Delete “{row.name}”?</span>
+                  {/* BUG-08sb0x: an app-owned (downloaded) video is deleted with
+                    the project — a file you imported from elsewhere never is.
+                    The Dashboard's recents list carries no sourceVideo.appOwned
+                    flag to word this precisely per-row, so it names both truths
+                    generically rather than risk overclaiming for either case. */}
+                  <span>
+                    Delete “{row.name}”? Its downloaded video (if any) goes too — files you imported
+                    are never touched.
+                  </span>
                   <button
                     type="button"
                     data-testid="project-delete-cancel"

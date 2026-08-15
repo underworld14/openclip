@@ -85,6 +85,7 @@ const CANNED: Partial<Record<string, unknown>> = {
     fetchedAt: 0,
     fromCache: true
   },
+  [IPCChannels.CLIP_THUMBNAIL]: { thumbnailPath: '/tmp/openclip/p1/cache/thumb-regenerated.jpg' },
   [IPCChannels.MEDIA_ADOPT_SOURCE]: {
     path: '/Users/me/Library/Application Support/OpenClip/media/p1/source.mp4'
   },

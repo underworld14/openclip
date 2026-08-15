@@ -17,7 +17,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMockOpenclip } from '../mocks/openclip'
 import { projectFixture, clipFixture, transcriptFixture } from '../fixtures/contract'
-import { projectActions, hydrateFromProject, closeProject } from '@renderer/hooks/useProject'
+import {
+  projectActions,
+  hydrateFromProject,
+  closeProject,
+  regeneratePosterFrames
+} from '@renderer/hooks/useProject'
 import { useProjectStore } from '@renderer/stores/projectStore'
 
 beforeEach(() => {
@@ -59,7 +64,11 @@ describe('projectActions: bridge-calling core', () => {
     expect(st.currentProject).toEqual(projectFixture)
     // Wave-1 cross-track restore: transcript + clips come back too.
     expect(st.transcript).toEqual(projectFixture.transcript)
-    expect(st.clips).toEqual(projectFixture.clips)
+    // thumbnailPath is stripped on hydrate (BUG-08sb0x) — a temp-cache path
+    // surviving in the loaded document is no proof the file still exists —
+    // and open() fires (and, in this mock, already completes by the time
+    // control returns here) regeneratePosterFrames to fill a fresh one in.
+    expect(st.clips[0].thumbnailPath).toBe('/tmp/openclip/p1/cache/thumb-regenerated.jpg')
   })
 
   it('save() persists the COMPOSED project (LIVE slices), not the stale currentProject', async () => {
@@ -145,7 +154,10 @@ describe('hydrateFromProject (Wave-1 full cross-slice hydration)', () => {
     const st = useProjectStore.getState()
     expect(st.currentProject).toEqual(projectFixture)
     expect(st.transcript).toEqual(projectFixture.transcript)
-    expect(st.clips).toEqual(projectFixture.clips)
+    // thumbnailPath is stripped on hydrate (BUG-08sb0x) — see the dedicated
+    // describe block below; `currentProject` itself (what a save persists)
+    // still carries the original path, only the live `clips` slice is bare.
+    expect(st.clips).toEqual(projectFixture.clips.map((c) => ({ ...c, thumbnailPath: undefined })))
   })
 
   it("hydrates exportHistory so an opened project's records survive compose/save", () => {
@@ -199,6 +211,74 @@ describe('hydrateFromProject (Wave-1 full cross-slice hydration)', () => {
     expect(useProjectStore.getState().reframeMode).toBe('split')
     hydrateFromProject(useProjectStore, { ...projectFixture, id: 'p2' }) // no reframeMode saved
     expect(useProjectStore.getState().reframeMode).toBe('off')
+  })
+})
+
+describe('hydrateFromProject + regeneratePosterFrames (BUG-08sb0x)', () => {
+  it('hydrate strips thumbnailPath in memory WITHOUT touching the loaded Project object', () => {
+    hydrateFromProject(useProjectStore, projectFixture)
+    expect(useProjectStore.getState().clips[0].thumbnailPath).toBeUndefined()
+    // The fixture itself (what a save would persist) is untouched.
+    expect(projectFixture.clips[0].thumbnailPath).toBe('/tmp/openclip/thumb-1.jpg')
+  })
+
+  it('regeneratePosterFrames fills a fresh path back in per clip', async () => {
+    const bridge = createMockOpenclip()
+    const thumbSpy = vi.spyOn(bridge.video, 'clipThumbnail')
+    hydrateFromProject(useProjectStore, projectFixture)
+    expect(useProjectStore.getState().clips[0].thumbnailPath).toBeUndefined()
+
+    await regeneratePosterFrames(bridge, useProjectStore, projectFixture)
+
+    expect(thumbSpy).toHaveBeenCalledWith({
+      projectId: projectFixture.id,
+      clipId: clipFixture.id,
+      sourcePath: projectFixture.sourceVideo.path,
+      atTime: clipFixture.editedStart,
+      aspectRatio: projectFixture.settings.aspectRatio
+    })
+    expect(useProjectStore.getState().clips[0].thumbnailPath).toBe(
+      '/tmp/openclip/p1/cache/thumb-regenerated.jpg'
+    )
+  })
+
+  it('a failed grab is best-effort — leaves that clip without a thumbnail, does not throw', async () => {
+    const bridge = createMockOpenclip()
+    vi.spyOn(bridge.video, 'clipThumbnail').mockRejectedValue(new Error('ffmpeg exited 1'))
+    hydrateFromProject(useProjectStore, projectFixture)
+
+    await expect(
+      regeneratePosterFrames(bridge, useProjectStore, projectFixture)
+    ).resolves.toBeUndefined()
+    expect(useProjectStore.getState().clips[0].thumbnailPath).toBeUndefined()
+  })
+
+  it('bails out once the user has switched away mid-regeneration (no cross-project stomp)', async () => {
+    const bridge = createMockOpenclip()
+    const twoClips = {
+      ...projectFixture,
+      clips: [clipFixture, { ...clipFixture, id: 'clip-2' }]
+    }
+    let resolveFirst: (v: { thumbnailPath: string }) => void = () => {}
+    const firstCall = new Promise<{ thumbnailPath: string }>((r) => {
+      resolveFirst = r
+    })
+    const thumbSpy = vi
+      .spyOn(bridge.video, 'clipThumbnail')
+      .mockImplementationOnce(() => firstCall)
+      .mockResolvedValue({ thumbnailPath: '/should/never/be/reached.jpg' })
+    hydrateFromProject(useProjectStore, twoClips)
+
+    const pending = regeneratePosterFrames(bridge, useProjectStore, twoClips)
+    // The user closes the project WHILE clip-1's grab is still in flight.
+    closeProject(useProjectStore)
+    resolveFirst({ thumbnailPath: '/tmp/openclip/p1/cache/thumb-regenerated.jpg' })
+    await pending
+
+    // Only clip-1's (already in-flight) call happened — never clip-2's.
+    expect(thumbSpy).toHaveBeenCalledTimes(1)
+    // closeProject's [] survives untouched — no stale write after the switch.
+    expect(useProjectStore.getState().clips).toEqual([])
   })
 })
 

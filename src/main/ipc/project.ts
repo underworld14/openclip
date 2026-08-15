@@ -15,7 +15,7 @@
 import type { IpcContext } from './index'
 import { IPCChannels } from '@shared/channels'
 import type { ChannelReq, ChannelRes } from '@shared/channels'
-import { projectsDir, mediaDir } from '@main/utils/paths'
+import { projectsDir, mediaDir, tempRootFor } from '@main/utils/paths'
 import {
   patchProject,
   saveProject,
@@ -26,7 +26,7 @@ import {
 import { deleteProjectMedia } from '@main/services/media-store'
 import { serializeTranscript, subtitleExtension } from '@shared/subtitle-export'
 import { assertSafePathArg } from '@main/utils/safe-arg'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 export function registerProjectHandlers(ctx: IpcContext): void {
@@ -113,10 +113,16 @@ export function registerProjectHandlers(ctx: IpcContext): void {
   )
 
   // project:delete — idempotent removal of a .ocproj file. Also reclaims the
-  // project's OWNED media dir <userData>/media/<id>/ (Part H) — best-effort, so a
-  // media-rm failure never fails the project delete (the launch sweep is the
-  // backstop). This only ever touches media/<id>/; a file-import original (outside
-  // mediaDir, appOwned:false) is structurally unreachable.
+  // project's OWNED media dir <userData>/media/<id>/ (Part H) AND its per-project
+  // TEMP cache <temp>/openclip/<id>/ — the content-addressed WAV extract plus any
+  // clip poster frames (BUG-08sb0x): `sweepOrphanTemp`'s launch sweep deliberately
+  // PRESERVES `cache/` forever (it's a cache keyed by content, not scratch), so
+  // without this a deleted project's cache lived on disk indefinitely — ~115 MB
+  // per source hour, never reclaimed by anything. Both are best-effort, so a
+  // media/temp-rm failure never fails the project delete (the launch sweep is the
+  // backstop for temp; media has no backstop but this only ever touches
+  // media/<id>/ and openclip/<id>/ — a file-import original (outside mediaDir,
+  // appOwned:false) is structurally unreachable either way).
   ipcMain.handle(
     IPCChannels.DELETE_PROJECT,
     async (
@@ -126,11 +132,21 @@ export function registerProjectHandlers(ctx: IpcContext): void {
       try {
         return await deleteProject(projectsDir(), req.id)
       } finally {
-        // Reclaim owned media regardless of the .ocproj delete outcome (the
-        // launch sweep is the backstop). Best-effort: never fails the delete.
         await deleteProjectMedia(req.id, mediaDir()).catch((err) => {
           console.error(`[media] failed to reclaim media for project ${req.id}:`, err)
         })
+        // `tempRootFor` is a PLAIN function — it throws SYNCHRONOUSLY on an unsafe
+        // id, before `rm()` is even called, so a bare `.catch()` on the `rm(...)`
+        // promise would never run and the throw would escape this `finally`
+        // (silently replacing whatever the `try` block above did — a real
+        // Node/JS footgun). An explicit try/catch is required here, unlike the
+        // `deleteProjectMedia` call above (an `async function`, whose internal
+        // throw is already a rejected promise `.catch()` can see).
+        try {
+          await rm(tempRootFor(req.id), { recursive: true, force: true })
+        } catch (err) {
+          console.error(`[temp] failed to reclaim temp cache for project ${req.id}:`, err)
+        }
       }
     }
   )

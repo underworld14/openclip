@@ -139,6 +139,17 @@ describe('delete is confirmed — there is no undo', () => {
     expect(screen.getByTestId('project-delete-confirm')).toBeTruthy()
   })
 
+  it('names the downloaded video in the confirm text (BUG-08sb0x)', async () => {
+    window.openclip.project.delete = vi.fn(async () => ({ deleted: true }))
+    render(<Dashboard />)
+    await openMenu('p1')
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('project-delete'))
+    })
+    const text = screen.getByTestId('project-delete-confirm').textContent ?? ''
+    expect(text).toMatch(/video/i)
+  })
+
   it('deletes only after the confirmation', async () => {
     const del = vi.fn(async () => ({ deleted: true }))
     window.openclip.project.delete = del

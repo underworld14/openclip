@@ -54,6 +54,9 @@ export interface CoreStoreApi {
     | 'selectClip'
     | 'composeProject'
     | 'setReframeMode'
+    // Read access for regeneratePosterFrames (BUG-08sb0x) to re-check the
+    // live list before folding a regenerated path back in.
+    | 'clips'
   >
 }
 
@@ -108,7 +111,16 @@ export function hydrateFromProject(store: CoreStoreApi, project: Project): void 
   const state = store.getState()
   state.setCurrentProject(project)
   state.setTranscript(project.transcript)
-  state.setClips(project.clips)
+  // Strip `thumbnailPath` on hydrate (BUG-08sb0x): poster frames live in the
+  // per-project TEMP cache (PRD §17), not the `.ocproj` — a path surviving in
+  // an old document is no proof the file still exists (an OS temp sweep, or the
+  // app's own project-delete cleanup for a DIFFERENT project sharing the temp
+  // root, can reclaim it independently). Rendering a stale path 404s silently
+  // and the clip card is permanently blank. Stripped here IN MEMORY ONLY —
+  // this never touches the saved document — so no <img> ever mounts with a
+  // path that might not resolve; `open()` kicks off `regeneratePosterFrames`
+  // right after to fill them back in with fresh frames.
+  state.setClips(project.clips.map((c) => ({ ...c, thumbnailPath: undefined })))
   state.setExportHistory(project.exportHistory)
   // The selection is a singleton too: without this it keeps pointing at a clip id
   // from the OUTGOING project, which no longer exists in `clips` (audit fix
@@ -118,6 +130,45 @@ export function hydrateFromProject(store: CoreStoreApi, project: Project): void 
   // used to start every project on 'off' regardless of what was saved, so
   // "Follow speaker" silently reverted to plain centre-crop on every reopen.
   state.setReframeMode(project.settings.reframeMode ?? 'off')
+}
+
+/**
+ * Regenerate every clip's poster frame after `hydrateFromProject` stripped it
+ * (BUG-08sb0x). A single-frame ffmpeg extract is cheap — the same cost
+ * `generateThumbnails` (clipsSlice) already pays right after every AI
+ * generation — so redoing it unconditionally on every open is not a new
+ * performance class, just a different trigger; it is what turns a permanently
+ * blank clip card back into a real one without the user doing anything.
+ *
+ * Sequential (one ffmpeg spawn per clip against one disk) and best-effort: one
+ * failed grab costs that clip its thumbnail, never the others, and never blocks
+ * the open (the caller does not await this — see `open()`). Bails out if the
+ * user has since navigated away from `project` (closed it or opened another)
+ * so a slow regeneration for a project no longer open can't stomp on whatever
+ * is open now — `clips` is a singleton slice shared by every project.
+ */
+export async function regeneratePosterFrames(
+  bridge: Bridge,
+  store: CoreStoreApi,
+  project: Project
+): Promise<void> {
+  for (const clip of project.clips) {
+    if (store.getState().currentProject?.id !== project.id) return
+    try {
+      const { thumbnailPath } = await bridge.video.clipThumbnail({
+        projectId: project.id,
+        clipId: clip.id,
+        sourcePath: project.sourceVideo.path,
+        atTime: clip.editedStart ?? clip.startTime,
+        aspectRatio: project.settings.aspectRatio
+      })
+      const state = store.getState()
+      if (state.currentProject?.id !== project.id) return
+      state.setClips(state.clips.map((c) => (c.id === clip.id ? { ...c, thumbnailPath } : c)))
+    } catch {
+      /* cosmetic — a missing poster is not fatal */
+    }
+  }
 }
 
 /**
@@ -209,6 +260,10 @@ export function projectActions(bridge: Bridge, store: CoreStoreApi): ProjectActi
     open: async (id: string): Promise<Project> => {
       const project = await bridge.project.load({ id })
       hydrateFromProject(store, project)
+      // Fire-and-forget (BUG-08sb0x): matches clipsSlice's own post-generation
+      // thumbnail pass — the project is usable immediately, posters fill in as
+      // they finish.
+      void regeneratePosterFrames(bridge, store, project)
       return project
     },
 

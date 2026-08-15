@@ -38,7 +38,7 @@ document the `xattr -dr com.apple.quarantine` escape hatch for unsigned builds.
 ## Acceptance Criteria
 - [ ] The released artifact passes `spctl -a -t install`
 - [ ] `codesign -dv` reports a real Team ID, not `adhoc`
-- [ ] README documents what a user sees on first launch and how to proceed
+- [x] README documents what a user sees on first launch and how to proceed
 
 ## Progress
 
@@ -54,7 +54,20 @@ Done (this session):
   ticket was already complete; only the end-user-facing README was missing
   the workaround for anyone who receives an unsigned build.
 
-Blocked on the user, not on code: actually producing and distributing a
-SIGNED, NOTARIZED build requires an Apple Developer account and its
-credentials, which only the project owner has/can obtain. Nothing further is
-implementable here without that input.
+Done (this session, follow-up — the repo went public, unblocking distribution
+for real): built `openclip-desktop-2.0.0-arm64.dmg` with `npm run
+build:mac:unsigned`, ran it through `scripts/verify-package.mjs` (all 4
+sidecars + font + onnx model present and load-tested), confirmed via
+`codesign -dv` it is genuinely `Signature=adhoc` / `TeamIdentifier=not set`
+(honestly reported, not claimed otherwise), and published it as a real
+GitHub Release (v2.0.0) with the Gatekeeper workaround given top billing in
+the release notes themselves, not just the README. The documented workaround
+from the first round of work is no longer theoretical — a real user can now
+hit it and follow it.
+
+Still blocked on the user, not on code: AC1/AC2 (`spctl` passes, a real Team
+ID) require an actual Apple Developer account's signing + notarization
+credentials, which only the project owner has/can obtain — `npm run
+build:mac` + `build/notarize.cjs` (§2 of `docs/PACKAGING.md`) already
+implement that path completely; it just needs those credentials supplied to
+run. Nothing further is implementable here without them.

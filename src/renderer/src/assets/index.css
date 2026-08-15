@@ -96,7 +96,17 @@
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  /**
+   * BUG-qcvhcn: shadcn's `focus-visible:ring-ring/50` utility renders this at
+   * 50% opacity over the surface behind it, which more than halves the
+   * effective contrast a solid swatch of this color would suggest. The
+   * default oklch(0.708 0 0) blended at 50% over --background measured
+   * ~1.5:1 against white — well under the 3:1 WCAG 2.2 non-text-contrast
+   * minimum for a focus indicator (SC 1.4.11/2.4.13). Darkened so the BLENDED
+   * result clears 3:1 (measured ~3.4:1); every component using `ring-ring`
+   * gets the fix from this one token, not a per-component override.
+   */
+  --ring: oklch(0.2 0 0);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
@@ -130,7 +140,11 @@
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  /* BUG-qcvhcn: see the :root --ring comment — the default oklch(0.556 0 0)
+     blended at the `ring-ring/50` 50% opacity over --background measured
+     ~1.9:1 against this dark ground. Lightened so the BLENDED result clears
+     3:1 (measured ~3.8:1). */
+  --ring: oklch(0.85 0 0);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
@@ -209,6 +223,31 @@
   .oc-cap-pop {
     display: inline-block;
     animation: oc-cap-pop 120ms ease-out both;
+  }
+}
+
+/*
+ * Respect `prefers-reduced-motion` (BUG-qcvhcn) — this app never honoured it
+ * anywhere: the per-word caption reveal animations above, every Radix
+ * data-state animate-in/zoom transition (dialogs, dropdowns, selects — via
+ * tw-animate-css), and every Tailwind `transition-*` utility all ran at full
+ * motion regardless of the OS setting. The standard catch-all: collapse
+ * every CSS animation/transition to effectively instant and let iteration
+ * finish immediately, and turn off smooth scrolling. This is a single global
+ * rule rather than opting in per-component precisely because motion sneaks
+ * in through so many different mechanisms (custom keyframes, a UI library's
+ * own utility classes, Tailwind transitions) that an allow-list would miss
+ * some of them — same reasoning as the `prefers-reduced-motion` reference
+ * implementation (web.dev / MDN) this mirrors.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 

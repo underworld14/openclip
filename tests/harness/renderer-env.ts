@@ -61,6 +61,35 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 }
 
 /**
+ * jsdom implements no `window.matchMedia` at all (BUG-qcvhcn —
+ * usePrefersReducedMotion reads it). Defaults `matches: false` ("no reduced
+ * motion") for every query, matching a real browser with no OS preference
+ * set, so every existing spec keeps its historical (motion-on) behavior; a
+ * spec that wants reduced-motion drives `window.matchMedia` itself.
+ */
+if (typeof window !== 'undefined' && typeof window.matchMedia === 'undefined') {
+  window.matchMedia = ((query: string): MediaQueryList =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {
+        // no-op — deprecated API, kept only for callers that still use it
+      },
+      removeListener: () => {
+        // no-op
+      },
+      addEventListener: () => {
+        // no-op — the stub never changes, so there is nothing to notify
+      },
+      removeEventListener: () => {
+        // no-op
+      },
+      dispatchEvent: () => false
+    }) as MediaQueryList) as typeof window.matchMedia
+}
+
+/**
  * Install a fresh mock bridge on `window` and reset the renderer singletons.
  * Returns the bridge so a spec can override individual methods (the mock is a
  * plain object) or assert on calls.

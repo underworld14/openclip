@@ -14,6 +14,7 @@ import { useProjectStore } from '@renderer/stores/projectStore'
 import { Button } from '@renderer/components/ui/button'
 import { clipViewModel } from '@renderer/components/clipView'
 import { sourceMediaUrl } from '@renderer/components/source-media'
+import { usePrefersReducedMotion } from '@renderer/hooks/usePrefersReducedMotion'
 
 export interface ClipCardProps {
   clip?: Clip
@@ -31,6 +32,10 @@ export function ClipCard({ clip }: ClipCardProps): React.JSX.Element {
   // The source path, for the hover preview (FEAT-71ay4e).
   const sourcePath = useProjectStore((s) => s.currentProject?.sourceVideo.path ?? null)
   const [hovering, setHovering] = useState(false)
+  // BUG-qcvhcn: the global `prefers-reduced-motion` CSS rule can't stop a
+  // native <video autoPlay loop> — it's JS/HTML playback, not a CSS
+  // animation/transition — so this is checked explicitly.
+  const reducedMotion = usePrefersReducedMotion()
 
   if (!clip) {
     return (
@@ -80,11 +85,14 @@ export function ClipCard({ clip }: ClipCardProps): React.JSX.Element {
           another. Served over the privileged `openclip-media:` scheme — the JPEG
           lives in the per-project cache dir and was granted at generation. */}
         {vm.thumbnailPath &&
-          (hovering && previewSrc ? (
+          (hovering && previewSrc && !reducedMotion ? (
             /* Mounted ONLY while hovered (FEAT-71ay4e). The ticket asks for at
               most 2-3 concurrent <video> elements; mounting on hover caps it at
               one, without an IntersectionObserver to keep in sync. The `#t=`
-              fragment scopes playback to the clip's own span. */
+              fragment scopes playback to the clip's own span. Skipped entirely
+              under prefers-reduced-motion (BUG-qcvhcn) — an autoPlay/loop
+              <video> is JS/HTML playback the global reduced-motion CSS rule
+              cannot stop, so it stays on the static poster frame instead. */
             <video
               data-testid="clip-preview"
               src={previewSrc}

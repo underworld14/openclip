@@ -262,4 +262,36 @@ describe('lifecycle', () => {
     })
     expect(handler).not.toHaveBeenCalled()
   })
+
+  it('BUG-qcvhcn: toggling enabled false mid-session stops an already-active listener', () => {
+    // The real caller (App.tsx): the hook mounts enabled while the editor is
+    // shown, then a modal opens and re-renders with enabled=false — bare-letter
+    // shortcuts (approve/reject/mark-in/mark-out/…) must stop firing against
+    // the editor underneath while the user is looking at the dialog, not just
+    // when the hook happens to start out disabled.
+    const approve = vi.fn()
+    const { rerender } = renderHook(
+      ({ enabled }) => useGlobalShortcuts({ 'approve-clip': approve }, enabled),
+      {
+        initialProps: { enabled: true }
+      }
+    )
+    act(() => {
+      press('a')
+    })
+    expect(approve).toHaveBeenCalledTimes(1)
+
+    rerender({ enabled: false })
+    act(() => {
+      press('a')
+    })
+    // Still 1 — the second "a" (modal now open) must not reach the handler.
+    expect(approve).toHaveBeenCalledTimes(1)
+
+    rerender({ enabled: true })
+    act(() => {
+      press('a')
+    })
+    expect(approve).toHaveBeenCalledTimes(2)
+  })
 })

@@ -39,11 +39,25 @@ afterEach(() => {
 })
 
 describe('TranscriptPanel: click to seek', () => {
-  it('renders each row as a real button, not an inert list item', () => {
+  it('renders each row as a keyboard-operable role="button", not an inert list item', () => {
     render(<TranscriptPanel />)
     const rows = screen.getAllByTestId('transcript-seek')
     expect(rows).toHaveLength(2)
-    for (const r of rows) expect(r.tagName).toBe('BUTTON')
+    for (const r of rows) {
+      expect(r.getAttribute('role')).toBe('button')
+      expect(r.getAttribute('tabindex')).toBe('0')
+    }
+  })
+
+  it('BUG-qcvhcn: is a plain element, not a native <button> — text stays selectable/copyable', () => {
+    // A native <button>'s UA stylesheet suppresses text selection (Chromium
+    // sets -webkit-user-select:none on it), so the transcript — the app's
+    // primary source-of-truth text — could be read but never selected or
+    // copied. role="button" gives the SAME semantics without that side effect.
+    render(<TranscriptPanel />)
+    for (const r of screen.getAllByTestId('transcript-seek')) {
+      expect(r.tagName).not.toBe('BUTTON')
+    }
   })
 
   it('moves the playhead to the segment start', async () => {
@@ -52,6 +66,20 @@ describe('TranscriptPanel: click to seek', () => {
       fireEvent.click(screen.getAllByTestId('transcript-seek')[1])
     })
     expect(useProjectStore.getState().playhead).toBe(2.5)
+  })
+
+  it('is keyboard-activatable with Enter and Space (role="button" parity)', async () => {
+    render(<TranscriptPanel />)
+    const rows = screen.getAllByTestId('transcript-seek')
+    await act(async () => {
+      fireEvent.keyDown(rows[1], { key: 'Enter' })
+    })
+    expect(useProjectStore.getState().playhead).toBe(2.5)
+
+    await act(async () => {
+      fireEvent.keyDown(rows[0], { key: ' ' })
+    })
+    expect(useProjectStore.getState().playhead).toBe(0)
   })
 
   it('marks the row the playhead is inside with aria-current', () => {

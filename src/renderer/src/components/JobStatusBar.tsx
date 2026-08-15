@@ -66,6 +66,15 @@ export function JobStatusBar(): React.JSX.Element | null {
   return (
     <div
       data-testid="job-status-bar"
+      // The app's ONLY progress surface, and it had no live-region semantics at
+      // all (BUG-qcvhcn) — a screen-reader user got zero notification when a job
+      // started, finished, or errored. `role="status"` + `aria-live="polite"`
+      // makes content changes inside it announced without interrupting whatever
+      // the user is doing; `aria-atomic` re-reads the whole row rather than a
+      // confusing diff of just the changed text node.
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
       // `relative z-[60] pointer-events-auto` is what makes this bar USABLE while
       // a dialog is open (BUG-45xt77). Radix modals put `pointer-events: none` on
       // the body and paint an overlay at z-50, so the bar rendered underneath was
@@ -195,6 +204,11 @@ function JobRow({ task, now, onDismiss }: JobRowProps): React.JSX.Element {
       {!terminal && (
         <Progress
           value={task.pct}
+          // Radix's Progress.Root sets role="progressbar" + aria-valuenow/max
+          // for free, but no NAME — every progress bar in the app was
+          // announced as bare "N%" with no indication of what was N% done
+          // (BUG-qcvhcn).
+          aria-label={view.title}
           className={'h-1 ' + (view.determinate ? '' : 'animate-pulse')}
           data-testid="job-status-progress"
         />

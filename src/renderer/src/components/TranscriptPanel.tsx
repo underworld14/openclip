@@ -119,20 +119,37 @@ export function TranscriptPanel(): React.JSX.Element {
               data-testid="transcript-segment"
               data-segment-id={seg.id}
             >
-              <button
-                type="button"
+              {/*
+                A plain, focusable wrapper — NOT a native <button> (BUG-qcvhcn).
+                A <button> element's UA stylesheet suppresses text selection
+                (Chromium sets `-webkit-user-select: none` on it), so the
+                transcript — the app's primary source-of-truth text — could be
+                read but never selected or copied. `role="button"` +
+                `tabIndex={0}` + the Enter/Space handler keep it exactly as
+                keyboard-operable as the native element was; only the
+                selection-suppressing side effect is gone.
+              */}
+              <div
+                role="button"
+                tabIndex={0}
                 data-testid="transcript-seek"
                 aria-current={active ? 'true' : undefined}
                 onClick={() => setPlayhead(seg.start)}
-                className={`flex w-full gap-2 rounded px-1 text-left text-sm hover:bg-accent ${
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    setPlayhead(seg.start)
+                  }
+                }}
+                className={`flex w-full cursor-pointer gap-2 rounded px-1 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring ${
                   active ? 'bg-accent/60 font-medium' : ''
                 }`}
               >
-                <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
+                <span className="shrink-0 select-none font-mono text-xs text-muted-foreground tabular-nums">
                   {formatTimestamp(seg.start)}
                 </span>
                 <span>{seg.text}</span>
-              </button>
+              </div>
             </li>
           )
         })}

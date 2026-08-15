@@ -662,7 +662,11 @@ export function PreviewPlayer(): React.JSX.Element {
               if (v) v.currentTime = t
               setPlayhead(t)
             }}
-            className="h-1 flex-1 cursor-pointer accent-primary"
+            // BUG-qcvhcn: was h-1 (4px) — a hairline that was hard to see and
+            // harder to grab precisely. Not a full custom-track redesign (that
+            // would be needed to GUARANTEE a 24px pointer target per WCAG
+            // 2.5.8 — out of scope here), but a real, low-risk improvement.
+            className="h-2 flex-1 cursor-pointer accent-primary"
           />
         )}
         {bounds && (

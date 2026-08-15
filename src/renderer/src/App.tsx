@@ -66,6 +66,7 @@ import { closeProject } from '@renderer/hooks/useProject'
 import { useReadiness } from '@renderer/hooks/useReadiness'
 import { ReadinessBar } from '@renderer/components/ReadinessBar'
 import { JobStatusBar } from '@renderer/components/JobStatusBar'
+import { readStoredTheme, writeStoredTheme } from '@renderer/components/theme'
 
 type Modal = 'none' | 'import' | 'export' | 'settings'
 
@@ -97,7 +98,10 @@ function App(): React.JSX.Element {
   )
   const [modelDialogOpen, setModelDialogOpen] = useState(false)
   const [neededModel, setNeededModel] = useState<WhisperModelSize | undefined>(undefined)
-  const [dark, setDark] = useState(true)
+  // Persisted across launches (BUG-qcvhcn) — this used to be a bare
+  // `useState(true)`, resetting to dark every single launch regardless of
+  // what the user last chose.
+  const [dark, setDark] = useState<boolean>(readStoredTheme)
 
   const hasSource = useProjectStore((s) => !!s.currentProject?.sourceVideo)
   const hasTranscript = useProjectStore((s) => (s.transcript?.segments.length ?? 0) > 0)
@@ -253,63 +257,76 @@ function App(): React.JSX.Element {
     st.dragClipHandle(clip.id, handle, time, source.duration)
   }
 
-  useGlobalShortcuts({
-    // A bare `setCurrentProject(null)` left the outgoing project's clips and
-    // transcript sitting in their (singleton) slices, so the "new" project
-    // opened still showing the previous one's clips — and editing one of them
-    // wrote it into whatever got created next (EPIC-k83ghw / BUG-tdgtfb).
-    'new-project': () => closeProject(useProjectStore),
-    'open-project': () => setModal('import'),
-    'import-video': () => setModal('import'),
-    settings: () => setModal('settings'),
-    'export-clip': () => setModal('export'),
-    'generate-clips': openPreflight,
-    help: () => setShortcutsOpen(true),
-    'play-pause': () => {
-      const st = useProjectStore.getState()
-      st.setPlaying(!st.isPlaying)
+  // BUG-qcvhcn: the FOCUS RULE (useGlobalShortcuts's own doc comment) only ever
+  // guarded a TYPING target — an <input>/<textarea>/contentEditable — never "a
+  // modal is open". So while Settings/Export/Import/the model-download dialog/
+  // the shortcut sheet/the generate-preflight dialog sat open with focus on,
+  // say, a button or a select trigger inside it, every bare-letter shortcut
+  // underneath (a=approve, x=reject, i/o=mark in/out, …) still fired against
+  // the editor state behind the dialog — a stray keystroke silently hid a clip
+  // or rewrote its trim while the user thought they were just reading a dialog.
+  const anyModalOpen = modal !== 'none' || modelDialogOpen || shortcutsOpen || preflightOpen
+
+  useGlobalShortcuts(
+    {
+      // A bare `setCurrentProject(null)` left the outgoing project's clips and
+      // transcript sitting in their (singleton) slices, so the "new" project
+      // opened still showing the previous one's clips — and editing one of them
+      // wrote it into whatever got created next (EPIC-k83ghw / BUG-tdgtfb).
+      'new-project': () => closeProject(useProjectStore),
+      'open-project': () => setModal('import'),
+      'import-video': () => setModal('import'),
+      settings: () => setModal('settings'),
+      'export-clip': () => setModal('export'),
+      'generate-clips': openPreflight,
+      help: () => setShortcutsOpen(true),
+      'play-pause': () => {
+        const st = useProjectStore.getState()
+        st.setPlaying(!st.isPlaying)
+      },
+      'shuttle-stop': () => useProjectStore.getState().setPlaying(false),
+      'shuttle-back': () => {
+        const st = useProjectStore.getState()
+        st.setPlayhead(Math.max(0, st.playhead - 1))
+      },
+      'shuttle-forward': () => {
+        const st = useProjectStore.getState()
+        st.setPlayhead(st.playhead + 1)
+      },
+      'mark-in': () => {
+        const clip = targetClip()
+        if (clip) useProjectStore.getState().markIn(clip.id)
+      },
+      'mark-out': () => {
+        const st = useProjectStore.getState()
+        const clip = targetClip()
+        if (clip) st.markOut(clip.id, st.currentProject?.sourceVideo.duration ?? 0)
+      },
+      'nudge-in-back': () => nudge('in', -1),
+      'nudge-in-forward': () => nudge('in', 1),
+      'nudge-out-back': () => nudge('out', -1),
+      'nudge-out-forward': () => nudge('out', 1),
+      'prev-clip': () => stepClip(-1),
+      'next-clip': () => stepClip(1),
+      'approve-clip': () => {
+        const clip = targetClip()
+        if (clip) useProjectStore.getState().approveClip(clip.id)
+      },
+      'reject-clip': () => {
+        const clip = targetClip()
+        if (clip) useProjectStore.getState().rejectClip(clip.id)
+      },
+      'zoom-in': () => {
+        const st = useProjectStore.getState()
+        st.setZoom(st.zoom * 1.25)
+      },
+      'zoom-out': () => {
+        const st = useProjectStore.getState()
+        st.setZoom(st.zoom / 1.25)
+      }
     },
-    'shuttle-stop': () => useProjectStore.getState().setPlaying(false),
-    'shuttle-back': () => {
-      const st = useProjectStore.getState()
-      st.setPlayhead(Math.max(0, st.playhead - 1))
-    },
-    'shuttle-forward': () => {
-      const st = useProjectStore.getState()
-      st.setPlayhead(st.playhead + 1)
-    },
-    'mark-in': () => {
-      const clip = targetClip()
-      if (clip) useProjectStore.getState().markIn(clip.id)
-    },
-    'mark-out': () => {
-      const st = useProjectStore.getState()
-      const clip = targetClip()
-      if (clip) st.markOut(clip.id, st.currentProject?.sourceVideo.duration ?? 0)
-    },
-    'nudge-in-back': () => nudge('in', -1),
-    'nudge-in-forward': () => nudge('in', 1),
-    'nudge-out-back': () => nudge('out', -1),
-    'nudge-out-forward': () => nudge('out', 1),
-    'prev-clip': () => stepClip(-1),
-    'next-clip': () => stepClip(1),
-    'approve-clip': () => {
-      const clip = targetClip()
-      if (clip) useProjectStore.getState().approveClip(clip.id)
-    },
-    'reject-clip': () => {
-      const clip = targetClip()
-      if (clip) useProjectStore.getState().rejectClip(clip.id)
-    },
-    'zoom-in': () => {
-      const st = useProjectStore.getState()
-      st.setZoom(st.zoom * 1.25)
-    },
-    'zoom-out': () => {
-      const st = useProjectStore.getState()
-      st.setZoom(st.zoom / 1.25)
-    }
-  })
+    !anyModalOpen
+  )
 
   // Wire the debounced autosave subscriber (Wave-1 integration) once for the app
   // lifetime; tears down on unmount.
@@ -327,8 +344,10 @@ function App(): React.JSX.Element {
     void useSettingsStore.getState().load()
   }, [])
   // Default to the dark editor aesthetic; the header toggle flips chrome theme.
+  // Persisted (BUG-qcvhcn) so a restart resumes what the user last chose.
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark)
+    writeStoredTheme(dark)
   }, [dark])
 
   const handleNeedModel = (model: WhisperModelSize): void => {

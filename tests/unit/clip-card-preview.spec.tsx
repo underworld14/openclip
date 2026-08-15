@@ -230,4 +230,26 @@ describe('ClipCard: the hover preview', () => {
     })
     expect(screen.queryByTestId('clip-preview')).toBeNull()
   })
+
+  it('BUG-qcvhcn: stays on the static poster under prefers-reduced-motion, even while hovered', async () => {
+    seed([])
+    const original = window.matchMedia
+    window.matchMedia = ((query: string) =>
+      ({
+        matches: query === '(prefers-reduced-motion: reduce)',
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {}
+      }) as unknown as MediaQueryList) as typeof window.matchMedia
+    try {
+      render(<ClipCard clip={withThumb()} />)
+      await act(async () => {
+        fireEvent.mouseEnter(screen.getByTestId('clip-card'))
+      })
+      expect(screen.queryByTestId('clip-preview')).toBeNull()
+      expect(screen.getByTestId('clip-thumbnail')).toBeTruthy()
+    } finally {
+      window.matchMedia = original
+    }
+  })
 })

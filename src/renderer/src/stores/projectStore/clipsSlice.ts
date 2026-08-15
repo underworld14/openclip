@@ -163,6 +163,13 @@ export const createClipsSlice: StateCreator<ProjectStore, [], [], ClipsSlice> = 
    * the user duplicates of the same moment from overlapping chunk windows.
    */
   generateClips: async (req) => {
+    // Captured once, up front: the project this run belongs to. The user can
+    // browse to a different project in the sidebar while a 1-5 minute
+    // generation is in flight — `req.projectId` (not whatever is current when
+    // a callback fires) is what every write below is guarded against, so a
+    // late result can never overwrite the WRONG project's clip list and get
+    // autosaved into its .ocproj (EPIC-k83ghw / BUG-93txd0).
+    const projectId = req.projectId
     set({
       generating: true,
       generateError: null,
@@ -178,34 +185,66 @@ export const createClipsSlice: StateCreator<ProjectStore, [], [], ClipsSlice> = 
         onStart: (jobId) => set({ generateJobId: jobId }),
         onProgress: (pct) => set({ generatePct: Math.round(pct) }),
         onPartial: ({ clips, chunkIndex, chunkCount }) =>
-          set((s) => ({
-            generateChunk: { index: chunkIndex, count: chunkCount },
-            // Kept OUT of `clips` deliberately. `clips` is one of the four refs
-            // the autosave subscriber watches, so provisional candidates landing
-            // there would be written into the .ocproj — persisting unranked,
-            // un-deduped guesses as if the user had accepted them.
-            provisionalClips: [
-              ...s.provisionalClips,
-              ...clips.map((d, i) => detectedToClip(d, chunkIndex * 1000 + i))
-            ]
-          }))
+          set((s) => {
+            if (s.currentProject?.id !== projectId) return {}
+            return {
+              generateChunk: { index: chunkIndex, count: chunkCount },
+              // Kept OUT of `clips` deliberately. `clips` is one of the four refs
+              // the autosave subscriber watches, so provisional candidates landing
+              // there would be written into the .ocproj — persisting unranked,
+              // un-deduped guesses as if the user had accepted them.
+              provisionalClips: [
+                ...s.provisionalClips,
+                ...clips.map((d, i) => detectedToClip(d, chunkIndex * 1000 + i))
+              ]
+            }
+          })
       })
-      set({
-        clips: result.clips.map(detectedToClip),
-        provisionalClips: [],
-        generating: false,
-        generatePct: 100,
-        generateChunk: null,
-        generateJobId: null,
-        // A partial run is a success with a caveat, not a failure — show the
-        // clips AND say why there might be fewer than requested.
-        generateWarnings: result.warnings ?? []
+      // The LLM call already happened (and, on a paid provider, was already
+      // billed) even if the user left this project — so the run still clears
+      // its own "generating" state, it just never touches `clips` for a
+      // project that is no longer open.
+      const stillOpen = get().currentProject?.id === projectId
+      set((s) => {
+        if (!stillOpen) {
+          return {
+            provisionalClips: [],
+            generating: false,
+            generatePct: 100,
+            generateChunk: null,
+            generateJobId: null,
+            generateWarnings: []
+          }
+        }
+        // Regenerate must not discard work already put into THIS project's
+        // clips (EPIC-k83ghw / BUG-vv87d6): a clip the user approved,
+        // exported, or hand-trimmed on the timeline survives a rerun —
+        // only the untouched, never-approved suggestions get replaced.
+        const preserved = s.clips.filter(
+          (c) =>
+            c.status === 'approved' ||
+            c.status === 'exported' ||
+            c.status === 'edited' ||
+            c.editedStart !== undefined ||
+            c.editedEnd !== undefined
+        )
+        return {
+          clips: [...preserved, ...result.clips.map(detectedToClip)],
+          provisionalClips: [],
+          generating: false,
+          generatePct: 100,
+          generateChunk: null,
+          generateJobId: null,
+          // A partial run is a success with a caveat, not a failure — show the
+          // clips AND say why there might be fewer than requested.
+          generateWarnings: result.warnings ?? []
+        }
       })
       // Poster frames, after the clips are on screen (FEAT-71ay4e). Deliberately
       // NOT awaited: the cards render immediately and each thumbnail fills in as
       // it lands. Blocking the results on N ffmpeg frame-grabs would trade the
       // thing the user is waiting for against a nicety.
-      void generateThumbnails(get, set)
+      if (stillOpen) void generateThumbnails(get, set)
     } catch (err) {
       set({
         generating: false,

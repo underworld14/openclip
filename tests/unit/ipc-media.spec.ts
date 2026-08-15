@@ -53,14 +53,35 @@ afterEach(async () => {
 })
 
 describe('registerMediaHandlers', () => {
-  it('registers MEDIA_ADOPT_SOURCE and MEDIA_RECLAIM', () => {
+  it('registers MEDIA_ADOPT_SOURCE, MEDIA_RECLAIM and MEDIA_COPY_SOURCE', () => {
     const { ctx } = makeFakeContext()
     const spy = vi.spyOn(ctx.ipcMain, 'handle')
     registerMediaHandlers(ctx)
     expect(spy.mock.calls.map((c) => c[0])).toEqual([
       IPCChannels.MEDIA_ADOPT_SOURCE,
-      IPCChannels.MEDIA_RECLAIM
+      IPCChannels.MEDIA_RECLAIM,
+      IPCChannels.MEDIA_COPY_SOURCE
     ])
+  })
+
+  it('MEDIA_COPY_SOURCE copies (not moves) a source into a NEW project dir (EPIC-k83ghw / BUG-tdgtfb)', async () => {
+    const { ctx, invoke } = makeFakeContext()
+    registerMediaHandlers(ctx)
+    const src = join(work, 'orig.mp4')
+    await writeFile(src, 'VID')
+    const adopted = (await invoke(IPCChannels.MEDIA_ADOPT_SOURCE, {
+      projectId: 'p-orig',
+      filePath: src
+    })) as { path: string }
+    const copied = (await invoke(IPCChannels.MEDIA_COPY_SOURCE, {
+      projectId: 'p-copy',
+      filePath: adopted.path
+    })) as { path: string }
+    expect(copied.path).not.toBe(adopted.path)
+    expect(await readFile(copied.path, 'utf8')).toBe('VID')
+    // The ORIGINAL must survive being deleted independently of the copy.
+    await invoke(IPCChannels.MEDIA_RECLAIM, { projectId: 'p-orig' })
+    expect(await readFile(copied.path, 'utf8')).toBe('VID')
   })
 
   it('MEDIA_RECLAIM deletes the project media dir (openclip-e5s)', async () => {

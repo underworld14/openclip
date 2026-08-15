@@ -38,3 +38,15 @@ cancellation to plain sentences. Keep the raw tail behind a "Details" disclosure
 - [ ] A full disk during export produces a plain-language message
 - [ ] No user-facing toast or notification contains raw stderr by default
 - [ ] Error codes are not prefixed onto user-facing text
+
+## Scope note (added)
+Confirmed the same raw-message path also carries **yt-dlp** failures, not just
+ffmpeg/whisper: `url-download failed [SIDECAR_CRASH]: unable to download video
+data: HTTP Error 403: Forbidden` reached the status bar verbatim (live
+screenshot). `src/main/services/url-download.ts:ytdlpErrorMessage` already
+extracts the real yt-dlp `ERROR:` line (good), but that extracted line is
+still yt-dlp's own technical wording, then re-wrapped in the generic
+`${kind} failed [${code}]:` prefix by `useJob.ts:160`. The classifier this
+ticket adds must also map common yt-dlp failure lines (403/429 rate-limited,
+"Video unavailable", "Private video", "Sign in to confirm your age",
+network/DNS) to plain sentences, in addition to ffmpeg/whisper.

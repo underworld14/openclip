@@ -43,7 +43,7 @@ import {
 } from '@shared/generate-preflight'
 import { formatCostEstimate } from '@shared/token-estimate'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
-import type { TranscriptSegment } from '@shared/schema'
+import type { Clip, TranscriptSegment } from '@shared/schema'
 import { formatSeconds } from '@renderer/components/format-time'
 
 export interface GeneratePreflightDialogProps {
@@ -57,6 +57,14 @@ export interface GeneratePreflightDialogProps {
    * chosen window actually contains (and refuse a window holding none).
    */
   segments: TranscriptSegment[]
+  /**
+   * The project's CURRENT clips, so a Regenerate can say what it will do
+   * before it does it (EPIC-k83ghw / BUG-vv87d6): approved/exported/trimmed
+   * clips are never replaced (clipsSlice.generateClips preserves them), only
+   * still-untouched suggestions are — this banner is what tells the user that
+   * up front instead of them finding out after the fact.
+   */
+  existingClips: Clip[]
   onCancel: () => void
   onGenerate: (config: PreflightConfig) => void
 }
@@ -66,6 +74,7 @@ export function GeneratePreflightDialog({
   duration,
   initial,
   segments,
+  existingClips,
   onCancel,
   onGenerate
 }: GeneratePreflightDialogProps): React.JSX.Element {
@@ -110,6 +119,20 @@ export function GeneratePreflightDialog({
     pricePerMTokIn: price?.pricePerMTokIn,
     pricePerMTokOut: price?.pricePerMTokOut
   })
+
+  // What a Regenerate will actually do to the clips already on screen —
+  // mirrors the preserve rule in clipsSlice.generateClips exactly, so this
+  // banner can never promise something the store doesn't deliver.
+  const isRegenerate = existingClips.length > 0
+  const keptClips = existingClips.filter(
+    (c) =>
+      c.status === 'approved' ||
+      c.status === 'exported' ||
+      c.status === 'edited' ||
+      c.editedStart !== undefined ||
+      c.editedEnd !== undefined
+  )
+  const replacedCount = existingClips.length - keptClips.length
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
@@ -290,6 +313,18 @@ export function GeneratePreflightDialog({
               : 'No transcript yet — transcribe the video first.'}
           </p>
         )}
+        {isRegenerate && (
+          <p
+            className="rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-xs text-destructive"
+            data-testid="preflight-regenerate-warning"
+          >
+            {replacedCount > 0
+              ? `This replaces ${replacedCount} suggested clip${replacedCount === 1 ? '' : 's'} you haven't approved yet.`
+              : 'This adds new suggestions alongside your existing clips.'}
+            {keptClips.length > 0 &&
+              ` ${keptClips.length} approved, exported, or trimmed clip${keptClips.length === 1 ? '' : 's'} will be kept.`}
+          </p>
+        )}
 
         <DialogFooter>
           <Button variant="ghost" onClick={onCancel} data-testid="preflight-cancel">
@@ -300,7 +335,7 @@ export function GeneratePreflightDialog({
             disabled={emptyWindow}
             data-testid="preflight-submit"
           >
-            Generate
+            {isRegenerate ? 'Regenerate' : 'Generate'}
           </Button>
         </DialogFooter>
       </DialogContent>

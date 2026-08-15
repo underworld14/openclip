@@ -89,6 +89,9 @@ const CANNED: Partial<Record<string, unknown>> = {
   [IPCChannels.MEDIA_ADOPT_SOURCE]: {
     path: '/Users/me/Library/Application Support/OpenClip/media/p1/source.mp4'
   },
+  [IPCChannels.MEDIA_COPY_SOURCE]: {
+    path: '/Users/me/Library/Application Support/OpenClip/media/p1-copy/source.mp4'
+  },
   [IPCChannels.BRAND_LIST]: [brandTemplateFixture],
   [IPCChannels.BRAND_SAVE]: brandTemplateFixture,
   [IPCChannels.BRAND_DELETE]: { deleted: true },

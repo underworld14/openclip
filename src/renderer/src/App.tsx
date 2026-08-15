@@ -20,6 +20,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@renderer/comp
 import {
   Clapperboard,
   Download,
+  Mic,
   Moon,
   Plus,
   Settings as SettingsIcon,
@@ -60,6 +61,7 @@ import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { installAutosave } from '@renderer/stores/projectStore/autosave'
 import { installJobNotifications } from '@renderer/stores/jobNotifications'
 import { useImportController } from '@renderer/hooks/useImportController'
+import { closeProject } from '@renderer/hooks/useProject'
 import { useReadiness } from '@renderer/hooks/useReadiness'
 import { ReadinessBar } from '@renderer/components/ReadinessBar'
 import { JobStatusBar } from '@renderer/components/JobStatusBar'
@@ -226,7 +228,11 @@ function App(): React.JSX.Element {
   }
 
   useGlobalShortcuts({
-    'new-project': () => useProjectStore.getState().setCurrentProject(null),
+    // A bare `setCurrentProject(null)` left the outgoing project's clips and
+    // transcript sitting in their (singleton) slices, so the "new" project
+    // opened still showing the previous one's clips — and editing one of them
+    // wrote it into whatever got created next (EPIC-k83ghw / BUG-tdgtfb).
+    'new-project': () => closeProject(useProjectStore),
     'open-project': () => setModal('import'),
     'import-video': () => setModal('import'),
     settings: () => setModal('settings'),
@@ -506,6 +512,33 @@ function App(): React.JSX.Element {
             </div>
             <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-3">
               <PreviewPlayer />
+              {/* A project can have a video and no transcript — a failed or
+                cancelled transcription, or one imported before AI generation
+                existed — and until now had no way back except re-importing
+                the same file as a duplicate project (EPIC-k83ghw /
+                FEAT-vz5vya). */}
+              {hasSource && !hasTranscript && (
+                <div
+                  data-testid="transcribe-callout"
+                  className="flex items-center justify-between gap-3 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-sm"
+                >
+                  <span className="text-muted-foreground">
+                    This video has not been transcribed yet.
+                  </span>
+                  <Button
+                    size="sm"
+                    className="gap-1.5"
+                    data-testid="transcribe-callout-action"
+                    disabled={importCtl.busy}
+                    onClick={() => {
+                      const id = useProjectStore.getState().currentProject?.id
+                      if (id) void importCtl.retranscribe(id)
+                    }}
+                  >
+                    <Mic className="size-4" /> Transcribe
+                  </Button>
+                </div>
+              )}
               {/* The caption gallery lives HERE, next to the preview, rather than
                 buried in the Export dialog (FEAT-0s2tnc): it is a design surface,
                 and the thing it changes is the thing on screen right above it. */}
@@ -608,6 +641,7 @@ function App(): React.JSX.Element {
           duration={useProjectStore.getState().currentProject?.sourceVideo.duration ?? 0}
           initial={preflight}
           segments={useProjectStore.getState().transcript?.segments ?? []}
+          existingClips={useProjectStore.getState().clips}
           onCancel={() => setPreflightOpen(false)}
           onGenerate={handlePreflightGenerate}
         />

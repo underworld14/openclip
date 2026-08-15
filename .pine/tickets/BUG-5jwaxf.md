@@ -1,14 +1,14 @@
 ---
 id: BUG-5jwaxf
 title: A new project exists only in memory until the import settles — a quit or crash mid-transcription loses everything
-status: todo
+status: doing
 priority: high
 labels:
     - data-loss
 parent: EPIC-k83ghw
 phase: p0
 created: "2026-08-15T11:28:11Z"
-updated: "2026-08-15T11:28:11Z"
+updated: "2026-08-15T11:49:22Z"
 ---
 
 ## Problem

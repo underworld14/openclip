@@ -19,6 +19,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useBrandStore, activeBrand } from '@renderer/stores/brandStore'
 import { resolveBounds } from '@shared/clip-bounds'
@@ -62,6 +63,45 @@ export function PreviewPlayer(): React.JSX.Element {
 
   const sourceVideo = currentProject?.sourceVideo ?? null
   const src = sourceMediaUrl(sourceVideo?.path ?? null)
+
+  /**
+   * A moved, renamed, deleted, or unplugged-drive source used to fail totally
+   * silently: no `onError` handler, so the project reopened looking normal
+   * (clips, transcript, timeline all present) while the preview was just a
+   * black rectangle and every export died with a raw ffmpeg error further
+   * downstream (EPIC-k83ghw / BUG-4c3gj3).
+   *
+   * Tracked as WHICH `src` last failed, not a bare boolean: comparing that
+   * against the CURRENT `src` during render clears the banner the instant the
+   * source changes (a different project, or a successful relink) with no
+   * effect needed at all — an effect that just calls setState on every `src`
+   * change is exactly the synchronous-setState-in-effect pattern React (and
+   * this repo's lint config) warns against.
+   */
+  const [erroredSrc, setErroredSrc] = useState<string | null>(null)
+  const sourceMissing = erroredSrc !== null && erroredSrc === src
+  const [relinking, setRelinking] = useState(false)
+
+  const handleLocateVideo = useCallback(async (): Promise<void> => {
+    setRelinking(true)
+    try {
+      const res = await window.openclip.system.openDialog({})
+      if (res.canceled || !res.filePaths[0]) return
+      const { sourceVideo: probed } = await window.openclip.video.import({
+        filePath: res.filePaths[0]
+      })
+      const current = useProjectStore.getState().currentProject?.sourceVideo
+      useProjectStore.getState().setSource({ ...probed, appOwned: current?.appOwned ?? false })
+      setErroredSrc(null)
+      toast.success('Video relinked')
+    } catch (e) {
+      toast.error('Could not relink the video', {
+        description: e instanceof Error ? e.message : String(e)
+      })
+    } finally {
+      setRelinking(false)
+    }
+  }, [])
 
   const clip = clips.find((c) => c.id === selectedClipId) ?? clips[0] ?? null
   const bounds = useMemo(
@@ -283,8 +323,29 @@ export function PreviewPlayer(): React.JSX.Element {
                 onTimeUpdate={handleTimeUpdate}
                 onPlay={() => setPlaying(true)}
                 onPause={() => setPlaying(false)}
+                onError={() => setErroredSrc(src)}
                 preload="metadata"
               />
+              {sourceMissing && (
+                <div
+                  data-testid="preview-source-missing"
+                  className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/85 px-6 text-center text-sm text-white"
+                >
+                  <p className="font-medium">This project&apos;s video could not be found</p>
+                  <p className="text-xs text-white/70">
+                    It may have been moved, renamed, or is on a drive that is not connected.
+                  </p>
+                  <Button
+                    size="sm"
+                    className="mt-1"
+                    disabled={relinking}
+                    onClick={() => void handleLocateVideo()}
+                    data-testid="preview-locate-video"
+                  >
+                    {relinking ? 'Locating…' : 'Locate video…'}
+                  </Button>
+                </div>
+              )}
               {showCaptions && active && (
                 <div data-testid="preview-captions" style={captionContainerStyle(captionStyle)}>
                   {active.words.map((w, i) => {

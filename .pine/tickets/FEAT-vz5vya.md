@@ -1,14 +1,14 @@
 ---
 id: FEAT-vz5vya
 title: No way to re-transcribe an existing project — a failed or cancelled transcription can only be 'retried' by importing a duplicate
-status: todo
+status: doing
 priority: high
 labels:
     - recovery
 parent: EPIC-k83ghw
 phase: p0
 created: "2026-08-15T11:28:11Z"
-updated: "2026-08-15T11:28:11Z"
+updated: "2026-08-15T11:49:22Z"
 ---
 
 ## Problem

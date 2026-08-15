@@ -21,6 +21,7 @@ import {
   isUrl,
   type OpenClipBridge
 } from '@renderer/components/import-pipeline'
+import { drainJob } from '@renderer/hooks/useJob'
 
 /**
  * localStorage key gating the one-time yt-dlp/TOS consent (PRD §20.4).
@@ -126,6 +127,13 @@ export interface ImportControllerUi {
     patch: { pct?: number; stage?: string; detail?: TaskDetail; label?: string }
   ): void
   settleTask?(id: string, status: 'done' | 'error' | 'canceled', patch?: { error?: string }): void
+  /**
+   * Remove a task's row (EPIC-k83ghw / BUG-w2jv3w). Every `retry` closure
+   * calls this on ITS OWN taskId before starting the replacement run, so a
+   * retried import replaces its own status-bar row instead of stacking a
+   * second, identical one next to it.
+   */
+  dismissTask?(id: string): void
 }
 
 export interface ImportControllerDeps {
@@ -191,6 +199,12 @@ export interface ImportController {
   resumePending(): Promise<void>
   /** Forget the blocked import — the user cancelled the model download instead. */
   discardPending(): void
+  /**
+   * (Re-)transcribe an already-open, already-saved project — no probe, no
+   * new project id (EPIC-k83ghw / FEAT-vz5vya). No-op if `projectId` is not
+   * the currently open project.
+   */
+  retranscribe(projectId: string): Promise<void>
 }
 
 function basename(p: string): string {
@@ -257,7 +271,13 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     base: number,
     span: number,
     appOwned: boolean,
-    taskId: string
+    taskId: string,
+    /**
+     * Fires with the new project's id the instant it is committed (visible in
+     * the editor). Lets a caller's `retry` closure become commit-aware — see
+     * `importFile`/`importUrl` (EPIC-k83ghw / FEAT-vz5vya).
+     */
+    onCommitted?: (projectId: string) => void
   ): Promise<void> {
     const projectId = genId()
     // For an app-owned (URL/YouTube) download, ADOPT the file into the persistent
@@ -275,6 +295,7 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     try {
       await runPipelineAfterAdopt(projectId, sourcePath, name, base, span, appOwned, taskId, () => {
         committed = true
+        onCommitted?.(projectId)
       })
     } catch (err) {
       // The app-owned download was adopted into persistent media BEFORE any .ocproj was
@@ -331,17 +352,33 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
       // project-delete reclaims it; file imports keep their original path, not owned.
       const sourceVideo = { ...probed, path: sourcePath, appOwned }
       const blank = deps.createBlankProject(name, sourceVideo)
+      const committed = { ...blank, id: projectId }
       // hydrateProject (NOT setCurrentProject): `blank` carries clips: [] and
       // exportHistory: [], so this is what clears the outgoing project's slices.
       // No transcript is passed — it starts empty and fills from the partials
       // below, then `onTranscript` replaces it with the authoritative result.
-      deps.store.hydrateProject({ ...blank, id: projectId })
+      deps.store.hydrateProject(committed)
       // The project is now LIVE/visible — past here a failure must not reclaim its
       // media. A transcription that fails or is cancelled now leaves the user with
       // a real project holding a real video, which is the honest outcome: the
       // import DID happen, only the transcript is missing, and it can be retried.
       markCommitted()
       deps.ui?.setView?.('editor')
+      // Write the blank project to disk NOW, not on the next autosave tick
+      // (EPIC-k83ghw / BUG-5jwaxf). Autosave is deliberately SUSPENDED for the
+      // whole duration of this import (it would otherwise serialize the
+      // growing transcript on every streamed partial) and only flushes once
+      // the job settles — so before this line, a project that is fully
+      // visible in the editor did not exist on disk at all. A quit, crash, or
+      // Mac restart during a 10-minute transcription lost it completely, and
+      // for a URL import the orphan sweeper reclaimed the video too on next
+      // launch. Best-effort: a failure here must not abort the import, since
+      // the (suspended) autosave path is still the eventual backstop.
+      try {
+        await deps.store.saveProject(committed)
+      } catch {
+        /* best-effort initial persist — autosave still flushes on settle */
+      }
     }
 
     await runImport({
@@ -358,12 +395,116 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
         deps.ui?.updateTask?.(taskId, { pct: scaled, stage: s, detail })
       },
       onProbed: commitProject,
-      onPartial: (partial) => deps.store.appendTranscriptPartial(partial),
-      onTranscript: (t: JobResult['transcribe']) => deps.store.hydrateTranscript(t),
+      // Guarded on the project this transcription belongs to (EPIC-k83ghw /
+      // BUG-93txd0): the user can switch to a different project in the
+      // sidebar while transcription keeps streaming in the background, and an
+      // unguarded write here landed the WRONG video's words — and therefore
+      // captions/clip text — into whichever project happened to be open when
+      // the partial/final event arrived, silently corrupting its .ocproj.
+      onPartial: (partial) => {
+        if (deps.store.getCurrentProject()?.id !== projectId) return
+        deps.store.appendTranscriptPartial(partial)
+      },
+      onTranscript: (t: JobResult['transcribe']) => {
+        if (deps.store.getCurrentProject()?.id !== projectId) return
+        deps.store.hydrateTranscript(t)
+      },
       onStart: (jobId) => {
         activeJobId = jobId
       }
     })
+  }
+
+  /**
+   * Re-run transcription on an ALREADY-open, already-saved project — no
+   * probe, no adopt, no new project id (EPIC-k83ghw / FEAT-vz5vya).
+   *
+   * Before this, the ONLY way to get a transcript was the import pipeline, so
+   * a project left without one — wifi dropped mid-transcribe, whisper
+   * crashed, the user hit Cancel, or a video was imported for its clips
+   * workflow before AI generation existed — had no recovery but re-importing
+   * the same file as a brand-new, duplicate project. Used both as the target
+   * of a commit-aware Retry (see `importFile`/`importUrl`) and by an explicit
+   * "Transcribe" action a caller can offer whenever a project has a source
+   * video but no transcript.
+   *
+   * Extraction goes through the SAME per-project content-addressed WAV cache
+   * (`audio.extract`) the original import used, so re-running this after a
+   * failed transcribe (the common case) does not re-extract a multi-hour
+   * source — only whisper actually reruns.
+   */
+  async function retranscribe(projectId: string): Promise<void> {
+    const project = deps.store.getCurrentProject()
+    if (!project || project.id !== projectId) return
+    const taskId = genId()
+    set({ busy: true, error: null, pct: 0, stage: 'extracting' })
+    let tracked = false
+    try {
+      if (!(await ensureModel())) {
+        set({ busy: false })
+        return
+      }
+      deps.ui?.beginTask?.({
+        id: taskId,
+        label: project.name,
+        stages: ['extracting', 'transcribing'],
+        cancel,
+        retry: () => {
+          deps.ui?.dismissTask?.(taskId)
+          return retranscribe(projectId)
+        }
+      })
+      tracked = true
+      // A clean slate: appendTranscriptPartial only APPENDS, so a stale prior
+      // transcript would otherwise show duplicated words until the terminal
+      // hydrateTranscript below replaces it wholesale.
+      if (deps.store.getCurrentProject()?.id === projectId) {
+        deps.store.hydrateTranscript({ language: '', segments: [], words: [] })
+      }
+      deps.ui?.updateTask?.(taskId, { pct: 5, stage: 'extracting' })
+      const { wavPath } = await deps.bridge.audio.extract({
+        projectId,
+        sourcePath: project.sourceVideo.path
+      })
+      deps.ui?.updateTask?.(taskId, { pct: 20, stage: 'extracting' })
+      const transcript = await drainJob(
+        deps.bridge,
+        'transcribe',
+        { projectId, wavPath, model: currentModel(), language: deps.getLanguage?.() },
+        {
+          onStart: (jobId) => {
+            activeJobId = jobId
+          },
+          onProgress: (p, s) => {
+            const scaled = 20 + Math.round((p / 100) * 80)
+            set({ pct: scaled, stage: s })
+            deps.ui?.updateTask?.(taskId, { pct: scaled, stage: s })
+          },
+          // Guarded exactly like a fresh import (EPIC-k83ghw / BUG-93txd0): the
+          // user can switch projects while this streams.
+          onPartial: (partial) => {
+            if (deps.store.getCurrentProject()?.id !== projectId) return
+            deps.store.appendTranscriptPartial(partial)
+          }
+        }
+      )
+      if (deps.store.getCurrentProject()?.id === projectId) {
+        deps.store.hydrateTranscript(transcript)
+        const composed = deps.store.composeProject?.()
+        if (composed) await deps.store.saveProject(composed)
+      }
+      set({ stage: 'done' })
+      deps.ui?.settleTask?.(taskId, 'done')
+    } catch (e) {
+      const message = asMessage(e)
+      set({ error: message })
+      if (tracked) {
+        deps.ui?.settleTask?.(taskId, isCancellation(e) ? 'canceled' : 'error', { error: message })
+      }
+    } finally {
+      activeJobId = null
+      set({ busy: false })
+    }
   }
 
   /**
@@ -393,6 +534,11 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     const taskId = genId()
     set({ busy: true, error: null, pct: 0 })
     let tracked = false
+    // Set the instant `runPipeline` commits the project (EPIC-k83ghw /
+    // FEAT-vz5vya). `retry` below reads this at CALL time, so once the
+    // project exists on disk a retry re-transcribes it in place instead of
+    // probing + adopting + creating a brand-new, duplicate project.
+    let committedProjectId: string | null = null
     try {
       if (!(await ensureModel())) {
         // Hold the intent so the model dialog can hand it back (FEAT-kncqxf).
@@ -406,10 +552,18 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
         label: basename(path),
         stages: FILE_IMPORT_STAGES,
         cancel,
-        retry: () => importFile(path)
+        retry: () => {
+          // Dismiss THIS row before starting the replacement run — otherwise
+          // every retry stacked a second, identical failed row next to the
+          // one it was retrying (EPIC-k83ghw / BUG-w2jv3w).
+          deps.ui?.dismissTask?.(taskId)
+          return committedProjectId ? retranscribe(committedProjectId) : importFile(path)
+        }
       })
       tracked = true
-      await runPipeline(path, basename(path), 0, 100, false, taskId) // file import: user's original, not app-owned
+      await runPipeline(path, basename(path), 0, 100, false, taskId, (id) => {
+        committedProjectId = id
+      }) // file import: user's original, not app-owned
       set({ stage: 'done' })
       deps.ui?.settleTask?.(taskId, 'done')
     } catch (e) {
@@ -437,6 +591,10 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     const taskId = genId() // per-import task key (audit fix openclip-ce3)
     set({ busy: true, error: null, pct: 0, stage: 'downloading' })
     let tracked = false
+    // See importFile: set once the project is committed, so a retry after
+    // that point re-transcribes in place instead of re-downloading + creating
+    // a duplicate project (EPIC-k83ghw / FEAT-vz5vya).
+    let committedProjectId: string | null = null
     try {
       if (!(await ensureModel())) {
         set({ busy: false, pendingImport: { kind: 'url', value: u } })
@@ -447,7 +605,13 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
         label: u,
         stages: URL_IMPORT_STAGES,
         cancel,
-        retry: () => importUrl(u)
+        retry: () => {
+          // Dismiss THIS row first — otherwise every retry stacked a second,
+          // identical failed row next to the one it was retrying (EPIC-k83ghw
+          // / BUG-w2jv3w), which is exactly what a real yt-dlp 403 showed.
+          deps.ui?.dismissTask?.(taskId)
+          return committedProjectId ? retranscribe(committedProjectId) : importUrl(u)
+        }
       })
       tracked = true
       const dl = await runUrl({
@@ -465,7 +629,9 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
       // Now that yt-dlp has resolved it, name the row after the video rather
       // than the raw URL it was pasted from.
       deps.ui?.updateTask?.(taskId, { pct: 20, label: dl.title ?? u })
-      await runPipeline(dl.filePath, dl.title ?? 'Imported video', 20, 80, true, taskId) // URL import: app-owned download
+      await runPipeline(dl.filePath, dl.title ?? 'Imported video', 20, 80, true, taskId, (id) => {
+        committedProjectId = id
+      }) // URL import: app-owned download
       set({ stage: 'done' })
       deps.ui?.settleTask?.(taskId, 'done')
     } catch (e) {
@@ -529,6 +695,7 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
     acceptConsent,
     declineConsent,
     resumePending,
-    discardPending
+    discardPending,
+    retranscribe
   }
 }

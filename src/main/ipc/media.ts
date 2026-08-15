@@ -13,7 +13,7 @@
 import { IPCChannels } from '@shared/channels'
 import type { ChannelReq, ChannelRes } from '@shared/channels'
 import { mediaDir } from '@main/utils/paths'
-import { adoptIntoMedia, deleteProjectMedia } from '@main/services/media-store'
+import { adoptIntoMedia, copyIntoMedia, deleteProjectMedia } from '@main/services/media-store'
 import type { IpcContext } from './index'
 
 export function registerMediaHandlers(ctx: IpcContext): void {
@@ -38,6 +38,19 @@ export function registerMediaHandlers(ctx: IpcContext): void {
     ): Promise<ChannelRes<IPCChannels.MEDIA_RECLAIM>> => {
       const { deleted } = await deleteProjectMedia(req.projectId, mediaDir())
       return { reclaimed: deleted }
+    }
+  )
+
+  // Duplicate an app-owned source into the COPY's own media dir (BUG-tdgtfb):
+  // the source stays in the original project's dir, unlike adopt's move.
+  ctx.ipcMain.handle(
+    IPCChannels.MEDIA_COPY_SOURCE,
+    async (
+      _e,
+      req: ChannelReq<IPCChannels.MEDIA_COPY_SOURCE>
+    ): Promise<ChannelRes<IPCChannels.MEDIA_COPY_SOURCE>> => {
+      const path = await copyIntoMedia(req.filePath, req.projectId, mediaDir())
+      return { path }
     }
   )
 }

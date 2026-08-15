@@ -269,10 +269,14 @@ describe('import-controller: re-import data integrity (G.3)', () => {
     await ctl.importFile('/movies/new.mp4')
 
     // The open project is saved first (with its LIVE clips), then the NEW project
-    // (fresh id) is set — never a silent clobber/orphan, never stale empty clips.
-    expect(order).toEqual(['save:OLD-ID', 'set:PID'])
+    // (fresh id) is set — never a silent clobber/orphan, never stale empty clips —
+    // and finally the NEW project is itself persisted immediately (EPIC-k83ghw /
+    // BUG-5jwaxf): a quit/crash during the transcription that follows must not
+    // lose a project the editor is already showing.
+    expect(order).toEqual(['save:OLD-ID', 'set:PID', 'save:PID'])
     expect(saved[0].id).toBe('OLD-ID')
     expect(saved[0].clips).toHaveLength(1) // composed live clips, not the raw []
+    expect(saved[1].id).toBe('PID')
   })
 
   it('resets the clips / exportHistory / selection slices so the previous project does not leak in (BUG-2hjt1x)', async () => {
@@ -288,10 +292,14 @@ describe('import-controller: re-import data integrity (G.3)', () => {
     expect(slices.selectedClipId).toBeNull()
   })
 
-  it('does not flush-save when there is no open project', async () => {
+  it('does not flush-save an OUTGOING project when none was open, but still persists the new one', async () => {
     const { ctl, saveProject, setCurrentProject } = build()
     await ctl.importFile('/movies/first.mp4')
-    expect(saveProject).not.toHaveBeenCalled()
+    // Exactly one save: the newly-committed project (EPIC-k83ghw / BUG-5jwaxf).
+    // There is no outgoing project to flush, but the new one must not sit
+    // unsaved in memory for the whole (possibly ten-minute) transcription.
+    expect(saveProject).toHaveBeenCalledTimes(1)
+    expect(saveProject).toHaveBeenCalledWith(expect.objectContaining({ id: 'PID' }))
     expect(setCurrentProject).toHaveBeenCalledWith(expect.objectContaining({ id: 'PID' }))
   })
 })

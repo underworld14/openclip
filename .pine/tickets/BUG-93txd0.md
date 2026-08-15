@@ -1,14 +1,14 @@
 ---
 id: BUG-93txd0
 title: 'The store is not project-scoped: an in-flight job writes its results into whichever project is open when it lands'
-status: todo
+status: doing
 priority: critical
 labels:
     - data-loss
 parent: EPIC-k83ghw
 phase: p0
 created: "2026-08-15T11:28:11Z"
-updated: "2026-08-15T11:28:11Z"
+updated: "2026-08-15T11:49:22Z"
 ---
 
 ## Problem

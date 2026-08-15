@@ -7,7 +7,12 @@
 
 import { describe, expect, it, beforeEach, vi } from 'vitest'
 import { createMockOpenclip } from '../mocks/openclip'
-import { clipsFixture, settingsFixture, apiKeyStatusFixture } from '../fixtures/contract'
+import {
+  clipsFixture,
+  projectFixture,
+  settingsFixture,
+  apiKeyStatusFixture
+} from '../fixtures/contract'
 
 // Install a mock bridge on window before importing the stores (they read
 // window.openclip in their thin actions).
@@ -17,7 +22,23 @@ function installBridge(overrides?: Partial<ReturnType<typeof createMockOpenclip>
 }
 
 describe('clipsSlice (projectStore)', () => {
-  beforeEach(() => installBridge())
+  beforeEach(async () => {
+    installBridge()
+    // generateClips guards every write on `req.projectId` matching the OPEN
+    // project (EPIC-k83ghw / BUG-93txd0), so these tests need one open whose
+    // id matches GENERATE_REQUEST below — a bare `null` currentProject (the
+    // module's default) would make every guard fail and silently drop the
+    // result, which is exactly the regression this guard exists to prevent.
+    const { useProjectStore } = await import('@renderer/stores/projectStore')
+    useProjectStore.getState().setCurrentProject({ ...projectFixture, id: 'p1' })
+    // A clean slate: `clips` is a separate slice from `currentProject` and
+    // previous tests in this file leave it non-empty, which — now that a
+    // regenerate PRESERVES trimmed/approved clips (BUG-vv87d6) rather than
+    // always replacing wholesale — would otherwise leak an unrelated fixture
+    // clip into this run's result. Tests that need specific starting clips
+    // already set them explicitly.
+    useProjectStore.getState().setClips([])
+  })
 
   it('setClips replaces the clip list', async () => {
     const { useProjectStore } = await import('@renderer/stores/projectStore')

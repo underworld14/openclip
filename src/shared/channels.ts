@@ -72,6 +72,10 @@ export enum IPCChannels {
   // import fails after adopt but before any .ocproj was saved (openclip-e5s) →
   // `media.reclaim`.
   MEDIA_RECLAIM = 'media:reclaim',
+  // COPY (not move) an app-owned source into a new project's media dir — used by
+  // project:duplicate so the copy survives deletion of the original (EPIC-k83ghw
+  // / BUG-tdgtfb) → `media.copySource`.
+  MEDIA_COPY_SOURCE = 'media:copy-source',
   // Brand kit (Part K) — the APP-LEVEL brand library persisted main-side under
   // <userData>/brands/<id>/ (mirrors media-store). list/save/delete + adopt a PNG
   // logo into the brand dir → `brand.list|save|delete|setLogo`.
@@ -388,6 +392,10 @@ export interface ChannelMap {
     { path: string }
   >
   [IPCChannels.MEDIA_RECLAIM]: ChannelPayload<{ projectId: string }, { reclaimed: boolean }>
+  [IPCChannels.MEDIA_COPY_SOURCE]: ChannelPayload<
+    { projectId: string; filePath: string },
+    { path: string }
+  >
 
   // --- Brand kit (Part K) — app-level brand library, persisted main-side ---
   [IPCChannels.BRAND_LIST]: ChannelPayload<void, BrandTemplate[]>

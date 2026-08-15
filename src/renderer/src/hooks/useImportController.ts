@@ -58,6 +58,8 @@ export interface ImportController {
   resumePending: () => Promise<void>
   /** Forget it — the user cancelled the download instead. */
   discardPending: () => void
+  /** (Re-)transcribe the currently open project (EPIC-k83ghw / FEAT-vz5vya). */
+  retranscribe: (projectId: string) => Promise<void>
 }
 
 /**
@@ -113,6 +115,7 @@ export function useImportController(opts: ImportControllerOptions = {}): ImportC
   const beginTask = useJobsStore((s) => s.beginTask)
   const updateTask = useJobsStore((s) => s.updateTask)
   const settleTask = useJobsStore((s) => s.settleTask)
+  const dismissTask = useJobsStore((s) => s.dismissTask)
 
   const controller = useMemo(
     () =>
@@ -142,7 +145,8 @@ export function useImportController(opts: ImportControllerOptions = {}): ImportC
             })
           },
           updateTask,
-          settleTask
+          settleTask,
+          dismissTask
         },
         // Read the transcription language lazily at import time (Part I) so the
         // latest Settings value applies without rebuilding the controller.
@@ -191,6 +195,7 @@ export function useImportController(opts: ImportControllerOptions = {}): ImportC
     cancel: controller.cancel,
     pendingImport: state.pendingImport,
     resumePending: controller.resumePending,
-    discardPending: controller.discardPending
+    discardPending: controller.discardPending,
+    retranscribe: controller.retranscribe
   }
 }

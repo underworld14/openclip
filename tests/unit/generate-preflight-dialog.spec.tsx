@@ -26,7 +26,7 @@ import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { clipFixture } from '../fixtures/contract'
 import { ClipStyle } from '@shared/schema'
 import type { PreflightConfig } from '@shared/generate-preflight'
-import type { TranscriptSegment } from '@shared/schema'
+import type { Clip, TranscriptSegment } from '@shared/schema'
 
 const seg = (start: number, end: number): TranscriptSegment => ({
   id: `s${start}`,
@@ -53,7 +53,8 @@ const INITIAL: PreflightConfig = {
 function open(
   over: Partial<PreflightConfig> = {},
   duration = 600,
-  segments: TranscriptSegment[] = SEGMENTS
+  segments: TranscriptSegment[] = SEGMENTS,
+  existingClips: Clip[] = []
 ): { onGenerate: ReturnType<typeof vi.fn>; onCancel: ReturnType<typeof vi.fn> } {
   const onGenerate = vi.fn()
   const onCancel = vi.fn()
@@ -63,6 +64,7 @@ function open(
       duration={duration}
       initial={{ ...INITIAL, ...over }}
       segments={segments}
+      existingClips={existingClips}
       onCancel={onCancel}
       onGenerate={onGenerate}
     />
@@ -336,6 +338,37 @@ describe('cancel', () => {
     })
     expect(onCancel).toHaveBeenCalledTimes(1)
     expect(onGenerate).not.toHaveBeenCalled()
+  })
+})
+
+describe('regenerating over existing clips (EPIC-k83ghw / BUG-vv87d6)', () => {
+  // `clipFixture` carries editedStart/editedEnd, which the preserve rule treats
+  // as "trimmed" — clear them here so this clip represents an untouched
+  // suggestion the way a fresh AI result actually looks.
+  const untouched = { ...clipFixture, editedStart: undefined, editedEnd: undefined }
+
+  it('says nothing and reads "Generate" the first time, with no existing clips', () => {
+    open()
+    expect(screen.queryByTestId('preflight-regenerate-warning')).toBeNull()
+    expect(screen.getByTestId('preflight-submit').textContent).toBe('Generate')
+  })
+
+  it('warns which clips will be replaced and which are kept, and reads "Regenerate"', () => {
+    open({}, 600, SEGMENTS, [
+      { ...untouched, id: 'c1', status: 'suggested' },
+      { ...clipFixture, id: 'c2', status: 'approved' }
+    ])
+    const warning = screen.getByTestId('preflight-regenerate-warning')
+    expect(warning.textContent).toMatch(/replaces 1 suggested clip/i)
+    expect(warning.textContent).toMatch(/1 approved.*clip.*kept/i)
+    expect(screen.getByTestId('preflight-submit').textContent).toBe('Regenerate')
+  })
+
+  it('says everything will be kept when every existing clip is protected', () => {
+    open({}, 600, SEGMENTS, [{ ...untouched, id: 'c1', status: 'exported' }])
+    expect(screen.getByTestId('preflight-regenerate-warning').textContent).toMatch(
+      /adds new suggestions/i
+    )
   })
 })
 

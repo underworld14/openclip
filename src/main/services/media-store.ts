@@ -93,6 +93,35 @@ export async function adoptIntoMedia(
 }
 
 /**
+ * COPY an app-owned source into `<mediaRoot>/<projectId>/<basename>` and return
+ * the new absolute path — unlike `adoptIntoMedia`, the source is left in place
+ * (it belongs to the project being duplicated). Used by `project:duplicate`
+ * (EPIC-k83ghw / BUG-tdgtfb): without a real copy, a duplicated project's
+ * `sourceVideo.path` pointed at the ORIGINAL project's app-owned media dir, so
+ * deleting the original (which reclaims `media/<projectId>/`) silently
+ * destroyed the duplicate's video too.
+ */
+export async function copyIntoMedia(
+  srcPath: string,
+  projectId: string,
+  mediaRoot: string
+): Promise<string> {
+  const dest = adoptedMediaPath(mediaRoot, projectId, srcPath)
+  const destDir = dirname(dest)
+  if (!resolve(dest).startsWith(resolve(destDir) + sep)) {
+    throw new MediaStoreError('INVALID', `copy dest escapes media dir: ${dest}`)
+  }
+  try {
+    await mkdir(destDir, { recursive: true })
+    await copyFile(srcPath, dest)
+    return dest
+  } catch (cause) {
+    if (cause instanceof MediaStoreError) throw cause
+    throw new MediaStoreError('IO', `failed to copy ${srcPath} into media/${projectId}`, cause)
+  }
+}
+
+/**
  * Remove a project's OWNED media dir `<mediaRoot>/<projectId>/` (idempotent).
  * Structurally can only ever touch `media/<projectId>/`, so a user's original
  * (file import, outside `mediaRoot`) is unreachable.

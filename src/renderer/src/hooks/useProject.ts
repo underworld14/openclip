@@ -116,6 +116,28 @@ export function hydrateFromProject(store: CoreStoreApi, project: Project): void 
 }
 
 /**
+ * Close whatever project is open, clearing every slice `hydrateFromProject`
+ * would otherwise leave behind (EPIC-k83ghw / BUG-tdgtfb).
+ *
+ * Used by File → New Project (Cmd+N) and by deleting the currently-open
+ * project. Before this, both left the OUTGOING project's clips/transcript
+ * sitting in the (singleton) slices: Cmd+N showed the previous project's
+ * clips as though they belonged to the new, empty one — and approving or
+ * trimming one there silently wrote it into whatever got created next; and
+ * deleting the open project left it fully rendered in the editor after its
+ * `.ocproj` and (for an app-owned source) its video were already gone, so the
+ * very next edit re-created the document over a deleted file.
+ */
+export function closeProject(store: CoreStoreApi): void {
+  const state = store.getState()
+  state.setCurrentProject(null)
+  state.setTranscript(null)
+  state.setClips([])
+  state.setExportHistory([])
+  state.selectClip(null)
+}
+
+/**
  * @deprecated Wave-1 integration superseded core-only hydration with full
  * cross-slice hydration. Retained as an alias for callers/tests that referenced
  * the core-slice helper; it now hydrates every slice via {@link hydrateFromProject}.
@@ -196,6 +218,11 @@ export function projectActions(bridge: Bridge, store: CoreStoreApi): ProjectActi
 
     remove: async (id: string): Promise<{ deleted: boolean }> => {
       const res = await bridge.project.delete({ id })
+      // Deleting the OPEN project must close it in the editor (EPIC-k83ghw /
+      // BUG-tdgtfb) — its `.ocproj` and (for an app-owned source) its video
+      // are now gone, so leaving it rendered meant the next edit the user
+      // made re-created the document over deleted media.
+      if (store.getState().currentProject?.id === id) closeProject(store)
       await refreshRecents()
       return res
     },
@@ -218,12 +245,33 @@ export function projectActions(bridge: Bridge, store: CoreStoreApi): ProjectActi
     duplicate: async (id: string): Promise<Project> => {
       const project = await bridge.project.load({ id })
       const now = Date.now()
+      let sourceVideo = project.sourceVideo
+      const newId = crypto.randomUUID()
+      // A file-imported source lives OUTSIDE the app-owned media tree and is
+      // shared safely by reference (the app never deletes it). An APP-OWNED
+      // source (URL/YouTube import) lives at `media/<projectId>/…` and IS
+      // deleted when its owning project is deleted — so without a real copy,
+      // deleting the ORIGINAL destroyed the duplicate's video too (EPIC-k83ghw
+      // / BUG-tdgtfb). Best-effort: if the copy fails, keep the duplicate
+      // pointed at the original path rather than losing the whole duplicate.
+      if (sourceVideo.appOwned) {
+        try {
+          const { path } = await bridge.media.copySource({
+            projectId: newId,
+            filePath: sourceVideo.path
+          })
+          sourceVideo = { ...sourceVideo, path }
+        } catch {
+          /* keep referencing the original's media; duplicate still works until it is deleted */
+        }
+      }
       const copy: Project = {
         ...project,
-        id: crypto.randomUUID(),
+        id: newId,
         name: `${project.name} copy`,
         createdAt: now,
         updatedAt: now,
+        sourceVideo,
         // The copy has exported nothing yet. Inheriting the original's history
         // would point at files this project never produced.
         exportHistory: []

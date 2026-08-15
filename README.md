@@ -53,6 +53,12 @@ With **Ollama** as the provider, nothing leaves it at all.
 
 ## Quickstart
 
+> **No pre-built download exists yet.** There is no Releases page to grab a
+> `.dmg` from — the only way to run OpenClip today is to build it yourself
+> with the steps below (10-15 minutes, one-time). This is a real gap, not an
+> oversight: see [Distributing a built app](#distributing-a-built-app-gatekeeper)
+> for what a signed, downloadable build needs and why it isn't there yet.
+
 **Prerequisites**
 
 - macOS on Apple Silicon (see [Platform support](#platform-support))
@@ -67,6 +73,12 @@ npm install
 npm run dev
 ```
 
+`npm run dev` runs OpenClip straight from source (electron-vite, hot reload) —
+nothing to install or trust beyond your own checkout. To instead produce a
+standalone `.app`/`.dmg` you can double-click or hand to someone else, see
+[Distributing a built app](#distributing-a-built-app-gatekeeper) below and
+[`docs/PACKAGING.md`](docs/PACKAGING.md) for the full walkthrough.
+
 **Then, in the app:**
 
 1. Open **Settings** (gear, top right) → pick your provider → paste your API key → pick a model.
@@ -77,8 +89,6 @@ npm run dev
 3. Drop a video onto the import panel, or paste a YouTube/video URL.
 4. Wait for the local transcription, then hit **Auto Generate Clips**.
 5. Review the candidates, trim on the timeline, and **Export**.
-
-To build a distributable app, see [`docs/PACKAGING.md`](docs/PACKAGING.md).
 
 ![The import screen](docs/screenshots/01-welcome.png)
 
@@ -113,7 +123,6 @@ These are tracked, not hidden:
 - Clip results are text-only cards — no thumbnail or inline preview yet.
 - The transcript is read-only: no click-to-seek, and no SRT/VTT export.
 - Caption templates are named chips with no visual preview.
-- Reject deletes a clip immediately, with no undo and no confirmation.
 - The Export and Settings dialogs do not scroll at small window heights.
 
 Work is tracked as [Pine](https://github.com/underworld14/pine) tickets in
@@ -129,6 +138,36 @@ hardware encoder, and the packaging pipeline verifies both.
 Intel Macs, Windows and Linux are not currently built or tested. The code is not
 deliberately macOS-only — `paths.ts` already resolves per-platform — but nobody
 has done the work, and claiming support without a green build would be a lie.
+
+## Distributing a built app (Gatekeeper)
+
+`npm run build:mac:unsigned` (see [`docs/PACKAGING.md`](docs/PACKAGING.md))
+produces a real `.app`/`.dmg` with no Apple Developer account needed — but
+that build is **adhoc-signed only**. If you build it yourself, or someone
+hands you a `.dmg` built this way, opening it on a Mac that is not the one
+that built it shows Gatekeeper's **"OpenClip is damaged and can't be
+opened"** (or "cannot be opened because the developer cannot be verified") —
+that is macOS quarantining an app with no verified developer signature, not
+an actually broken build.
+
+**To open it anyway**, either:
+
+- Right-click (or Control-click) `OpenClip.app` → **Open** → **Open** again
+  in the confirmation dialog, or
+- Clear the quarantine flag from Terminal:
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/OpenClip.app
+  ```
+
+A **signed and notarized** build removes this warning entirely for everyone,
+but requires an Apple Developer account and credentials belonging to whoever
+is publishing the app — `npm run build:mac` plus `build/notarize.cjs` already
+implement that path (§2 of `docs/PACKAGING.md`); it is simply not something
+this repository can do on your behalf. There is also no auto-update feed
+pointed at a public release yet (`electron-updater` is wired — see "Check for
+Updates…" in the app menu — but it has nothing to check against until a
+release is actually published); until then, re-run the steps above to get a
+newer version.
 
 ## Privacy and security, concretely
 

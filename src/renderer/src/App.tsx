@@ -38,6 +38,7 @@ import { Timeline } from '@renderer/components/Timeline'
 import { ExportPanel } from '@renderer/components/ExportPanel'
 import { SettingsPanel } from '@renderer/components/SettingsPanel'
 import { ModelDownloadDialog } from '@renderer/components/ModelDownloadDialog'
+import { startModelDownload } from '@renderer/components/model-download'
 import { Toaster } from '@renderer/components/ui/sonner'
 import { toast } from 'sonner'
 import { createGenerateClipsHandler } from '@renderer/components/generateClips'
@@ -316,6 +317,23 @@ function App(): React.JSX.Element {
     setModelDialogOpen(true)
   }
 
+  /**
+   * Start a download for an ALREADY-CHOSEN model, from any surface that names it
+   * (the readiness chip, a Settings row). The picker survives only where the user
+   * genuinely has not chosen yet — the first-run import gate (BUG-45xt77).
+   */
+  const startDownload = (model: WhisperModelSize): void => {
+    toast.info(`Downloading ${model} — track it in the status bar at the top.`)
+    startModelDownload({
+      model,
+      onDone: () => {
+        readiness.refresh()
+        toast.success(`${model} is ready.`)
+      },
+      onError: (message) => toast.error(`Downloading ${model} failed: ${message}`)
+    })
+  }
+
   // The import controller is a shared singleton, so this is the SAME in-flight
   // import ImportPanel started — which is what lets the model dialog hand the
   // interrupted import back instead of silently abandoning it (FEAT-kncqxf).
@@ -393,11 +411,10 @@ function App(): React.JSX.Element {
             chips={readiness.chips}
             onOpenSettings={() => setModal('settings')}
             onDownloadModel={() => {
-              // Pre-select the model the chip is complaining about. Without this
-              // a chip reading "Transcription: large-v3 — not installed" opened
-              // the dialog on `base`, so the download left the chip still red.
-              setNeededModel(useSettingsStore.getState().settings.whisperModel)
-              setModelDialogOpen(true)
+              // The chip NAMES the model it is complaining about, so clicking it
+              // is already the choice — start the download rather than opening a
+              // picker to ask again (BUG-45xt77). Progress lives in the status bar.
+              startDownload(useSettingsStore.getState().settings.whisperModel)
             }}
           />
           {showEditor && (
@@ -549,10 +566,9 @@ function App(): React.JSX.Element {
             <DialogTitle>Settings</DialogTitle>
           </DialogHeader>
           <SettingsPanel
-            onDownloadModel={(m) => {
-              setNeededModel(m)
-              setModelDialogOpen(true)
-            }}
+            onDownloadStarted={(m) =>
+              toast.info(`Downloading ${m} — track it in the status bar at the top.`)
+            }
             onModelsChanged={readiness.refresh}
           />
         </DialogContent>
@@ -571,9 +587,15 @@ function App(): React.JSX.Element {
             void importCtl.resumePending()
           }
         }}
-        onDismiss={() => {
+        onDismiss={(stillDownloading) => {
           setModelDialogOpen(false)
-          importCtl.discardPending()
+          // Dismissing no longer cancels the transfer (BUG-45xt77), so say where
+          // it went — the same contract the export flow already offers.
+          if (stillDownloading) {
+            toast.info('Download continues in the background — cancel it in the status bar.')
+          } else {
+            importCtl.discardPending()
+          }
         }}
       />
 

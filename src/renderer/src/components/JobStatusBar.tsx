@@ -66,7 +66,12 @@ export function JobStatusBar(): React.JSX.Element | null {
   return (
     <div
       data-testid="job-status-bar"
-      className="app-no-drag shrink-0 border-b border-border/60 bg-muted/30 px-3 py-1.5"
+      // `relative z-[60] pointer-events-auto` is what makes this bar USABLE while
+      // a dialog is open (BUG-45xt77). Radix modals put `pointer-events: none` on
+      // the body and paint an overlay at z-50, so the bar rendered underneath was
+      // visible but inert: you could watch a download and not reach its Cancel,
+      // and closing the dialog to reach it used to kill the download.
+      className="app-no-drag pointer-events-auto relative z-[60] shrink-0 border-b border-border/60 bg-muted/30 px-3 py-1.5"
     >
       <JobRow task={primary} now={now} onDismiss={dismissTask} />
 
@@ -217,7 +222,13 @@ function JobRow({ task, now, onDismiss }: JobRowProps): React.JSX.Element {
             ))}
           </span>
         )}
-        {view.detail && <span data-testid="job-status-detail">{view.detail}</span>}
+        {/* tabular-nums: the byte counter and rate climb continuously, and
+            proportional digits made the whole line jitter as they changed. */}
+        {view.detail && (
+          <span data-testid="job-status-detail" className="tabular-nums">
+            {view.detail}
+          </span>
+        )}
         {task.status === 'error' && task.error && (
           <span className="min-w-0 flex-1 truncate text-destructive" role="alert">
             {task.error}

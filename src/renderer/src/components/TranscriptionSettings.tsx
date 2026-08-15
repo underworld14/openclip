@@ -15,7 +15,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Trash2 } from 'lucide-react'
 import type { WhisperModelSize } from '@shared/jobs'
 import type { ModelStatus } from '@shared/channels'
-import { WHISPER_MODEL_TABLE } from '@renderer/components/model-download'
+import { WHISPER_MODEL_TABLE, startModelDownload } from '@renderer/components/model-download'
 import { Button } from '@renderer/components/ui/button'
 import { Label } from '@renderer/components/ui/label'
 import { formatBytes } from '@renderer/components/formatBytes'
@@ -23,8 +23,13 @@ import { formatBytes } from '@renderer/components/formatBytes'
 export interface TranscriptionSettingsProps {
   active: WhisperModelSize
   onSelect: (model: WhisperModelSize) => void
-  /** Open the download dialog pre-selected on this model. */
-  onDownload: (model: WhisperModelSize) => void
+  /**
+   * Notify the app that a download started here (for a toast). The row starts it
+   * ITSELF — clicking Download on a named row IS the choice, and routing through
+   * a dialog only to re-ask which model to download was pure friction
+   * (BUG-45xt77).
+   */
+  onDownloadStarted?: (model: WhisperModelSize) => void
   /**
    * Called after the installed set changes, so the readiness chip re-probes.
    * Without it, deleting the ACTIVE model left a green "Transcription ✓" chip
@@ -36,12 +41,14 @@ export interface TranscriptionSettingsProps {
 export function TranscriptionSettings({
   active,
   onSelect,
-  onDownload,
+  onDownloadStarted,
   onChanged
 }: TranscriptionSettingsProps): React.JSX.Element {
   const [statuses, setStatuses] = useState<ModelStatus[]>([])
   const [busy, setBusy] = useState<WhisperModelSize | null>(null)
   const [error, setError] = useState<string | null>(null)
+  /** Per-row download progress, so the row itself reports rather than a modal. */
+  const [downloading, setDownloading] = useState<Record<string, number>>({})
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -71,6 +78,35 @@ export function TranscriptionSettings({
   }, [])
 
   const installedBytes = statuses.reduce((sum, s) => sum + (s.installed ? (s.bytes ?? 0) : 0), 0)
+
+  /** Drop one row's progress entry once it settles. */
+  const clearRow = (rows: Record<string, number>, model: string): Record<string, number> =>
+    Object.fromEntries(Object.entries(rows).filter(([key]) => key !== model))
+
+  /**
+   * Start the download for THIS row. No dialog: the row names the model, so the
+   * click already answered "which one".
+   */
+  const download = (model: WhisperModelSize): void => {
+    setError(null)
+    setDownloading((d) => ({ ...d, [model]: 0 }))
+    onDownloadStarted?.(model)
+    startModelDownload({
+      model,
+      onProgress: (pct) => setDownloading((d) => ({ ...d, [model]: pct })),
+      onDone: () => {
+        setDownloading((d) => clearRow(d, model))
+        // Re-read the installed set. Previously only a DELETE refreshed this, so
+        // a finished model still showed "Download" until Settings was reopened.
+        void refresh()
+        onChanged?.()
+      },
+      onError: (message) => {
+        setDownloading((d) => clearRow(d, model))
+        setError(message)
+      }
+    })
+  }
 
   const remove = async (model: WhisperModelSize): Promise<void> => {
     // Multi-gigabyte downloads: confirm before discarding one.
@@ -136,15 +172,22 @@ export function TranscriptionSettings({
                 {row.sizeLabel} · {row.speed} · {row.accuracy}
               </span>
               <span className="ml-auto flex items-center gap-1">
-                {installed ? (
+                {row.model in downloading ? (
+                  <span
+                    className="text-xs text-muted-foreground tabular-nums"
+                    data-testid={`whisper-progress-${row.model}`}
+                  >
+                    Downloading… {downloading[row.model]}%
+                  </span>
+                ) : installed ? (
                   <>
-                    <span className="text-xs text-emerald-500">
+                    <span className="text-xs text-emerald-500 tabular-nums">
                       Installed{status?.bytes ? ` · ${formatBytes(status.bytes)}` : ''}
                     </span>
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="size-6"
+                      className="relative size-6 after:absolute after:top-1/2 after:left-1/2 after:size-10 after:-translate-x-1/2 after:-translate-y-1/2 after:content-['']"
                       aria-label={`Delete ${row.model}`}
                       data-testid={`whisper-delete-${row.model}`}
                       disabled={busy === row.model}
@@ -159,7 +202,7 @@ export function TranscriptionSettings({
                     size="sm"
                     className="h-6 px-2 text-xs"
                     data-testid={`whisper-download-${row.model}`}
-                    onClick={() => onDownload(row.model)}
+                    onClick={() => download(row.model)}
                   >
                     Download
                   </Button>

@@ -14,7 +14,13 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
-import { modelUrl, sha256File, downloadModel, deleteModel } from '@main/services/model-manager'
+import {
+  modelUrl,
+  sha256File,
+  downloadModel,
+  deleteModel,
+  MODEL_ASSETS
+} from '@main/services/model-manager'
 
 function sha256(buf: Buffer): string {
   return createHash('sha256').update(buf).digest('hex')
@@ -84,12 +90,16 @@ describe('model-manager: downloadModel (injected network)', () => {
     expect(progress[progress.length - 1].total).toBe(bytes.length)
   })
 
-  it('derives the expected SHA from the x-linked-etag header when none is given', async () => {
+  it('derives the expected SHA from the x-linked-etag header for an UNPINNED model', async () => {
+    // Was `model: 'base'`. Every offered model is pinned now (BUG-45xt77), and
+    // the pin deliberately WINS over a header — so the etag fallback can only be
+    // exercised by a model with no manifest entry, which is exactly the case it
+    // exists for: a size added to the enum before anyone pins it.
     const bytes = Buffer.from('hello model')
     const etag = sha256(bytes)
-    const dest = join(dir, 'ggml-base.bin')
+    const dest = join(dir, 'ggml-future.bin')
     const res = await downloadModel({
-      model: 'base',
+      model: 'future-size' as never,
       destPath: dest,
       fetchImpl: fakeFetch(bytes, etag)
     })
@@ -97,13 +107,25 @@ describe('model-manager: downloadModel (injected network)', () => {
     expect(sha256File(dest)).toBe(etag)
   })
 
-  it('reports an INDETERMINATE total (0) when no size header is present (openclip-flg)', async () => {
+  it('refuses bytes whose etag disagrees with the pinned hash (republished model)', async () => {
+    // A pin and an etag that differ means the hub republished the file. Installing
+    // the new bytes silently would defeat the point of pinning.
+    const bytes = Buffer.from('republished payload')
+    const dest = join(dir, 'ggml-base.bin')
+    await expect(
+      downloadModel({ model: 'base', destPath: dest, fetchImpl: fakeFetch(bytes, sha256(bytes)) })
+    ).rejects.toThrow(/no longer matches/i)
+    expect(existsSync(dest)).toBe(false)
+  })
+
+  it('reports an INDETERMINATE total (0) when nothing knows the size (openclip-flg)', async () => {
     // xet/LFS-backed model served via a redirect: no x-linked-size AND no
     // content-length. The total must stay 0 (indeterminate), NOT be faked to
     // `received` (which made the runner show a stuck near-100% bar from chunk 1).
+    // Uses an UNPINNED model, since a pinned one now supplies its own total.
     const bytes = Buffer.from('xet-lfs-model-bytes')
     const etag = sha256(bytes)
-    const dest = join(dir, 'ggml-base.bin')
+    const dest = join(dir, 'ggml-future.bin')
     const totals: number[] = []
     const fetchImpl = (async () => ({
       ok: true,
@@ -116,13 +138,36 @@ describe('model-manager: downloadModel (injected network)', () => {
     })) as unknown as typeof fetch
 
     await downloadModel({
-      model: 'base',
+      model: 'future-size' as never,
       destPath: dest,
       fetchImpl,
       onProgress: (_received, total) => totals.push(total)
     })
     expect(totals.length).toBeGreaterThan(0)
     expect(totals.every((t) => t === 0)).toBe(true)
+  })
+
+  it('falls back to the PINNED size when the server reports none (BUG-45xt77)', async () => {
+    // The CDN can answer without content-length. A pinned model still knows how
+    // big it is, so the bar should be real rather than a bare byte counter.
+    const bytes = Buffer.from('bytes')
+    const dest = join(dir, 'ggml-base.bin')
+    const totals: number[] = []
+    const fetchImpl = (async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: (): string | null => null },
+      body: Readable.toWeb(Readable.from([bytes]))
+    })) as unknown as typeof fetch
+
+    await downloadModel({
+      model: 'base',
+      destPath: dest,
+      expectedSha256: sha256(bytes),
+      fetchImpl,
+      onProgress: (_r, total) => totals.push(total)
+    }).catch(() => {})
+    expect(totals.every((t) => t === MODEL_ASSETS.base.bytes)).toBe(true)
   })
 
   it('rejects + removes the partial file on a SHA mismatch (no corrupt model)', async () => {
@@ -141,10 +186,12 @@ describe('model-manager: downloadModel (injected network)', () => {
 
   it('refuses to keep an UNVERIFIABLE model: no expected SHA, no etag, not in KNOWN_SHA256 (openclip-t1b)', async () => {
     const bytes = Buffer.from('unverifiable multi-GB-ish model bytes')
-    const dest = join(dir, 'ggml-base.bin')
+    const dest = join(dir, 'ggml-future.bin')
     await expect(
       downloadModel({
-        model: 'base', // NOT in KNOWN_SHA256 (only `tiny` is pinned)
+        // A model with NO manifest entry: every offered size is pinned now, so
+        // this path is only reachable for an id the manifest does not cover.
+        model: 'future-size' as never,
         destPath: dest,
         // no expectedSha256, and fakeFetch with no etag ⇒ nothing to verify against
         fetchImpl: fakeFetch(bytes, undefined)

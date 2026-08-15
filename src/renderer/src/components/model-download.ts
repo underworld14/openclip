@@ -7,6 +7,7 @@
 
 import type { JobResult, WhisperModelSize } from '@shared/jobs'
 import { drainJob } from '@renderer/hooks/useJob'
+import { trackTask } from '@renderer/stores/jobsStore'
 
 // ============================================================================
 // Model table (PRD §6.2 GGML model selection + §13 download UX)
@@ -69,4 +70,88 @@ export async function runModelDownload(
       onPartial: (data) => opts.onProgress?.(data.receivedBytes, data.totalBytes)
     }
   )
+}
+
+// ============================================================================
+// startModelDownload — the ONE way any surface starts a download (BUG-45xt77)
+// ============================================================================
+
+export interface StartModelDownloadOptions {
+  model: WhisperModelSize
+  /** Per-surface progress (the settings row, the dialog). The status bar is automatic. */
+  onProgress?: (pct: number, receivedBytes: number, totalBytes: number) => void
+  onDone?: (model: WhisperModelSize) => void
+  onError?: (message: string) => void
+}
+
+/**
+ * Start a model download as a tracked task and return immediately-usable
+ * handles.
+ *
+ * Extracted so the Settings row, the readiness chip and the import gate all get
+ * identical behaviour: progress in the status bar, a working Cancel, and a Retry
+ * on failure. Previously only the dialog could start one, which is why every
+ * entry point had to route through a modal that then asked the user to pick the
+ * model they had already picked.
+ *
+ * The returned promise settles when the download does; it never rejects (errors
+ * arrive via `onError`), so callers can `void` it without an unhandled rejection.
+ */
+export function startModelDownload(opts: StartModelDownloadOptions): {
+  cancel: () => void
+  finished: Promise<boolean>
+} {
+  let jobId: string | null = null
+  // Set before the job id arrives, so a cancel pressed in that window is not lost
+  // — it used to leave an unstoppable job with a live status-bar row.
+  let cancelRequested = false
+
+  const finished = trackTask(
+    {
+      kind: 'model-download',
+      label: opts.model,
+      stages: ['downloading'],
+      // Offer Retry in the status bar on failure. A download that dies at 90%
+      // otherwise left a dead-end error row — the status bar already renders a
+      // Retry button, downloads simply never supplied one.
+      retry: async () => {
+        await startModelDownload(opts).finished
+      }
+    },
+    async (task) => {
+      task.setCancel(async () => {
+        cancelRequested = true
+        if (jobId) await window.openclip.jobs.cancel(jobId)
+      })
+      await runModelDownload({
+        bridge: window.openclip,
+        model: opts.model,
+        onStart: (id) => {
+          jobId = id
+          if (cancelRequested) void window.openclip.jobs.cancel(id)
+        },
+        onProgress: (received, total) => {
+          const pct = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0
+          task.progress(pct, 'downloading', { receivedBytes: received, totalBytes: total })
+          opts.onProgress?.(pct, received, total)
+        }
+      })
+    }
+  )
+    .then(() => {
+      opts.onDone?.(opts.model)
+      return true
+    })
+    .catch((e: unknown) => {
+      opts.onError?.(e instanceof Error ? e.message : String(e))
+      return false
+    })
+
+  return {
+    cancel: () => {
+      cancelRequested = true
+      if (jobId) void window.openclip.jobs.cancel(jobId)
+    },
+    finished
+  }
 }

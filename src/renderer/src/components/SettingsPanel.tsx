@@ -86,14 +86,14 @@ function ModelGroup(props: {
 }
 
 export interface SettingsPanelProps {
-  /** Open the model-download dialog pre-selected on a size (wired by App). */
-  onDownloadModel?: (model: WhisperModelSize) => void
+  /** A download started from a Transcription row (for a toast) — see BUG-45xt77. */
+  onDownloadStarted?: (model: WhisperModelSize) => void
   /** Re-probe readiness after the installed model set changes. */
   onModelsChanged?: () => void
 }
 
 export function SettingsPanel({
-  onDownloadModel,
+  onDownloadStarted,
   onModelsChanged
 }: SettingsPanelProps = {}): React.JSX.Element {
   const settings = useSettingsStore((s) => s.settings)
@@ -597,7 +597,7 @@ export function SettingsPanel({
           <TranscriptionSettings
             active={settings.whisperModel}
             onSelect={(m) => void save({ whisperModel: m })}
-            onDownload={(m) => onDownloadModel?.(m)}
+            onDownloadStarted={onDownloadStarted}
             onChanged={onModelsChanged}
           />
 

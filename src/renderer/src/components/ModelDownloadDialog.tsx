@@ -14,9 +14,8 @@ import type { WhisperModelSize } from '@shared/jobs'
 import {
   WHISPER_MODEL_TABLE,
   DEFAULT_WHISPER_MODEL,
-  runModelDownload
+  startModelDownload
 } from '@renderer/components/model-download'
-import { trackTask } from '@renderer/stores/jobsStore'
 import { Button } from '@renderer/components/ui/button'
 import { Progress } from '@renderer/components/ui/progress'
 import {
@@ -34,13 +33,16 @@ export interface ModelDownloadDialogProps {
   /** Called once a model finishes downloading. */
   onDownloaded?: (model: WhisperModelSize) => void
   /**
-   * Called when the user dismisses the dialog (Escape, backdrop, or Cancel).
+   * Called when the user dismisses the dialog (Escape, backdrop, or a button).
    *
    * Previously there was no way out at all: a hand-rolled `fixed inset-0` div
    * with no Escape handler, no backdrop dismiss and no close control, so the only
    * exit from a mis-click was completing a 75MB–2.9GB download (FEAT-kncqxf).
+   *
+   * `stillDownloading` says whether a transfer was left running, so the caller
+   * can tell the user where it went — dismissal no longer cancels (BUG-45xt77).
    */
-  onDismiss?: () => void
+  onDismiss?: (stillDownloading: boolean) => void
 }
 
 export function ModelDownloadDialog({
@@ -56,8 +58,9 @@ export function ModelDownloadDialog({
   const [done, setDone] = useState(false)
   const [prevInitial, setPrevInitial] = useState(initialModel)
   const [prevOpen, setPrevOpen] = useState(open)
-  // Held so Cancel can abort an in-flight download instead of only hiding the UI.
-  const [jobId, setJobId] = useState<string | null>(null)
+  // Held so the explicit Cancel button can abort the transfer. Dismissing the
+  // dialog deliberately does NOT use this — see `dismiss` below.
+  const [cancelDownload, setCancelDownload] = useState<(() => void) | null>(null)
 
   // The dialog is mounted once and toggled via `open`; `useState` only read
   // `initialModel` on first mount, so when the import flow later needs a DIFFERENT
@@ -82,57 +85,51 @@ export function ModelDownloadDialog({
   }
 
   const download = useCallback(
-    async (model: WhisperModelSize): Promise<void> => {
+    (model: WhisperModelSize): void => {
       setBusy(true)
       setErr(null)
       setDone(false)
       setPct(0)
-      try {
-        // Tracked so the download stays visible (and cancellable) in the status
-        // bar after this dialog is dismissed — a 2.9GB large-v3 pull outlives
-        // any reason the user had for keeping the dialog open (EPIC-zpa1nd).
-        await trackTask(
-          { kind: 'model-download', label: model, stages: ['downloading'] },
-          async (task) => {
-            await runModelDownload({
-              bridge: window.openclip,
-              model,
-              onStart: (id) => {
-                setJobId(id)
-                task.setCancel(() => window.openclip.jobs.cancel(id))
-              },
-              onProgress: (received, total) => {
-                const next = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0
-                if (total > 0) setPct(next)
-                task.progress(next, 'downloading', {
-                  receivedBytes: received,
-                  totalBytes: total
-                })
-              }
-            })
-          }
-        )
-        setDone(true)
-        onDownloaded?.(model)
-      } catch (e) {
-        setErr(e instanceof Error ? e.message : String(e))
-      } finally {
-        setBusy(false)
-        setJobId(null)
-      }
+      // One shared starter, so this dialog, the settings row and the readiness
+      // chip behave identically in the status bar (BUG-45xt77).
+      const handle = startModelDownload({
+        model,
+        onProgress: (next) => setPct(next),
+        onDone: (m) => {
+          setBusy(false)
+          setDone(true)
+          onDownloaded?.(m)
+        },
+        onError: (message) => {
+          setBusy(false)
+          setErr(message)
+        }
+      })
+      setCancelDownload(() => handle.cancel)
     },
     [onDownloaded]
   )
 
   /**
-   * Dismiss. A running download is CANCELLED rather than orphaned — hiding the
-   * dialog while multiple gigabytes keep streaming would be a worse dead end
-   * than the one this replaces.
+   * Dismiss — WITHOUT cancelling.
+   *
+   * This used to call `jobs.cancel` on Escape, backdrop click, ✕ and "Not now",
+   * so there was no way to let a download continue while you did anything else:
+   * the status bar row exists precisely to outlive this dialog, and both dialogs
+   * are Radix `modal`, so the bar is click-inert underneath. Closing to reach the
+   * bar therefore killed the very download you were trying to keep (BUG-45xt77).
+   * Cancelling is now its own explicitly-labelled button, matching the export
+   * flow's "continues in the background" behaviour.
    */
   const dismiss = useCallback((): void => {
-    if (jobId) void window.openclip.jobs.cancel(jobId)
-    onDismiss?.()
-  }, [jobId, onDismiss])
+    onDismiss?.(busy)
+  }, [busy, onDismiss])
+
+  /** Explicit cancel: stop the transfer AND close. */
+  const cancel = useCallback((): void => {
+    cancelDownload?.()
+    onDismiss?.(false)
+  }, [cancelDownload, onDismiss])
 
   if (!open) return null
 
@@ -181,15 +178,22 @@ export function ModelDownloadDialog({
             {err}
           </span>
         )}
-        <div className="flex justify-end gap-2">
-          <Button size="sm" variant="ghost" data-testid="model-download-cancel" onClick={dismiss}>
-            {busy ? 'Cancel download' : 'Not now'}
+        <div className="flex items-center justify-end gap-2">
+          {busy && (
+            <Button size="sm" variant="ghost" data-testid="model-download-cancel" onClick={cancel}>
+              Cancel download
+            </Button>
+          )}
+          <Button size="sm" variant="ghost" data-testid="model-download-dismiss" onClick={dismiss}>
+            {/* Closing no longer stops the transfer — say so, rather than leaving
+                "Not now" to imply it did. */}
+            {busy ? 'Continue in background' : 'Not now'}
           </Button>
           <Button
             size="sm"
             data-testid="model-download-start"
             disabled={busy}
-            onClick={() => void download(selected)}
+            onClick={() => download(selected)}
           >
             {busy ? 'Downloading…' : `Download ${selected}`}
           </Button>

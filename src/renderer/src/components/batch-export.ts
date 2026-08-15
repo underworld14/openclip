@@ -15,7 +15,7 @@
  */
 
 import type { BrandTemplate, CaptionStyle, Clip, Project } from '@shared/schema'
-import type { JobResult } from '@shared/jobs'
+import type { JobParams, JobResult } from '@shared/jobs'
 import { runExport, defaultClipFileName, type OpenClipBridge } from './export-run'
 import { buildExportParams } from '@renderer/stores/projectStore/exportSlice'
 import { resolveEffectiveCaptionStyle } from './captionPresets'
@@ -80,6 +80,16 @@ export interface RunBatchExportOptions {
   /** The platform preset (aspectRatio + quality + caption template). */
   preset: PlatformPreset
   /**
+   * The framing the user chose in the preview (EPIC-k83ghw / BUG-15cddx):
+   * `fitMode` ("Fit (bars)", "Fit (blur)", "Split screen", vs the historical
+   * centre-crop "Fill") and `reframe` (auto-reframe off/follow-speaker).
+   * Without these a batch always centre-cropped every clip regardless of
+   * what the preview showed, silently discarding the choice right next to
+   * the button that starts the batch.
+   */
+  fitMode?: JobParams['export']['fitMode']
+  reframe?: JobParams['export']['reframe']
+  /**
    * App Setting "force CPU" (PRD §14). A batch is where a broken hardware
    * encoder hurts most — without this the setting was inert for every clip in
    * the run (BUG-jt3d62).
@@ -111,12 +121,22 @@ export async function runBatchExport(opts: RunBatchExportOptions): Promise<Batch
   const pathFor = new Map(names.map((n) => [n.clipId, n.outputPath]))
   const jobIds = new Map<string, string>()
   const words = opts.project.transcript.words
+  // The caption style the user picked in the gallery beside the preview
+  // (project.settings.captionTemplateId) — NOT opts.preset.captionTemplateId
+  // (EPIC-k83ghw / BUG-15cddx). The preset's id is a per-platform DEFAULT for
+  // a fresh project, not an override of a choice the user already made; using
+  // it here meant every clip in a batch silently switched to whatever style
+  // the target platform happened to default to (e.g. every TikTok export
+  // forced to "tiktok-bounce") regardless of what the live preview showed.
   // Brand overrides caption font/colors; autoEmoji selects the emoji source — one
   // resolved style for every clip in the batch (the logo params are per-brand too).
-  const captionStyle = resolveEffectiveCaptionStyle(opts.preset.captionTemplateId, {
-    autoEmoji: opts.autoEmoji,
-    brand: brandCaptionOverride(opts.brand)
-  })
+  const captionStyle = resolveEffectiveCaptionStyle(
+    opts.project.settings.captionTemplateId ?? opts.preset.captionTemplateId,
+    {
+      autoEmoji: opts.autoEmoji,
+      brand: brandCaptionOverride(opts.brand)
+    }
+  )
   const logoParams = brandLogoParams(opts.brand)
 
   // `aborted` is checked BEFORE each job starts (skip un-started clips) and inside
@@ -145,7 +165,12 @@ export async function runBatchExport(opts: RunBatchExportOptions): Promise<Batch
           projectId: opts.project.id,
           clip,
           source: opts.project.sourceVideo,
-          settings: { aspectRatio: opts.preset.aspectRatio },
+          // fitMode/reframe mirror what the single-clip export path passes
+          // from `project.settings`/the previewSlice (EPIC-k83ghw /
+          // BUG-15cddx) — previously omitted here, so a batch silently
+          // centre-cropped every clip no matter what framing was chosen.
+          settings: { aspectRatio: opts.preset.aspectRatio, fitMode: opts.fitMode },
+          reframe: opts.reframe,
           outputPath,
           quality: opts.preset.quality,
           forceCpu: opts.forceCpu,

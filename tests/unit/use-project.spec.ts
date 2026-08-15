@@ -17,7 +17,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMockOpenclip } from '../mocks/openclip'
 import { projectFixture, clipFixture, transcriptFixture } from '../fixtures/contract'
-import { projectActions, hydrateFromProject } from '@renderer/hooks/useProject'
+import { projectActions, hydrateFromProject, closeProject } from '@renderer/hooks/useProject'
 import { useProjectStore } from '@renderer/stores/projectStore'
 
 beforeEach(() => {
@@ -172,5 +172,53 @@ describe('hydrateFromProject (Wave-1 full cross-slice hydration)', () => {
     hydrateFromProject(useProjectStore, { ...projectFixture, id: 'p2' })
 
     expect(useProjectStore.getState().selectedClipId).toBeNull()
+  })
+
+  it('restores the saved reframe mode instead of always resetting to off (EPIC-k83ghw / BUG-8kgcxs)', () => {
+    // reframeMode used to be previewSlice-only, transient state — a project
+    // saved with "Follow speaker" silently reopened on plain centre-crop.
+    hydrateFromProject(useProjectStore, {
+      ...projectFixture,
+      settings: { ...projectFixture.settings, reframeMode: 'auto' }
+    })
+    expect(useProjectStore.getState().reframeMode).toBe('auto')
+  })
+
+  it('defaults to off for a project that never had the field (pre-existing .ocproj)', () => {
+    // projectFixture.settings carries no reframeMode key at all — exactly what
+    // a `.ocproj` written before this field existed looks like.
+    hydrateFromProject(useProjectStore, projectFixture)
+    expect(useProjectStore.getState().reframeMode).toBe('off')
+  })
+
+  it('resets reframeMode across project switches (no cross-project leak, singleton slice)', () => {
+    hydrateFromProject(useProjectStore, {
+      ...projectFixture,
+      settings: { ...projectFixture.settings, reframeMode: 'split' }
+    })
+    expect(useProjectStore.getState().reframeMode).toBe('split')
+    hydrateFromProject(useProjectStore, { ...projectFixture, id: 'p2' }) // no reframeMode saved
+    expect(useProjectStore.getState().reframeMode).toBe('off')
+  })
+})
+
+describe('closeProject (EPIC-k83ghw / BUG-tdgtfb, BUG-8kgcxs)', () => {
+  it('clears every slice hydrateFromProject would otherwise leave behind', () => {
+    hydrateFromProject(useProjectStore, {
+      ...projectFixture,
+      settings: { ...projectFixture.settings, reframeMode: 'auto' }
+    })
+    useProjectStore.setState({ selectedClipId: projectFixture.clips[0]?.id ?? null })
+
+    closeProject(useProjectStore)
+
+    const st = useProjectStore.getState()
+    expect(st.currentProject).toBeNull()
+    expect(st.transcript).toBeNull()
+    expect(st.clips).toEqual([])
+    expect(st.exportHistory).toEqual([])
+    expect(st.selectedClipId).toBeNull()
+    // Otherwise a subsequent "New Project" inherited the closed project's mode.
+    expect(st.reframeMode).toBe('off')
   })
 })

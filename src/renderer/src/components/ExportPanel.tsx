@@ -277,6 +277,11 @@ export function ExportPanel(): React.JSX.Element {
       clips: approvedClips,
       dir: dir.dirPath,
       preset,
+      // The framing chosen in the preview, exactly like the single-clip path
+      // a few lines above (EPIC-k83ghw / BUG-15cddx) — previously omitted,
+      // so a batch always centre-cropped every clip.
+      fitMode,
+      reframe,
       forceCpu,
       // Part K — apply the active brand (caption colors/font + logo) and the
       // auto-emoji source to every clip; the AI map is fetched per clip.
@@ -357,6 +362,8 @@ export function ExportPanel(): React.JSX.Element {
     composeProject,
     platformId,
     approvedClips,
+    fitMode,
+    reframe,
     forceCpu,
     addExportRecord,
     markExported,
@@ -440,7 +447,12 @@ export function ExportPanel(): React.JSX.Element {
                   aria-pressed={framingId === m.id}
                   title={m.hint}
                   onClick={() => {
-                    setProjectSettings({ fitMode: m.fitMode })
+                    // Both halves of ONE framing choice persist together
+                    // (EPIC-k83ghw / BUG-8kgcxs) — `reframeMode` used to be
+                    // previewSlice-only state, so "Follow speaker" silently
+                    // reverted to plain centre-crop on every reopen while
+                    // `fitMode` correctly remembered its half.
+                    setProjectSettings({ fitMode: m.fitMode, reframeMode: m.reframe })
                     setReframe(m.reframe)
                   }}
                   className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${

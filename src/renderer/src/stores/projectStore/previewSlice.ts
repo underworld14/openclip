@@ -63,6 +63,14 @@ export const createPreviewSlice: StateCreator<ProjectStore, [], [], PreviewSlice
   reframePlanLoading: false,
   reframePlanError: null,
   setAspectOverride: (aspectOverride) => set({ aspectOverride }),
+  // Deliberately transient-only, same as this slice's other fields: it just
+  // mirrors the LIVE mode into the store. Persistence (EPIC-k83ghw /
+  // BUG-8kgcxs) is the CALLER's job — the explicit user-action call site
+  // (ExportPanel's framing control) also writes `project.settings.reframeMode`
+  // in the same breath `fitMode` already does, and `hydrateFromProject`
+  // restores this from that same field on load. Persisting HERE unconditionally
+  // would also fire on hydration itself (this setter runs there too), stamping
+  // an explicit 'off' onto every legacy project that never had the field.
   setReframeMode: (reframeMode) =>
     // Changing the mode invalidates the plan: `auto` and `split` produce
     // structurally different plans from the same faces, and showing the old one

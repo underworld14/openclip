@@ -53,6 +53,7 @@ export interface CoreStoreApi {
     | 'setExportHistory'
     | 'selectClip'
     | 'composeProject'
+    | 'setReframeMode'
   >
 }
 
@@ -113,6 +114,10 @@ export function hydrateFromProject(store: CoreStoreApi, project: Project): void 
   // from the OUTGOING project, which no longer exists in `clips` (audit fix
   // BUG-2hjt1x). Every slice this function touches must be replaced, not merged.
   state.selectClip(null)
+  // Restore the auto-reframe mode (EPIC-k83ghw / BUG-8kgcxs) — previewSlice
+  // used to start every project on 'off' regardless of what was saved, so
+  // "Follow speaker" silently reverted to plain centre-crop on every reopen.
+  state.setReframeMode(project.settings.reframeMode ?? 'off')
 }
 
 /**
@@ -135,6 +140,9 @@ export function closeProject(store: CoreStoreApi): void {
   state.setClips([])
   state.setExportHistory([])
   state.selectClip(null)
+  // Otherwise a "New Project" inherited whatever reframe mode the CLOSED
+  // project happened to leave behind (previewSlice is a singleton too).
+  state.setReframeMode('off')
 }
 
 /**

@@ -251,7 +251,17 @@ export const ProjectSettings = z.looseObject({
    * blurred copy of the frame. Optional so pre-existing `.ocproj` validate;
    * absent ⇒ `fill`, the historical behaviour.
    */
-  fitMode: z.enum(['fill', 'letterbox', 'blur']).optional()
+  fitMode: z.enum(['fill', 'letterbox', 'blur']).optional(),
+  /**
+   * Auto-reframe mode (Part J): `off` / `auto` (follow the speaker) / `split`
+   * (split-screen). Was previewSlice-only state and never written to disk
+   * (EPIC-k83ghw / BUG-8kgcxs) — a project that had "Follow speaker" set,
+   * with a hand-placed manual crop (`Clip.reframeCropX`, which DOES persist),
+   * silently reopened on plain centre-crop: the crop value was still there,
+   * it just stopped being read once the mode gating it reset to `off`.
+   * Optional so pre-existing `.ocproj` validate; absent ⇒ `off`.
+   */
+  reframeMode: z.enum(['off', 'auto', 'split']).optional()
 })
 export type ProjectSettings = z.infer<typeof ProjectSettings>
 

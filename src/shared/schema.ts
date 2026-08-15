@@ -25,6 +25,7 @@
  */
 
 import { z } from 'zod'
+import { isSafeEndpointUrl } from './endpoint-url'
 
 // ============================================================================
 // FINALIZED (was provisional) — media-derived shapes. Frozen at `contracts-v1`.
@@ -350,13 +351,51 @@ export const Project = z.looseObject({
 export type Project = z.infer<typeof Project>
 
 /** App-global `Settings` (PRD §11.2 Settings screen, plan `settingsStore`). */
-export const AIProvider = z.enum(['openai', 'anthropic', 'google', 'ollama', 'openrouter'])
+/**
+ * `custom` (FEAT-bysdwg) is a user-supplied OpenAI-compatible endpoint — LM
+ * Studio, vLLM, LiteLLM, Groq, Together, DeepSeek, a corporate gateway. It is
+ * the only member with no fixed URL and no required key; both come from
+ * `Settings.baseUrl` + the `custom` slot of the key vault.
+ */
+export const AIProvider = z.enum([
+  'openai',
+  'anthropic',
+  'google',
+  'ollama',
+  'openrouter',
+  'custom'
+])
 export type AIProvider = z.infer<typeof AIProvider>
 
 export const Settings = z.looseObject({
   aiProvider: AIProvider,
   model: z.string(), // resolved current model id (PRD §4.3 — not hardcoded)
-  baseUrl: z.string().optional(), // for Ollama / custom endpoints
+  /**
+   * The ONE custom OpenAI-compatible endpoint (FEAT-bysdwg) — the root the SDK
+   * appends `/chat/completions` to, e.g. `http://localhost:1234/v1`.
+   *
+   * Used ONLY by `aiProvider: 'custom'` (and by `emojiProvider: 'custom'`, which
+   * shares it). Ollama deliberately does NOT read it: one field, one meaning. If
+   * an Ollama host override is ever needed, add `ollamaBaseUrl` rather than
+   * overloading this. Validated here rather than only at the UI so a hand-edited
+   * settings.json cannot point the app's outbound key at a `file:` or
+   * credentials-bearing URL.
+   */
+  baseUrl: z
+    .string()
+    .refine(
+      isSafeEndpointUrl,
+      'must be an http(s) URL with no credentials, query or fragment — e.g. http://localhost:1234/v1'
+    )
+    .optional(),
+  /**
+   * Which endpoint the saved `custom` API key was entered FOR (normalized
+   * origin). The key vault is keyed by provider id alone, so without this a key
+   * saved for a corporate gateway would be sent as a Bearer token to whatever
+   * base URL the user typed next. Mismatch ⇒ the key is treated as absent and
+   * the user is asked to re-enter it (fail-closed, and never destructive).
+   */
+  customKeyEndpoint: z.string().optional(),
   // Part K (emoji) — an INDEPENDENT provider + model for AI emoji suggestion
   // (ENHANCE_CAPTIONS, mode:'emoji'). Both OPTIONAL: absent ⇒ fall back to
   // `aiProvider`/`model`. The key for `emojiProvider` lives in the same

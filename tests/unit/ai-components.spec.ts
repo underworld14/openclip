@@ -166,7 +166,13 @@ describe('transcription language helpers (Part I — cross-language)', () => {
 describe('PROVIDERS no longer offers a dead end (FEAT-et1gxc)', () => {
   it('drops Google, which the transport hard-throws on', () => {
     expect(PROVIDERS).not.toContain('google')
-    expect(PROVIDERS).toEqual(['openai', 'anthropic', 'ollama', 'openrouter'])
+    // `custom` is last on purpose: it is the advanced option (FEAT-bysdwg).
+    expect(PROVIDERS).toEqual(['openai', 'anthropic', 'ollama', 'openrouter', 'custom'])
+  })
+
+  it('names every offered provider — an unnamed one would render blank', () => {
+    for (const provider of PROVIDERS) expect(providerLabel(provider)).toBeTruthy()
+    expect(providerLabel('custom')).toBe('Custom (OpenAI-compatible)')
   })
 })
 

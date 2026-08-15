@@ -14,6 +14,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'node:path'
 import { IPCChannels } from '@shared/channels'
 import { Settings, type Settings as SettingsType } from '@shared/schema'
+import { endpointFingerprint } from '@shared/endpoint-url'
+import { customKeyMatchesEndpoint } from '@shared/ai-providers'
 import type { IpcContext } from './index'
 
 const DEFAULT_SETTINGS: SettingsType = {
@@ -131,6 +133,17 @@ export function updateSettings(path: string, patch: Partial<SettingsType>): Sett
   return parsed.data
 }
 
+/**
+ * The live Settings document — the accessor the trunk injects as
+ * `IpcContext.getSettings` (FEAT-bysdwg).
+ *
+ * Lives here because `settingsPath()` is this module's business, and reading it
+ * from `ipc/ai.ts` would be one domain module reaching into another (E.4).
+ */
+export function readCurrentSettings(): SettingsType {
+  return readSettings(settingsPath())
+}
+
 export function registerSettingsHandlers(ctx: IpcContext): void {
   ctx.ipcMain.handle(IPCChannels.GET_SETTINGS, async () => {
     return readSettings(settingsPath())
@@ -147,7 +160,17 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
   ctx.ipcMain.handle(
     IPCChannels.GET_API_KEY_STATUS,
     async (_e, req: { provider: SettingsType['aiProvider'] }) => {
-      return ctx.keyVault.status(req.provider)
+      const status = ctx.keyVault.status(req.provider)
+      // Report a key bound to a DIFFERENT endpoint as absent, or readiness goes
+      // green over a key that will never be used (FEAT-bysdwg).
+      if (
+        req.provider === 'custom' &&
+        status.hasKey &&
+        !customKeyMatchesEndpoint(readCurrentSettings())
+      ) {
+        return { provider: req.provider, hasKey: false }
+      }
+      return status
     }
   )
 
@@ -155,7 +178,16 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
     IPCChannels.SET_API_KEY,
     async (_e, req: { provider: SettingsType['aiProvider']; key: string }) => {
       // setKey persists the encrypted key and returns the renderer-safe status.
-      return ctx.keyVault.setKey(req.provider, req.key)
+      const status = ctx.keyVault.setKey(req.provider, req.key)
+      // Bind the custom key to the endpoint it was entered for, in the same
+      // operation — a key and the URL it belongs to are one fact.
+      if (req.provider === 'custom') {
+        const path = settingsPath()
+        updateSettings(path, {
+          customKeyEndpoint: endpointFingerprint(readSettings(path).baseUrl)
+        })
+      }
+      return status
     }
   )
 }

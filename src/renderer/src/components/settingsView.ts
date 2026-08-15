@@ -11,17 +11,10 @@ import type { EncoderBackend } from '@shared/channels'
 import type { AIProvider } from '@shared/schema'
 import type { ApiKeyStatus, ModelInfo } from '@shared/channels'
 
-const PROVIDER_LABELS: Record<AIProvider, string> = {
-  openai: 'OpenAI',
-  anthropic: 'Anthropic',
-  google: 'Google Gemini',
-  ollama: 'Ollama (local)',
-  openrouter: 'OpenRouter'
-}
-
-export function providerLabel(provider: AIProvider): string {
-  return PROVIDER_LABELS[provider]
-}
+// Provider names live in `@shared/ai-providers` (FEAT-bysdwg): main-side error
+// copy needs them too, and one total Record is the tripwire that stops a new
+// enum member from shipping nameless.
+export { providerLabel } from '@shared/ai-providers'
 
 /** Summarize key status WITHOUT ever exposing the key (only last4). */
 export function keyStatusLabel(status: ApiKeyStatus | undefined): string {
@@ -40,7 +33,15 @@ export function keyStatusLabel(status: ApiKeyStatus | undefined): string {
  * fail is worse than not offering it. Re-add this entry in the same commit that
  * wires the transport, not before.
  */
-export const PROVIDERS: AIProvider[] = ['openai', 'anthropic', 'ollama', 'openrouter']
+export const PROVIDERS: AIProvider[] = [
+  'openai',
+  'anthropic',
+  'ollama',
+  'openrouter',
+  // Last: it is the advanced option, and the only one that needs a URL before it
+  // can do anything (FEAT-bysdwg).
+  'custom'
+]
 
 /**
  * Providers shown but not selectable. `google` is still in the schema enum, so a

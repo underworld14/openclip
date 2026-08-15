@@ -14,6 +14,7 @@ import type { IpcMain, BrowserWindow } from 'electron'
 import type { KeyVault } from '@main/utils/security'
 import type { SidecarManager } from '@main/services/sidecar-manager'
 import type { MediaAccess } from '@main/utils/media-access'
+import type { Settings } from '@shared/schema'
 
 import { registerVideoHandlers } from './video'
 import { registerAudioHandlers } from './audio'
@@ -56,6 +57,19 @@ export interface IpcContext {
    * so the privileged media scheme may serve it; everything else is 403'd.
    */
   readonly mediaAccess: MediaAccess
+  /**
+   * The persisted app Settings, read fresh (FEAT-bysdwg).
+   *
+   * The ENDPOINT a provider talks to is resolved from here exactly as its key is
+   * resolved from `keyVault` — never from a renderer-supplied payload. Putting a
+   * base URL on the IPC/job contract would let a compromised renderer name the
+   * destination the user's decrypted BYOK key is attached to, which is precisely
+   * what PRD §12.2 keeps main-only.
+   *
+   * Deliberately uncached: the base URL is a field users edit while getting an
+   * endpoint working, and it must take effect without a restart.
+   */
+  getSettings(): Settings
 }
 
 /** The shape every `ipc/<domain>.ts` exports. */

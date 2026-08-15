@@ -368,6 +368,29 @@ describe('clipCacheKey: all prompt-affecting inputs participate (audit fix openc
     // identical inputs ⇒ identical key (still a cache HIT for the same request)
     expect(clipCacheKey({ ...base })).toBe(k)
   })
+
+  it('separates two ENDPOINTS serving the same model id (FEAT-bysdwg)', () => {
+    // A model id is only unique within a provider: LM Studio and Ollama both
+    // offer llama-3.1-8b-instruct, a gateway and OpenAI both offer gpt-4o.
+    // Sharing a key silently returns the first endpoint's clips for the second
+    // — and defeats the comparison a custom endpoint invites.
+    const local = clipCacheKey({
+      ...base,
+      provider: 'custom',
+      baseUrl: 'http://localhost:1234/v1'
+    })
+    const hosted = clipCacheKey({
+      ...base,
+      provider: 'custom',
+      baseUrl: 'https://gateway.corp/v1'
+    })
+    expect(local).not.toBe(hosted)
+    expect(clipCacheKey({ ...base, provider: 'openai' })).not.toBe(local)
+    // A trailing slash is the same endpoint, not a second cache entry.
+    expect(
+      clipCacheKey({ ...base, provider: 'custom', baseUrl: 'http://localhost:1234/v1/' })
+    ).toBe(local)
+  })
 })
 
 describe('clampDetectedClips: dropOverlaps opt + score-aware reduce (audit fix openclip-bsc)', () => {

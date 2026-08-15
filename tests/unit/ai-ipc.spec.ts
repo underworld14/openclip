@@ -24,7 +24,8 @@ import { KeyVault, type SafeStorageLike, type SecretStoreBackend } from '@main/u
 import { IPCChannels } from '@shared/channels'
 import type { ChannelMap, ChannelReq, ChannelRes } from '@shared/channels'
 import type { RawTransport } from '@main/services/ai-client'
-import { clipSchemaFixture, transcriptSegmentsFixture } from '../fixtures/contract'
+import type { Settings } from '@shared/schema'
+import { clipSchemaFixture, settingsFixture, transcriptSegmentsFixture } from '../fixtures/contract'
 import { RECOMMENDED_OPENROUTER_MODELS } from '@main/services/openrouter-models'
 
 /** The first curated OpenRouter pin, read from the source of truth. */
@@ -45,18 +46,27 @@ function memBackend(): SecretStoreBackend {
 
 type Handler = (event: unknown, req: unknown) => Promise<unknown>
 
-function makeCtx(): { ctx: IpcContext; handlers: Map<string, Handler>; vault: KeyVault } {
+function makeCtx(settingsPatch: Partial<Settings> = {}): {
+  ctx: IpcContext
+  handlers: Map<string, Handler>
+  vault: KeyVault
+  settings: Settings
+} {
   const handlers = new Map<string, Handler>()
   const vault = new KeyVault(fakeSafe(), memBackend())
+  // The ENDPOINT is resolved main-side from Settings, exactly as the key is
+  // resolved from the vault (FEAT-bysdwg) — so the fake ctx has to supply one.
+  const settings: Settings = { ...settingsFixture, ...settingsPatch }
   const ctx = {
     ipcMain: {
       handle: (channel: string, h: Handler) => handlers.set(channel, h)
     },
     getMainWindow: () => null,
     sidecar: {} as never,
-    keyVault: vault
+    keyVault: vault,
+    getSettings: () => settings
   } as unknown as IpcContext
-  return { ctx, handlers, vault }
+  return { ctx, handlers, vault, settings }
 }
 
 async function call<C extends keyof ChannelMap>(
@@ -435,6 +445,165 @@ describe('AI_TEST_CONNECTION (FEAT-6v92dk)', () => {
     expect(res.ok).toBe(false)
     expect(res.message).toMatch(/key.*(rejected|invalid)/i)
     expect(res.message).not.toContain('sk-bad')
+  })
+})
+
+// ── FEAT-bysdwg: the custom OpenAI-compatible endpoint ───────────────────────
+describe('custom endpoint: resolution, key binding and gates', () => {
+  const CUSTOM = { aiProvider: 'custom' as const, baseUrl: 'http://localhost:1234/v1' }
+  afterEach(() => {
+    __setTransportFactoryForTests(null)
+    __setProviderCatalogueFetcherForTests(null)
+  })
+
+  it('tests a KEYLESS endpoint — local servers need no key', async () => {
+    const { ctx, handlers } = makeCtx(CUSTOM)
+    let built = false
+    __setTransportFactoryForTests(() => {
+      built = true
+      return async () => ({ rawText: 'pong' })
+    })
+    registerAiHandlers(ctx)
+
+    const res = (await handlers.get(IPCChannels.AI_TEST_CONNECTION)!(null, {
+      provider: 'custom',
+      model: 'local-model'
+    })) as ChannelRes<typeof IPCChannels.AI_TEST_CONNECTION>
+
+    expect(res.ok).toBe(true)
+    expect(built).toBe(true) // the inverse of the OpenAI no-key case above
+  })
+
+  it('asks for a Base URL rather than a key when the endpoint is unset', async () => {
+    const { ctx, handlers } = makeCtx({ aiProvider: 'custom', baseUrl: undefined })
+    let built = false
+    __setTransportFactoryForTests(() => {
+      built = true
+      return async () => ({ rawText: 'pong' })
+    })
+    registerAiHandlers(ctx)
+
+    const res = (await handlers.get(IPCChannels.AI_TEST_CONNECTION)!(null, {
+      provider: 'custom',
+      model: 'local-model'
+    })) as ChannelRes<typeof IPCChannels.AI_TEST_CONNECTION>
+
+    expect(res.ok).toBe(false)
+    expect(res.message).toMatch(/base url/i)
+    expect(built).toBe(false)
+  })
+
+  it('takes the endpoint from SETTINGS, never from the request payload', async () => {
+    // The renderer must not be able to name the destination the decrypted key is
+    // attached to (PRD §12.2) — so there is no baseUrl on the IPC contract, and
+    // the transport factory gets the one main-side value.
+    const { ctx, handlers, vault } = makeCtx({
+      ...CUSTOM,
+      customKeyEndpoint: 'http://localhost:1234'
+    })
+    vault.setKey('custom', 'sk-local-abc')
+    const seen: Array<{ baseUrl?: string; apiKey: string | null }> = []
+    __setTransportFactoryForTests((args) => {
+      seen.push({ baseUrl: args.baseUrl, apiKey: args.apiKey })
+      return async () => ({ rawText: 'pong' })
+    })
+    registerAiHandlers(ctx)
+
+    await handlers.get(IPCChannels.AI_TEST_CONNECTION)!(null, {
+      provider: 'custom',
+      model: 'local-model',
+      // A hostile renderer trying to redirect the key:
+      baseUrl: 'https://attacker.example/v1'
+    })
+
+    expect(seen[0].baseUrl).toBe('http://localhost:1234/v1')
+  })
+
+  it('refuses to send a key that was saved for a DIFFERENT endpoint', async () => {
+    // secrets.json is keyed by provider id alone, so without the binding the key
+    // for one server is handed to the next URL the user types.
+    const { ctx, handlers, vault } = makeCtx({
+      ...CUSTOM,
+      customKeyEndpoint: 'https://gateway.corp'
+    })
+    vault.setKey('custom', 'sk-corp-secret')
+    const seen: Array<string | null> = []
+    __setTransportFactoryForTests((args) => {
+      seen.push(args.apiKey)
+      return async () => ({ rawText: 'pong' })
+    })
+    registerAiHandlers(ctx)
+
+    const res = (await handlers.get(IPCChannels.AI_TEST_CONNECTION)!(null, {
+      provider: 'custom',
+      model: 'local-model'
+    })) as ChannelRes<typeof IPCChannels.AI_TEST_CONNECTION>
+
+    expect(res.ok).toBe(false)
+    expect(res.message).toMatch(/different endpoint/i)
+    expect(res.message).not.toContain('sk-corp-secret')
+    expect(seen).toEqual([]) // never built a transport with the wrong-endpoint key
+  })
+
+  it('uses the key once it is bound to the configured endpoint', async () => {
+    const { ctx, handlers, vault } = makeCtx({
+      ...CUSTOM,
+      // Bound on ORIGIN, so the /v1 path suffix does not break the match.
+      customKeyEndpoint: 'http://localhost:1234'
+    })
+    vault.setKey('custom', 'sk-local-abc')
+    const seen: Array<string | null> = []
+    __setTransportFactoryForTests((args) => {
+      seen.push(args.apiKey)
+      return async () => ({ rawText: 'pong' })
+    })
+    registerAiHandlers(ctx)
+
+    await handlers.get(IPCChannels.AI_TEST_CONNECTION)!(null, {
+      provider: 'custom',
+      model: 'local-model'
+    })
+
+    expect(seen).toEqual(['sk-local-abc'])
+  })
+
+  it('names the host when the server is unreachable, and never echoes the key', async () => {
+    const { ctx, handlers } = makeCtx(CUSTOM)
+    __setTransportFactoryForTests(() => async () => {
+      throw new Error('fetch failed: ECONNREFUSED 127.0.0.1:1234')
+    })
+    registerAiHandlers(ctx)
+
+    const res = (await handlers.get(IPCChannels.AI_TEST_CONNECTION)!(null, {
+      provider: 'custom',
+      model: 'local-model'
+    })) as ChannelRes<typeof IPCChannels.AI_TEST_CONNECTION>
+
+    expect(res.ok).toBe(false)
+    expect(res.message).toContain('localhost:1234')
+    expect(res.message).not.toMatch(/internet connection/i)
+  })
+
+  it('lists models from the configured endpoint, not the OpenRouter path', async () => {
+    const { ctx, handlers } = makeCtx(CUSTOM)
+    let openRouterCalls = 0
+    __setModelsFetcherForTests(async () => {
+      openRouterCalls += 1
+      return []
+    })
+    __setProviderCatalogueFetcherForTests(async ({ url }) => ({
+      data: [{ id: url.includes('localhost:1234') ? 'local-model' : 'wrong-endpoint' }]
+    }))
+    registerAiHandlers(ctx)
+
+    const res = (await handlers.get(IPCChannels.AI_LIST_MODELS)!(null, {
+      provider: 'custom'
+    })) as ChannelRes<typeof IPCChannels.AI_LIST_MODELS>
+
+    expect(res.models.map((m) => m.id)).toEqual(['local-model'])
+    expect(res.fromCache).toBe(false) // the single global cache slot is OpenRouter's
+    expect(openRouterCalls).toBe(0)
+    __setModelsFetcherForTests(null)
   })
 })
 

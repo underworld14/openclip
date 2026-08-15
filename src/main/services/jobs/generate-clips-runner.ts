@@ -23,6 +23,8 @@
 import { JobError } from '@shared/jobs'
 import type { JobResult, JobParams } from '@shared/jobs'
 import type { AIProvider } from '@shared/schema'
+import { providerDisplay } from '@shared/ai-providers'
+import { describeProviderFailure } from '@main/services/ai-errors'
 import type { JobRunner, JobEmitter, JobRunnerContext } from '@main/services/sidecar-manager'
 import {
   AI_REQUEST_TIMEOUT_MS,
@@ -34,11 +36,19 @@ import {
 export interface GenerateClipsRunnerDeps {
   /** Decrypts the BYOK key MAIN-SIDE; it never crosses IPC (PRD §12.2). */
   getKey: (provider: AIProvider) => string | null
+  /**
+   * Resolves the endpoint for providers that have no fixed one (`custom`).
+   * Comes from Settings main-side, never from the job params — a base URL on the
+   * job contract would let the renderer choose where the key is sent
+   * (FEAT-bysdwg).
+   */
+  getBaseUrl?: (provider: AIProvider) => string | undefined
   /** Build the provider transport (injected in tests so no SDK is constructed). */
   createTransport?: (args: {
     provider: AIProvider
     model: string
     apiKey: string | null
+    baseUrl?: string
   }) => RawTransport | Promise<RawTransport>
   /** The map-reduce + repair-ladder core (injected in tests). */
   generateClips?: typeof defaultGenerateClips
@@ -69,22 +79,39 @@ export function createGenerateClipsRunner(
     // is lazily imported and the first request is in flight.
     emit.progress(0, 'analyzing')
 
+    const apiKey = deps.getKey(params.provider)
+    const baseUrl = deps.getBaseUrl?.(params.provider)
     const transport = await makeTransport({
       provider: params.provider,
       model: params.model,
-      apiKey: deps.getKey(params.provider)
+      apiKey,
+      baseUrl
     })
 
-    // Cancel OR deadline, whichever lands first. Tracked separately because the
-    // two mean different things to the user: `ctx.signal` is "you asked me to
-    // stop" (the manager emits CANCELLED), a timeout is "the provider never
-    // answered" and deserves the typed, retriable TIMEOUT below.
-    const deadline = AbortSignal.timeout(timeoutMs)
-    const signal = AbortSignal.any([ctx.signal, deadline])
+    // PER-REQUEST deadline (FEAT-bysdwg). This used to be ONE
+    // `AbortSignal.timeout` created here and threaded through every chunk, so the
+    // "hard deadline per provider request" this file's header promises was really
+    // a budget for the whole job: a long transcript that needed four chunks failed
+    // as a spurious TIMEOUT even though every individual call answered promptly.
+    // Self-hosted models are slower than cloud ones and the custom endpoint's
+    // downgrade ladder can add attempts, which turns that latent bug into the
+    // common case. `ctx.signal` remains the only run-level signal.
+    let timedOut = false
+    const guarded: RawTransport = async (prompt, opts) => {
+      const perRequest = AbortSignal.timeout(timeoutMs)
+      const signals = [perRequest, ...(opts?.signal ? [opts.signal] : [])]
+      try {
+        return await transport(prompt, { ...opts, signal: AbortSignal.any(signals) })
+      } catch (err) {
+        // Distinguish "this request ran out of time" from "the user cancelled".
+        if (perRequest.aborted && !ctx.signal.aborted) timedOut = true
+        throw err
+      }
+    }
 
     try {
       const result = await generate({
-        transport,
+        transport: guarded,
         segments: params.segments,
         videoTitle: params.videoTitle,
         durationSeconds: params.durationSeconds,
@@ -103,8 +130,12 @@ export function createGenerateClipsRunner(
         keywords: params.keywords,
         customPrompt: params.customPrompt,
         model: params.model,
+        // Endpoint identity for the cache key only — the transport is already
+        // built (FEAT-bysdwg).
+        provider: params.provider,
+        baseUrl,
         cache: deps.cache,
-        signal,
+        signal: ctx.signal,
         onChunk: (chunkIndex, chunkCount, clips) => {
           emit.partial({ clips, chunkIndex, chunkCount })
           emit.progress(Math.round(((chunkIndex + 1) / chunkCount) * 100), 'analyzing')
@@ -127,12 +158,26 @@ export function createGenerateClipsRunner(
       // A deadline abort with the job itself NOT cancelled is the hung-provider
       // case this ticket exists for. Name it, and mark it retriable: a different
       // moment (or a different model) may well succeed.
-      if (deadline.aborted && !ctx.signal.aborted) {
+      if (timedOut && !ctx.signal.aborted) {
         throw new JobError(
           'TIMEOUT',
-          `${params.provider} did not respond within ${Math.round(timeoutMs / 1000)}s for model "${params.model}". Try a faster model, or check the provider's status.`,
+          `${providerDisplay(params.provider, baseUrl)} did not respond within ${Math.round(timeoutMs / 1000)}s for model "${params.model}". Try a faster model, or check the server.`,
           true
         )
+      }
+      // Our own typed errors are already user-facing; anything else came from the
+      // provider SDK and must be classified + REDACTED before it leaves main. The
+      // raw message is the response body verbatim, which routinely echoes the
+      // submitted key — and, for a custom endpoint, is chosen by a server we do
+      // not control (FEAT-bysdwg).
+      if (!(err instanceof JobError) && !ctx.signal.aborted) {
+        const failure = describeProviderFailure(err, {
+          provider: params.provider,
+          model: params.model,
+          baseUrl,
+          apiKey
+        })
+        throw new JobError(failure.code, failure.message, failure.retriable)
       }
       // A user cancel falls through: the manager recognises the aborted
       // controller and emits the terminal CANCELLED itself.

@@ -7,6 +7,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { validateJobStart } from '@main/ipc/job-start-validation'
+import { AIProvider } from '@shared/schema'
 
 describe('validateJobStart (openclip-qki)', () => {
   it('accepts a well-formed transcribe payload', () => {
@@ -109,5 +110,41 @@ describe('validateJobStart (openclip-qki)', () => {
     expect(() => validateJobStart({ kind: 'model-download', params: { model: 'gpt' } })).toThrow(
       /INPUT_INVALID/
     )
+  })
+})
+
+// ── FEAT-bysdwg: generate-clips had NO coverage here, and its provider list was
+// a hand-copied duplicate of the schema enum — so a provider added to the schema
+// was accepted everywhere except at this boundary, at runtime only.
+describe('validateJobStart: generate-clips provider', () => {
+  const base = {
+    projectId: 'p1',
+    model: 'local-model',
+    segments: [],
+    numClips: 5,
+    durationSeconds: 120
+  }
+
+  it('accepts every provider the schema enum offers', () => {
+    for (const provider of AIProvider.options) {
+      expect(() =>
+        validateJobStart({ kind: 'generate-clips', params: { ...base, provider } })
+      ).not.toThrow()
+    }
+  })
+
+  it('still rejects a provider that is not in the enum', () => {
+    expect(() =>
+      validateJobStart({ kind: 'generate-clips', params: { ...base, provider: 'gpt' } })
+    ).toThrow(/INPUT_INVALID/)
+  })
+
+  it('still rejects a projectId that would escape the temp root', () => {
+    expect(() =>
+      validateJobStart({
+        kind: 'generate-clips',
+        params: { ...base, provider: 'openai', projectId: '../../victim' }
+      })
+    ).toThrow(/INPUT_INVALID/)
   })
 })

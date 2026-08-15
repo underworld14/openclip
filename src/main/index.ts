@@ -23,6 +23,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { IPCChannels } from '@shared/channels'
 import { registerAllHandlers, type IpcContext } from './ipc'
+import { readCurrentSettings } from './ipc/settings'
 import { validateJobStart } from './ipc/job-start-validation'
 import {
   SidecarManager,
@@ -382,7 +383,8 @@ app.whenReady().then(async () => {
     getMainWindow: () => mainWindow,
     sidecar,
     keyVault,
-    mediaAccess
+    mediaAccess,
+    getSettings: readCurrentSettings
   }
   registerAllHandlers(ctx)
   wireJobControlPlane()

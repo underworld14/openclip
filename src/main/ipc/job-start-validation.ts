@@ -17,10 +17,10 @@
 
 import { z } from 'zod'
 import { JobError, type JobKind, type JobParams } from '@shared/jobs'
+import { AIProvider } from '@shared/schema'
 
 const WHISPER_MODELS = ['tiny', 'base', 'small', 'medium', 'turbo', 'large-v3'] as const
 const ASPECTS = ['9:16', '1:1', '4:5', '16:9'] as const
-const AI_PROVIDERS = ['openai', 'anthropic', 'google', 'ollama', 'openrouter'] as const
 const nonEmpty = z.string().min(1)
 
 /**
@@ -74,7 +74,10 @@ const paramsByKind = {
   // an unbounded value inflates the prompt and risks output truncation.
   'generate-clips': z.looseObject({
     projectId: safeSegment,
-    provider: z.enum(AI_PROVIDERS),
+    // Reuse the schema enum rather than re-listing the providers. A hand-copied
+    // list compiles fine while silently rejecting every job for a newly added
+    // provider — a runtime-only failure with no test to catch it (FEAT-bysdwg).
+    provider: AIProvider,
     model: nonEmpty,
     segments: z.array(z.unknown()),
     numClips: z.number().finite(),

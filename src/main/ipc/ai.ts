@@ -25,10 +25,20 @@ import type {
 } from '@shared/channels'
 import type { AIProvider } from '@shared/schema'
 import {
+  clipsMemoKey,
   createTransport,
   generateClips as runGenerate,
+  resolvedStructuredMode,
   type RawTransport
 } from '@main/services/ai-client'
+import {
+  customKeyMatchesEndpoint,
+  providerDisplay,
+  providerNeedsBaseUrl,
+  providerRequiresKey
+} from '@shared/ai-providers'
+import { normalizeBaseUrl, safeHost } from '@shared/endpoint-url'
+import { humanTransportError } from '@main/services/ai-errors'
 import { suggestEmoji } from '@main/services/ai-emoji'
 import { createGenerateClipsRunner } from '@main/services/jobs/generate-clips-runner'
 import { registerRunner, hasRunner } from '@main/services/sidecar-manager'
@@ -147,6 +157,27 @@ const fakeEmojiTransport: RawTransport = async () => ({
 /** Per-process result cache (PRD §16): (transcriptHash, promptVersion, model, style). */
 const clipCache = new Map<string, unknown>()
 
+/**
+ * The endpoint a provider talks to, resolved MAIN-SIDE (FEAT-bysdwg).
+ *
+ * Only `custom` has one; everything else uses its SDK default. Read fresh per
+ * call so an edit in Settings takes effect immediately, and never taken from the
+ * request payload — see the note on `IpcContext.getSettings`.
+ */
+function endpointFor(provider: AIProvider, ctx: IpcContext): string | undefined {
+  if (!providerNeedsBaseUrl(provider)) return undefined
+  return normalizeBaseUrl(ctx.getSettings().baseUrl)
+}
+
+/**
+ * The decrypted key for a provider (MAIN-SIDE only), honouring the custom
+ * key↔endpoint binding: a key entered for one endpoint is never sent to another.
+ */
+function keyFor(provider: AIProvider, ctx: IpcContext): string | null {
+  if (provider === 'custom' && !customKeyMatchesEndpoint(ctx.getSettings())) return null
+  return ctx.keyVault.getKey(provider)
+}
+
 export function registerAiHandlers(ctx: IpcContext): void {
   // Clip detection ALSO runs as a streaming job (EPIC-zpa1nd / FEAT-c0zn3j),
   // which is how the app itself now calls it: the job plane gives it progress,
@@ -162,7 +193,8 @@ export function registerAiHandlers(ctx: IpcContext): void {
     registerRunner(
       'generate-clips',
       createGenerateClipsRunner({
-        getKey: (provider) => ctx.keyVault.getKey(provider),
+        getKey: (provider) => keyFor(provider, ctx),
+        getBaseUrl: (provider) => endpointFor(provider, ctx),
         createTransport: (args) =>
           (
             transportFactoryOverride ??
@@ -175,7 +207,9 @@ export function registerAiHandlers(ctx: IpcContext): void {
 
   ctx.ipcMain.handle(IPCChannels.GENERATE_CLIPS, async (_e, req: GenerateClipsRequest) => {
     // Decrypt the BYOK key MAIN-SIDE only (never returned to the renderer).
-    const apiKey = ctx.keyVault.getKey(req.provider)
+    const apiKey = keyFor(req.provider, ctx)
+    // The endpoint comes from settings, not from `req` — see `endpointFor`.
+    const baseUrl = endpointFor(req.provider, ctx)
 
     const factory =
       transportFactoryOverride ??
@@ -183,7 +217,8 @@ export function registerAiHandlers(ctx: IpcContext): void {
     const transport = await factory({
       provider: req.provider,
       model: req.model,
-      apiKey
+      apiKey,
+      baseUrl
     })
 
     const result = await runGenerate({
@@ -202,6 +237,10 @@ export function registerAiHandlers(ctx: IpcContext): void {
       minDuration: req.minDuration ?? 15,
       maxDuration: req.maxDuration ?? 90,
       model: req.model,
+      // Endpoint identity, so two servers offering the same model id don't share
+      // a cache entry (FEAT-bysdwg).
+      provider: req.provider,
+      baseUrl,
       cache: clipCache
     })
 
@@ -247,11 +286,16 @@ export function registerAiHandlers(ctx: IpcContext): void {
           'caption rewrite (PRD §7.5) is not built yet; only mode:"emoji" is wired.'
         )
       }
-      const apiKey = ctx.keyVault.getKey(req.provider)
+      const apiKey = keyFor(req.provider, ctx)
       const factory =
         transportFactoryOverride ??
         (process.env.OPENCLIP_FAKE_TRANSCRIBE ? () => fakeEmojiTransport : createTransport)
-      const transport = await factory({ provider: req.provider, model: req.model, apiKey })
+      const transport = await factory({
+        provider: req.provider,
+        model: req.model,
+        apiKey,
+        baseUrl: endpointFor(req.provider, ctx)
+      })
       try {
         const emoji_map = await suggestEmoji(transport, req.words ?? [])
         return { enhanced_captions: [], emoji_map }
@@ -270,13 +314,37 @@ export function registerAiHandlers(ctx: IpcContext): void {
     IPCChannels.AI_TEST_CONNECTION,
     async (_e, req: TestConnectionRequest): Promise<TestConnectionResult> => {
       const model = (req.model ?? '').trim()
-      const apiKey = ctx.keyVault.getKey(req.provider)
-      // Ollama runs locally and needs no key; everything else does. Check BEFORE
-      // building a transport so a keyless test costs nothing and cannot 401.
-      if (req.provider !== 'ollama' && !apiKey) {
+      const settings = ctx.getSettings()
+      const apiKey = keyFor(req.provider, ctx)
+      const baseUrl = endpointFor(req.provider, ctx)
+      // Ollama and a custom endpoint may both be local and keyless; everything
+      // else needs a key. Check BEFORE building a transport so a keyless test
+      // costs nothing and cannot 401.
+      if (providerRequiresKey(req.provider) && !apiKey) {
         return {
           ok: false,
-          message: `No API key saved for ${req.provider}. Paste one above, then test again.`
+          message: `No API key saved for ${providerDisplay(req.provider)}. Paste one above, then test again.`
+        }
+      }
+      // For a custom endpoint the missing prerequisite is the URL, not the key.
+      if (providerNeedsBaseUrl(req.provider) && !baseUrl) {
+        return {
+          ok: false,
+          message:
+            'No Base URL set. Add your server’s OpenAI-compatible URL above, then test again.'
+        }
+      }
+      // A key bound to a DIFFERENT endpoint is treated as absent (FEAT-bysdwg) —
+      // say so, rather than silently testing unauthenticated.
+      if (
+        req.provider === 'custom' &&
+        !apiKey &&
+        ctx.keyVault.status('custom').hasKey &&
+        !customKeyMatchesEndpoint(settings)
+      ) {
+        return {
+          ok: false,
+          message: `The saved key was entered for a different endpoint. Re-enter it for ${safeHost(baseUrl)}, or clear it to connect without a key.`
         }
       }
       if (!model) {
@@ -287,7 +355,7 @@ export function registerAiHandlers(ctx: IpcContext): void {
         (process.env.OPENCLIP_FAKE_TRANSCRIBE ? () => fakeTransport : createTransport)
       const started = Date.now()
       try {
-        const transport = await factory({ provider: req.provider, model, apiKey })
+        const transport = await factory({ provider: req.provider, model, apiKey, baseUrl })
         // This DOES exercise structured output: `createTransport` always attaches
         // the strict ClipSchema response_format, so a model that cannot produce
         // it fails here — which is the more useful probe, since that is exactly
@@ -296,9 +364,16 @@ export function registerAiHandlers(ctx: IpcContext): void {
           system: 'You are a connectivity probe. Answer with exactly one word.',
           user: 'Reply with the single word: pong'
         })
-        return { ok: true, message: `Connected to ${model}.`, latencyMs: Date.now() - started }
+        return {
+          ok: true,
+          message: `Connected to ${model}.${structuredModeNote(req.provider, baseUrl, model)}`,
+          latencyMs: Date.now() - started
+        }
       } catch (err) {
-        return { ok: false, message: humanTransportError(err, req.provider, model) }
+        return {
+          ok: false,
+          message: humanTransportError(err, req.provider, model, baseUrl, apiKey)
+        }
       }
     }
   )
@@ -316,7 +391,8 @@ export function registerAiHandlers(ctx: IpcContext): void {
       if (req.provider !== 'openrouter') {
         const models = await fetchProviderModels({
           provider: req.provider,
-          apiKey: ctx.keyVault.getKey(req.provider),
+          apiKey: keyFor(req.provider, ctx),
+          baseUrl: endpointFor(req.provider, ctx),
           fetcher: providerCatalogueFetcherOverride ?? undefined
         })
         return { provider: req.provider, models, fetchedAt: Date.now(), fromCache: false }
@@ -351,35 +427,24 @@ export function registerAiHandlers(ctx: IpcContext): void {
 }
 
 /**
- * Map a provider SDK failure to something a non-technical user can act on.
+ * What Test connection must say about a custom endpoint's structured output.
  *
- * Provider error bodies routinely echo the submitted API key back (OpenAI's 401
- * says "Incorrect API key provided: sk-…"), so the raw message must NEVER be
- * forwarded verbatim to the renderer — this function is also the redaction seam.
+ * The probe used to be trustworthy because the strict `response_format` was
+ * always attached: a model that could not do it failed the test. A custom
+ * endpoint may DOWNGRADE instead of failing, so a bare "Connected" would now
+ * hide the difference between "will produce exact JSON" and "we will be repairing
+ * prose". Report the rung the endpoint settled on (FEAT-bysdwg).
  */
-function humanTransportError(err: unknown, provider: AIProvider, model: string): string {
-  const raw = err instanceof Error ? err.message : String(err)
-  if (/\b401\b|unauthor|invalid[_ -]?api[_ -]?key|incorrect api key/i.test(raw)) {
-    return `The ${provider} key was rejected. Check that it is correct and still active.`
+function structuredModeNote(
+  provider: AIProvider,
+  baseUrl: string | undefined,
+  model: string
+): string {
+  if (provider !== 'custom') return ''
+  const mode = resolvedStructuredMode(clipsMemoKey(baseUrl, model))
+  if (mode === 'json_object') return ' JSON mode — output will be repaired if needed.'
+  if (mode === 'none') {
+    return ' No structured-output support — clip detection may need retries and can be unreliable.'
   }
-  if (/\b403\b|permission|forbidden/i.test(raw)) {
-    return `That key is valid but not allowed to use "${model}". Try a different model or plan.`
-  }
-  if (/\b404\b|model[_ ]?not[_ ]?found|does not exist|unknown model/i.test(raw)) {
-    return `${provider} does not recognise the model "${model}". Pick one from the list.`
-  }
-  if (/response_format|json_schema|structured|schema/i.test(raw)) {
-    return `"${model}" cannot produce the strict JSON that clip detection needs. Pick another model.`
-  }
-  if (/\b429\b|rate[_ ]?limit|quota|insufficient[_ ]?quota|billing/i.test(raw)) {
-    return `${provider} rejected the request for quota or rate-limit reasons. Check your billing.`
-  }
-  if (/ECONNREFUSED|ENOTFOUND|EAI_AGAIN|fetch failed|network|timeout|ETIMEDOUT/i.test(raw)) {
-    return provider === 'ollama'
-      ? 'Could not reach Ollama on this machine. Is `ollama serve` running?'
-      : `Could not reach ${provider}. Check your internet connection.`
-  }
-  // Unknown shape: say so plainly and keep it short rather than dumping a body
-  // that may contain the key.
-  return `${provider} rejected the test request. Double-check the provider, model id and key.`
+  return ' Strict JSON schema supported.'
 }

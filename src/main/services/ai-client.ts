@@ -31,6 +31,7 @@ import { z } from 'zod'
 import { ClipSchema, type DetectedClip, type TranscriptSegment } from '@shared/schema'
 import { snapClipBounds, snapOverlongEnd } from '@shared/clip-snap'
 import { estimateTokens, CHUNK_MAX_TOKENS } from '@shared/token-estimate'
+import { normalizeBaseUrl } from '@shared/endpoint-url'
 import type { ClipStyle, AIProvider } from '@shared/schema'
 
 // ============================================================================
@@ -264,9 +265,25 @@ export function clipJsonSchema(): Record<string, unknown> {
 // Repair ladder (PRD §16) — pure, provider-agnostic.
 // ============================================================================
 
-/** Rung 4: strip ```json fences, else grab the outermost {...}. */
+/**
+ * Reasoning preambles that are NOT part of the answer.
+ *
+ * Qwen3 / DeepSeek-R1-class models are the default download in LM Studio and
+ * emit `<think>…</think>` (or harmony-style `<|channel|>analysis…`) ahead of the
+ * JSON. A single brace inside that prose makes the outermost-`{...}` scan below
+ * start in the wrong place, and the resulting parse failure spends the one
+ * repair round-trip the ladder allows (FEAT-bysdwg). Stripping is safe for every
+ * provider: none of them emit these tags as content.
+ */
+const REASONING_BLOCKS = [
+  /<think>[\s\S]*?<\/think>/gi,
+  /<thinking>[\s\S]*?<\/thinking>/gi,
+  /<\|channel\|>analysis[\s\S]*?<\|(?:message|start|end)\|>/gi
+]
+
+/** Rung 4: drop reasoning preambles, strip ```json fences, else grab the outermost {...}. */
 export function extractJsonCandidate(text: string): string {
-  const trimmed = text.trim()
+  const trimmed = REASONING_BLOCKS.reduce((acc, re) => acc.replace(re, ''), text).trim()
   // ```json … ``` or bare ``` … ```
   const fence = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed)
   if (fence) return fence[1].trim()
@@ -747,24 +764,204 @@ export interface OpenAILike {
   }
 }
 
-export function buildOpenAITransport(client: OpenAILike, model: string): RawTransport {
+/**
+ * How an OpenAI-compatible server is asked for JSON, strongest first.
+ *
+ * `json_schema` (strict) is what OpenAI and OpenRouter guarantee. Self-hosted and
+ * gateway servers vary: many take `json_object`, older llama.cpp / vLLM builds
+ * take neither and simply refuse the request (or, worse, ignore the parameter).
+ */
+export type StructuredMode = 'json_schema' | 'json_object' | 'none'
+
+/** The ladder used for an endpoint of UNKNOWN capability (the `custom` provider). */
+export const OPENAI_COMPAT_MODES: readonly StructuredMode[] = ['json_schema', 'json_object', 'none']
+
+/**
+ * Per-(endpoint, model, schema) memory of how far DOWN the ladder we have had to
+ * go, for the life of the process.
+ *
+ * Stores an index, and only ever increases it, so the cost of discovering that a
+ * server refuses `json_schema` is paid ONCE — not on every map-reduce chunk. It
+ * is written on failure as well as success: a first chunk that exhausts the
+ * ladder still teaches the second chunk where to start. The key never contains
+ * the API key.
+ */
+const structuredModeFloor = new Map<string, number>()
+
+/** TEST-ONLY: forget which mode each endpoint accepted. */
+export function __resetStructuredModeMemoForTests(): void {
+  structuredModeFloor.clear()
+}
+
+/** The memo key for a clip-detection transport against a custom endpoint. */
+export function clipsMemoKey(baseUrl: string | undefined, model: string): string {
+  return `${normalizeBaseUrl(baseUrl) ?? ''}|${model}|clips`
+}
+
+/**
+ * Which structured-output mode this endpoint+model settled on, if we have tried
+ * it in this session. Lets `AI_TEST_CONNECTION` tell the user what they actually
+ * got, instead of a bare "connected" that hides a silent downgrade.
+ */
+export function resolvedStructuredMode(memoKey: string): StructuredMode | undefined {
+  const index = structuredModeFloor.get(memoKey)
+  if (index === undefined) return undefined
+  return OPENAI_COMPAT_MODES[Math.min(index, OPENAI_COMPAT_MODES.length - 1)]
+}
+
+function raiseFloor(memoKey: string | undefined, index: number): void {
+  if (!memoKey) return
+  structuredModeFloor.set(memoKey, Math.max(structuredModeFloor.get(memoKey) ?? 0, index))
+}
+
+/** HTTP status off an SDK error, however the client happens to expose it. */
+function statusOf(err: unknown): number | undefined {
+  const e = err as { status?: unknown; response?: { status?: unknown } } | null
+  if (typeof e?.status === 'number') return e.status
+  if (typeof e?.response?.status === 'number') return e.response.status
+  const match = /\b(4\d{2}|5\d{2})\b/.exec(err instanceof Error ? err.message : String(err))
+  return match ? Number(match[1]) : undefined
+}
+
+/**
+ * Statuses that can mean "I don't accept that response_format".
+ *
+ * 404 is DELIBERATELY absent: it means the route or the model id is wrong (a base
+ * URL missing `/v1`, a typo'd model), never a capability limit — and treating it
+ * as one would burn the whole ladder on every chunk of a request that was never
+ * going to work.
+ */
+const DOWNGRADABLE_STATUS = new Set([400, 422, 501])
+
+/** Causes that are definitely NOT about structured output. */
+const NOT_A_CAPABILITY_LIMIT =
+  /\b(401|403|429)\b|unauthor|invalid[_ -]?api[_ -]?key|rate[_ ]?limit|quota|billing|credit|insufficient|model[_ ]?not[_ ]?found|unknown model|does not exist|context[_ ]?length|maximum context|too many tokens|abort/i
+
+/**
+ * Should this rejection make us retry one rung lower?
+ *
+ * Opinionated: an OPAQUE 400 ("Bad Request", no detail) counts. Gateways that
+ * answer that way are exactly why this feature exists, the guard above keeps the
+ * unambiguous causes out, and the memo bounds the cost of being wrong to two
+ * extra requests per endpoint per session.
+ */
+export function isUnsupportedStructuredOutputError(err: unknown): boolean {
+  if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
+    return false
+  }
+  const raw = err instanceof Error ? err.message : String(err)
+  if (NOT_A_CAPABILITY_LIMIT.test(raw)) return false
+  const status = statusOf(err)
+  return status !== undefined && DOWNGRADABLE_STATUS.has(status)
+}
+
+/**
+ * Put the schema in the PROMPT, for the modes where it isn't in the request.
+ *
+ * `buildUserPrompt` never carries the schema — it exists only inside
+ * `response_format.json_schema`. So the moment we drop to `json_object` or
+ * `none`, the model is being told to match a schema it was never shown. This
+ * also covers the failure an error-driven ladder can never see: servers that
+ * silently IGNORE an unrecognised `response_format` and answer 200 with prose.
+ */
+export function withSchemaBlock(user: string, schema: unknown): string {
+  return [
+    user,
+    '',
+    'The response MUST be a single JSON object valid against this JSON Schema:',
+    '<schema>',
+    JSON.stringify(schema),
+    '</schema>',
+    'Return ONLY that JSON object — no markdown fences, no prose, no explanation.'
+  ].join('\n')
+}
+
+function responseFormatFor(mode: StructuredMode, schema: unknown): Record<string, unknown> {
+  if (mode === 'json_schema') {
+    return {
+      response_format: { type: 'json_schema', json_schema: { name: 'clips', strict: true, schema } }
+    }
+  }
+  if (mode === 'json_object') return { response_format: { type: 'json_object' } }
+  return {}
+}
+
+export interface OpenAITransportOptions {
+  /**
+   * Modes to try, strongest first. Defaults to strict `json_schema` ONLY: for
+   * OpenAI and OpenRouter a rejection means the chosen model genuinely cannot do
+   * it, and `humanTransportError` already says "pick another model" — silently
+   * degrading there would turn a crisp config error into a slower, worse run.
+   */
+  modes?: readonly StructuredMode[]
+  /** Enables the cross-call memo. Omit to re-probe every call (tests). */
+  memoKey?: string
+  /**
+   * Treat an EMPTY completion as one downgrade signal. Local reasoning models
+   * routinely put everything in `reasoning_content` and leave `content` empty,
+   * which is indistinguishable from a mode the server accepted but ignored.
+   */
+  downgradeOnEmpty?: boolean
+}
+
+export function buildOpenAITransport(
+  client: OpenAILike,
+  model: string,
+  opts?: OpenAITransportOptions
+): RawTransport {
   const schema = clipJsonSchema()
-  return async ({ system, user }, opts) => {
-    const res = await client.chat.completions.create(
-      {
-        model,
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user }
-        ],
-        response_format: {
-          type: 'json_schema',
-          json_schema: { name: 'clips', strict: true, schema }
+  const ladder = opts?.modes ?? ['json_schema']
+  const memoKey = opts?.memoKey
+
+  return async ({ system, user }, callOpts) => {
+    const start = memoKey ? Math.min(structuredModeFloor.get(memoKey) ?? 0, ladder.length - 1) : 0
+    let lastError: unknown = null
+
+    for (let i = start; i < ladder.length; i += 1) {
+      // A cancel or a deadline must not be spent walking the rest of the ladder.
+      callOpts?.signal?.throwIfAborted()
+      const mode = ladder[i]
+      const isLast = i === ladder.length - 1
+      try {
+        const res = await client.chat.completions.create(
+          {
+            model,
+            messages: [
+              { role: 'system', content: system },
+              {
+                role: 'user',
+                content: mode === 'json_schema' ? user : withSchemaBlock(user, schema)
+              }
+            ],
+            ...responseFormatFor(mode, schema)
+          },
+          { signal: callOpts?.signal }
+        )
+        const rawText = res.choices[0]?.message?.content ?? ''
+        if (!rawText.trim() && opts?.downgradeOnEmpty && !isLast) {
+          raiseFloor(memoKey, i + 1)
+          lastError = new Error('the model returned an empty completion')
+          continue
         }
-      },
-      { signal: opts?.signal }
-    )
-    return { rawText: res.choices[0]?.message?.content ?? '' }
+        raiseFloor(memoKey, i)
+        return { rawText }
+      } catch (err) {
+        if (callOpts?.signal?.aborted) throw err
+        if (isLast || !isUnsupportedStructuredOutputError(err)) throw err
+        // Remember BEFORE retrying: even if the rest of the ladder fails, the
+        // next chunk must not re-probe the rung we just ruled out.
+        raiseFloor(memoKey, i + 1)
+        lastError = err
+      }
+    }
+
+    // Only reachable when the last rung produced an empty completion; a thrown
+    // last rung rethrows above. An empty string is what the repair ladder's own
+    // empty-completion rung expects to see.
+    if (lastError && !(lastError instanceof Error && /empty completion/.test(lastError.message))) {
+      throw lastError
+    }
+    return { rawText: '' }
   }
 }
 
@@ -957,6 +1154,41 @@ export async function createTransport(args: TransportFactoryArgs): Promise<RawTr
       const client = new Ollama({ host: args.baseUrl })
       return buildOllamaTransport(client as unknown as OllamaLike, args.model)
     }
+    case 'custom': {
+      // A user-supplied OpenAI-compatible endpoint (FEAT-bysdwg). Every option
+      // below is load-bearing; see the notes on each.
+      const baseURL = normalizeBaseUrl(args.baseUrl)
+      if (!baseURL) {
+        throw new Error(
+          'No Base URL set for the custom endpoint. Add your server’s OpenAI-compatible URL in Settings.'
+        )
+      }
+      const { default: OpenAI } = await import('openai')
+      const client = new OpenAI({
+        // NEVER undefined and never '': the SDK throws "Missing credentials" on a
+        // falsy key (client.js:142), and an OMITTED key falls back to
+        // process.env.OPENAI_API_KEY (client.js:73) — which would send the user's
+        // real OpenAI key to whatever host they typed. A placeholder plus an
+        // explicitly-nulled header is the supported way to send no auth at all
+        // (client.js:213-218, internal/headers.js:59-63).
+        apiKey: args.apiKey || 'openclip-no-key',
+        defaultHeaders: args.apiKey ? undefined : { Authorization: null },
+        baseURL,
+        timeout: AI_REQUEST_TIMEOUT_MS,
+        // The downgrade ladder already retries deliberately; the SDK's default of
+        // 2 silent retries on top of it makes the worst case unreadable.
+        maxRetries: 0,
+        // A redirect would re-issue the request somewhere the user never named —
+        // and same-origin redirects keep the Authorization header. Refusing is
+        // cheaper and more complete than a host allow-list.
+        fetchOptions: { redirect: 'error' }
+      })
+      return buildOpenAITransport(client as unknown as OpenAILike, args.model, {
+        modes: OPENAI_COMPAT_MODES,
+        memoKey: clipsMemoKey(baseURL, args.model),
+        downgradeOnEmpty: true
+      })
+    }
     case 'google':
       throw new Error('Google provider is not wired in the MVP (PRD §4.3)')
     default: {
@@ -982,6 +1214,13 @@ export interface GenerateClipsArgs {
   minDuration: number
   maxDuration: number
   model: string
+  /**
+   * Endpoint identity for the cache key (FEAT-bysdwg). Not used to build the
+   * transport — that already happened — only to keep two servers offering the
+   * same model id out of each other's cache entries.
+   */
+  provider?: AIProvider
+  baseUrl?: string
   /** Analysis window (FEAT-n762y6). `segments` are ALREADY sliced by the caller. */
   range?: { start: number; end: number }
   /** Keyword / free-text targeting (FEAT-n762y6). */
@@ -1013,6 +1252,16 @@ export function clipCacheKey(args: {
   /** FEAT-n762y6 — targeting changes the prompt, so it must change the key. */
   keywords?: string[]
   customPrompt?: string
+  /**
+   * WHICH endpoint served the model (FEAT-bysdwg). A model id is only unique
+   * within a provider: LM Studio and Ollama both offer `llama-3.1-8b-instruct`,
+   * a gateway and OpenAI both offer `gpt-4o`. Without this the second endpoint
+   * silently receives the FIRST one's clips with no request made — which also
+   * defeats the "is my local model any good?" comparison the custom provider
+   * invites. Optional so every existing caller compiles unchanged.
+   */
+  provider?: AIProvider
+  baseUrl?: string
 }): string {
   // videoTitle is hashed (not interpolated raw) so a `|` in the title can't collide
   // with the field separators.
@@ -1025,6 +1274,10 @@ export function clipCacheKey(args: {
     .update(JSON.stringify([args.keywords ?? [], args.customPrompt ?? '']))
     .digest('hex')
     .slice(0, 16)
+  const endpointHash = createHash('sha256')
+    .update(`${args.provider ?? ''}|${normalizeBaseUrl(args.baseUrl) ?? ''}`)
+    .digest('hex')
+    .slice(0, 16)
   return [
     transcriptHash(args.segments),
     PROMPT_VERSION,
@@ -1035,7 +1288,8 @@ export function clipCacheKey(args: {
     args.minDuration,
     args.maxDuration,
     titleHash,
-    targetHash
+    targetHash,
+    endpointHash
   ].join('|')
 }
 
@@ -1093,7 +1347,9 @@ export function generateClips(args: GenerateClipsArgs): Promise<LadderResult> {
       minDuration: args.minDuration,
       maxDuration: args.maxDuration,
       keywords: args.keywords,
-      customPrompt: args.customPrompt
+      customPrompt: args.customPrompt,
+      provider: args.provider,
+      baseUrl: args.baseUrl
     })
   })
 }

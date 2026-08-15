@@ -14,6 +14,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { JobError, type JobParams } from '@shared/jobs'
 import { createGenerateClipsRunner } from '@main/services/jobs/generate-clips-runner'
+import type { RawTransport } from '@main/services/ai-client'
 import type { JobEmitter, JobRunnerContext } from '@main/services/sidecar-manager'
 import { clipSchemaFixture } from '../fixtures/contract'
 
@@ -126,14 +127,21 @@ describe('generate-clips runner', () => {
   it('raises a typed TIMEOUT when the provider never answers', async () => {
     // The reproduced failure: a real OpenRouter model that returned nothing on a
     // 406-second transcript. Without a deadline this hangs the app forever.
+    //
+    // The deadline is PER REQUEST (FEAT-bysdwg), not per job, so the deadline is
+    // only armed around an actual provider call — hence a fake transport that
+    // never answers, driven by a `generateClips` that calls it. Previously one
+    // timeout covered the whole run, which meant a transcript needing several
+    // chunks could exhaust it while every individual call answered promptly.
     const runner = createGenerateClipsRunner({
       getKey: () => null,
-      createTransport: () => async () => ({ rawText: '{}' }),
-      requestTimeoutMs: 20,
-      generateClips: (async (args: { signal?: AbortSignal }) =>
+      createTransport: () => (_prompt, opts) =>
         new Promise((_resolve, reject) => {
-          args.signal?.addEventListener('abort', () => reject(args.signal?.reason))
-        })) as never
+          opts?.signal?.addEventListener('abort', () => reject(opts.signal?.reason))
+        }),
+      requestTimeoutMs: 20,
+      generateClips: (async (args: { transport: RawTransport }) =>
+        args.transport({ system: 's', user: 'u' })) as never
     })
 
     const err = await runner(PARAMS, emitter(), context()).catch((e) => e)
@@ -165,6 +173,62 @@ describe('generate-clips runner', () => {
 
     expect(err).not.toBeInstanceOf(JobError)
     expect((err as Error).message).toBe('aborted')
+  })
+
+  it('redacts a provider error before it leaves main, and types it (FEAT-bysdwg)', async () => {
+    // The GENERATE path never went through `humanTransportError` — a transport
+    // throw travelled runner → sidecar-manager → useJob → the UI with the raw
+    // response body attached, and the SDK builds that message as the body
+    // VERBATIM. For a user-supplied endpoint the body is chosen by a server we
+    // do not control, and provider 401s routinely echo the submitted key.
+    const runner = createGenerateClipsRunner({
+      getKey: () => 'sk-secret-value',
+      getBaseUrl: () => 'http://localhost:1234/v1',
+      createTransport: () => async () => {
+        throw new Error('401 {"error":{"message":"Incorrect API key provided: sk-secret-value"}}')
+      },
+      generateClips: (async (args: { transport: RawTransport }) =>
+        args.transport({ system: 's', user: 'u' })) as never
+    })
+
+    const err = (await runner(PARAMS, emitter(), context()).catch((e) => e)) as JobError
+
+    expect(err).toBeInstanceOf(JobError)
+    expect(err.code).toBe('API_AUTH') // was SIDECAR_CRASH with a body attached
+    expect(err.retriable).toBe(false)
+    expect(err.message).not.toContain('sk-secret-value')
+  })
+
+  it('caps an unrecognised provider error rather than forwarding a wall of text', async () => {
+    const runner = createGenerateClipsRunner({
+      getKey: () => null,
+      getBaseUrl: () => 'http://localhost:1234/v1',
+      createTransport: () => async () => {
+        throw new Error('teapot '.repeat(500))
+      },
+      generateClips: (async (args: { transport: RawTransport }) =>
+        args.transport({ system: 's', user: 'u' })) as never
+    })
+
+    const err = (await runner(PARAMS, emitter(), context()).catch((e) => e)) as JobError
+
+    expect(err.message.length).toBeLessThan(500)
+  })
+
+  it('passes the main-side endpoint to the transport factory', async () => {
+    const createTransport = vi.fn(async () => async () => ({ rawText: '{}' }))
+    const runner = createGenerateClipsRunner({
+      getKey: () => null,
+      getBaseUrl: () => 'http://localhost:1234/v1',
+      createTransport: createTransport as never,
+      generateClips: (async () => ({ ok: true, value: clipSchemaFixture })) as never
+    })
+
+    await runner(PARAMS, emitter(), context())
+
+    expect(createTransport).toHaveBeenCalledWith(
+      expect.objectContaining({ baseUrl: 'http://localhost:1234/v1' })
+    )
   })
 
   it('reports an unrepairable model response as non-retriable INPUT_INVALID', async () => {

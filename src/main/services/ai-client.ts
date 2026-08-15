@@ -668,8 +668,13 @@ export async function mapReduceGenerate(
     }
   }
 
-  // If every chunk failed, surface the typed error (never a silent empty set).
-  if (all.length === 0 && lastError) {
+  // If EVERY chunk failed, surface the typed error (never a silent empty set).
+  // Checked by failure count, not `all.length === 0` (EPIC-k83ghw / BUG-hkmsng
+  // regression guard): a chunk that legitimately found no clips ALSO leaves no
+  // candidates, so the old `all.length === 0` check could not tell "1 of 5
+  // chunks refused, the other 4 genuinely found nothing" apart from "every
+  // chunk refused" — misreporting a real (if empty) success as a hard failure.
+  if (failedChunks === chunks.length && lastError) {
     return { ok: false, error: lastError }
   }
 
@@ -719,6 +724,7 @@ export async function mapReduceGenerate(
   // provider, so the user could not retry their way out of a transient failure.
   if (req.cache && req.cacheKey && failedChunks === 0) req.cache.set(req.cacheKey, value)
 
+  const warnings: string[] = []
   if (failedChunks > 0) {
     const detail = lastError ? ` (${lastError.message})` : ''
     const warning =
@@ -727,9 +733,21 @@ export async function mapReduceGenerate(
     // Main-side log as well as the renderer warning: a support question about
     // "why only 4 clips" should be answerable from the logs alone.
     console.warn(`[ai] ${warning}`)
-    return { ok: true, value, warnings: [warning] }
+    warnings.push(warning)
   }
-  return { ok: true, value }
+  // A run that legitimately found nothing (every candidate clamped/overlap-
+  // dropped, or the model itself returned none) is a SUCCESS, not an error —
+  // `ranked` is just empty. Distinguish that from "never ran" explicitly
+  // (EPIC-k83ghw / BUG-hkmsng): without this, clipsSlice had no signal to
+  // preserve the previous list or explain the empty result, so the sidebar
+  // silently reverted to "No clips yet" exactly as if Generate had never
+  // been pressed.
+  if (ranked.length === 0) {
+    warnings.push(
+      `No moment matched your ${req.minDuration}–${req.maxDuration}s length range — try widening the range, a different style, or different keywords.`
+    )
+  }
+  return warnings.length ? { ok: true, value, warnings } : { ok: true, value }
 }
 
 function viralityBand(clips: DetectedClip[]): 'high' | 'medium' | 'low' {

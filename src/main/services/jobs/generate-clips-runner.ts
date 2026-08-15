@@ -79,6 +79,24 @@ export function createGenerateClipsRunner(
     // is lazily imported and the first request is in flight.
     emit.progress(0, 'analyzing')
 
+    // Trickle progress while waiting for the (usually single) LLM call to
+    // return (EPIC-k83ghw / BUG-hkmsng). `onChunk` below is the only REAL
+    // progress signal, and it only fires at chunk BOUNDARIES — most videos are
+    // one chunk, so without this the bar sat at 0% for the whole run, which
+    // reads as a frozen button rather than a run in flight. Approaches (never
+    // reaches) a conservative 40% ceiling, decaying, and stops the instant a
+    // real chunk boundary arrives — capped low enough that a small/multi-chunk
+    // transcript's first REAL boundary (which can be a lower percentage, e.g.
+    // 1 of 3 chunks) rarely regresses visibly, and a single-chunk run (the
+    // common case) jumps cleanly forward from ~40% straight to 100%.
+    let ticking = true
+    let trickled = 0
+    const trickle = setInterval(() => {
+      if (!ticking) return
+      trickled += (40 - trickled) * 0.12
+      emit.progress(Math.round(trickled), 'analyzing')
+    }, 600)
+
     const apiKey = deps.getKey(params.provider)
     const baseUrl = deps.getBaseUrl?.(params.provider)
     const transport = await makeTransport({
@@ -137,6 +155,8 @@ export function createGenerateClipsRunner(
         cache: deps.cache,
         signal: ctx.signal,
         onChunk: (chunkIndex, chunkCount, clips) => {
+          // A real signal has arrived — stop guessing (BUG-hkmsng).
+          ticking = false
           emit.partial({ clips, chunkIndex, chunkCount })
           emit.progress(Math.round(((chunkIndex + 1) / chunkCount) * 100), 'analyzing')
         }
@@ -191,6 +211,12 @@ export function createGenerateClipsRunner(
       // A user cancel falls through: the manager recognises the aborted
       // controller and emits the terminal CANCELLED itself.
       throw err
+    } finally {
+      // Stop the trickle on every exit path (success, error, cancel) — a
+      // dangling timer would keep emitting progress on a settled job (a
+      // harmless no-op per sidecar-manager's guard) forever otherwise.
+      ticking = false
+      clearInterval(trickle)
     }
   }
 }

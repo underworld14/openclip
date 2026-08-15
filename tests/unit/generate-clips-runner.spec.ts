@@ -250,3 +250,90 @@ describe('generate-clips runner', () => {
     expect((err as JobError).retriable).toBe(false)
   })
 })
+
+// EPIC-k83ghw / BUG-hkmsng: `onChunk` is the only REAL progress signal, and it
+// only fires at chunk BOUNDARIES. Most videos are a single chunk, so without
+// a trickle the bar sat at 0% for the whole run — indistinguishable from a
+// frozen button. Fake timers drive the 600ms ticker deterministically.
+describe('generate-clips runner: progress trickles while waiting for a single (unchunked) LLM call', () => {
+  it('advances progress between 0 and 100 with no real signal yet, then jumps to 100 on completion', async () => {
+    vi.useFakeTimers()
+    try {
+      let resolveGenerate!: (v: { ok: true; value: typeof clipSchemaFixture }) => void
+      const pending = new Promise<{ ok: true; value: typeof clipSchemaFixture }>((resolve) => {
+        resolveGenerate = resolve
+      })
+      const runner = createGenerateClipsRunner({
+        getKey: () => null,
+        createTransport: () => async () => ({ rawText: '{}' }),
+        // No onChunk call at all — exactly the common single-chunk shape.
+        generateClips: (() => pending) as never
+      })
+      const emit = emitter()
+
+      const done = runner(PARAMS, emit, context())
+
+      // Let several trickle ticks fire while the "LLM call" is still pending.
+      await vi.advanceTimersByTimeAsync(600 * 5)
+
+      const midRunPcts = emit.progressCalls.map((c) => c[0])
+      expect(midRunPcts[0]).toBe(0) // the leading "started" emit
+      const trickled = midRunPcts.slice(1)
+      expect(trickled.length).toBeGreaterThan(0)
+      // Monotonically non-decreasing, and — the whole point — never claims
+      // false completion while nothing real has happened yet.
+      for (let i = 1; i < trickled.length; i++)
+        expect(trickled[i]).toBeGreaterThanOrEqual(trickled[i - 1])
+      for (const pct of trickled) expect(pct).toBeLessThan(90)
+
+      // The real call resolves — jumps cleanly to 100, and no further ticks
+      // land after settlement (the `finally` cleared the interval).
+      resolveGenerate({ ok: true, value: clipSchemaFixture })
+      await vi.advanceTimersByTimeAsync(0)
+      await done
+
+      expect(emit.progressCalls.at(-1)).toEqual([100, 'analyzing'])
+      const countAtDone = emit.progressCalls.length
+      await vi.advanceTimersByTimeAsync(600 * 5)
+      expect(emit.progressCalls.length).toBe(countAtDone)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops trickling the instant a REAL chunk boundary arrives, and never regresses backward from it', async () => {
+    vi.useFakeTimers()
+    try {
+      let resolveGenerate!: (v: { ok: true; value: typeof clipSchemaFixture }) => void
+      const pending = new Promise<{ ok: true; value: typeof clipSchemaFixture }>((resolve) => {
+        resolveGenerate = resolve
+      })
+      const runner = createGenerateClipsRunner({
+        getKey: () => null,
+        createTransport: () => async () => ({ rawText: '{}' }),
+        generateClips: ((args: GenerateArgs) => {
+          // A real chunk boundary arrives mid-run.
+          args.onChunk?.(0, 3, clipSchemaFixture.clips)
+          return pending
+        }) as never
+      })
+      const emit = emitter()
+
+      const done = runner(PARAMS, emit, context())
+      await vi.advanceTimersByTimeAsync(0) // let the synchronous onChunk land
+      const afterChunk = emit.progressCalls.at(-1)!
+      expect(afterChunk).toEqual([Math.round((1 / 3) * 100), 'analyzing'])
+
+      // Ticks that would have fired after this must not overwrite it — the
+      // runner stops ticking on the first real signal.
+      await vi.advanceTimersByTimeAsync(600 * 5)
+      expect(emit.progressCalls.at(-1)).toEqual(afterChunk)
+
+      resolveGenerate({ ok: true, value: clipSchemaFixture })
+      await vi.advanceTimersByTimeAsync(0)
+      await done
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

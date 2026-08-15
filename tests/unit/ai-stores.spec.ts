@@ -8,6 +8,7 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest'
 import { createMockOpenclip } from '../mocks/openclip'
 import {
+  clipFixture,
   clipsFixture,
   projectFixture,
   settingsFixture,
@@ -139,6 +140,73 @@ describe('clipsSlice (projectStore)', () => {
 
     expect(useProjectStore.getState().clips).toEqual(clipsFixture)
     expect(useProjectStore.getState().generateError).toContain('slow down')
+  })
+
+  // EPIC-k83ghw / BUG-hkmsng: a run that legitimately finds zero clips is a
+  // SUCCESS, not a failure — must not be confused with "never ran" by wiping
+  // whatever the user already had.
+  it('a zero-clip result keeps the previous clips AND shows the explanation', async () => {
+    const bridge = createMockOpenclip({
+      scripts: {
+        'generate-clips': {
+          steps: [
+            { t: 'progress', pct: 100, stage: 'analyzing' },
+            {
+              t: 'done',
+              result: {
+                clips: [],
+                analysis: {
+                  total_duration: 240,
+                  clips_found: 0,
+                  best_clip_index: 0,
+                  overall_virality_potential: 'low'
+                },
+                warnings: ['No moment matched your 15–90s length range — try widening the range.']
+              }
+            }
+          ]
+        }
+      }
+    })
+    installBridge(bridge)
+
+    const { useProjectStore } = await import('@renderer/stores/projectStore')
+    // Seed with an UNREVIEWED, UNTOUCHED clip from a prior run — status
+    // 'suggested' and no edited bounds, so it fails EVERY condition of the
+    // `preserved` filter (approved/exported/edited status, or edited bounds).
+    // This is the exact case the old `[...preserved, ...result.clips]` logic
+    // dropped on a zero-result run, silently.
+    const untouched = { ...clipFixture, editedStart: undefined, editedEnd: undefined }
+    useProjectStore.getState().setClips([untouched])
+    await useProjectStore.getState().generateClips(GENERATE_REQUEST)
+
+    const state = useProjectStore.getState()
+    expect(state.generating).toBe(false)
+    expect(state.clips).toEqual([untouched])
+    expect(state.generateWarnings).toEqual([
+      'No moment matched your 15–90s length range — try widening the range.'
+    ])
+    expect(state.generateError).toBeNull()
+  })
+
+  it('a NON-empty regenerate still replaces an untouched suggestion as before (no regression)', async () => {
+    const { useProjectStore } = await import('@renderer/stores/projectStore')
+    const untouched = {
+      ...clipFixture,
+      id: 'stale-suggestion',
+      editedStart: undefined,
+      editedEnd: undefined
+    }
+    useProjectStore.getState().setClips([untouched])
+    await useProjectStore.getState().generateClips(GENERATE_REQUEST)
+
+    // The default mock script returns one real clip — the stale, untouched
+    // suggestion is gone, replaced by the fresh result (BUG-vv87d6 behaviour,
+    // unaffected by the zero-clip special case above).
+    const clips = useProjectStore.getState().clips
+    expect(clips).toHaveLength(1)
+    expect(clips[0].id).not.toBe('stale-suggestion')
+    expect(clips[0].title).toBe('The wildest take of the year')
   })
 
   it('reports a terminal job error through generateError', async () => {

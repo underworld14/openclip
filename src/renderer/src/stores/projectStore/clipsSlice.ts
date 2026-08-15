@@ -243,15 +243,26 @@ export const createClipsSlice: StateCreator<ProjectStore, [], [], ClipsSlice> = 
             c.editedStart !== undefined ||
             c.editedEnd !== undefined
         )
+        // A run that legitimately found NOTHING is not "0 suggestions to
+        // replace the old ones with" — it is "the previous list, unchanged,
+        // plus an explanation" (EPIC-k83ghw / BUG-hkmsng). Without this a
+        // rerun that came back empty silently wiped even the never-reviewed
+        // suggestions from the LAST run, indistinguishable from Generate
+        // never having been pressed. A non-empty result keeps replacing
+        // untouched suggestions exactly as before — that IS the point of
+        // Regenerate.
         return {
-          clips: [...preserved, ...result.clips.map(detectedToClip)],
+          clips:
+            result.clips.length === 0
+              ? s.clips
+              : [...preserved, ...result.clips.map(detectedToClip)],
           provisionalClips: [],
           generating: false,
           generatePct: 100,
           generateChunk: null,
           generateJobId: null,
           // A partial run is a success with a caveat, not a failure — show the
-          // clips AND say why there might be fewer than requested.
+          // clips AND say why there might be fewer than requested (or none).
           generateWarnings: result.warnings ?? []
         }
       })

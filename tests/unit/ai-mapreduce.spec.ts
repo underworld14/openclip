@@ -738,3 +738,78 @@ describe('mapReduceGenerate: partial chunk failure is not silent', () => {
     expect(r.ok && r.warnings).toBeUndefined()
   })
 })
+
+// EPIC-k83ghw / BUG-hkmsng: a run whose candidates are all clamped/deduped
+// away — or where the model itself returns none — is a SUCCESS with an EMPTY
+// result, not a failure. Before this it was indistinguishable from a chunk
+// refusal or from Generate never having run at all: `ok:true, value.clips:
+// [], warnings: undefined`.
+describe('mapReduceGenerate: a run that legitimately finds ZERO clips', () => {
+  const emptyChunk = (): string =>
+    JSON.stringify({
+      clips: [],
+      analysis: {
+        total_duration: 200,
+        clips_found: 0,
+        best_clip_index: 0,
+        overall_virality_potential: 'low'
+      }
+    })
+
+  const runWith = async (
+    transport: RawTransport,
+    over: Partial<{ minDuration: number; maxDuration: number }> = {}
+  ): ReturnType<typeof mapReduceGenerate> =>
+    mapReduceGenerate(transport, {
+      segments: makeSegments(5),
+      system: 'S',
+      buildUserPrompt: () => 'analyze',
+      chunkOptions: { maxTokens: 10_000, overlapSeconds: 10 },
+      duration: 200,
+      minDuration: 15,
+      maxDuration: 90,
+      maxClips: 5,
+      ...over
+    })
+
+  it('is still ok:true, with an EMPTY clip list AND an explanatory warning naming the length range', async () => {
+    const transport: RawTransport = async () => ({ rawText: emptyChunk() })
+    const r = await runWith(transport, { minDuration: 60, maxDuration: 90 })
+
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.clips).toEqual([])
+    expect(r.warnings?.length).toBe(1)
+    expect(r.warnings![0]).toMatch(/no moment matched/i)
+    expect(r.warnings![0]).toMatch(/60–90s/)
+  })
+
+  it('is distinct from a chunk-failure warning when BOTH occur (one chunk refuses, the rest find nothing)', async () => {
+    let call = 0
+    // Call 1 (chunk 1's request) AND call 2 (its one repair attempt) refuse;
+    // every call after that (chunk 2 onward) returns a clean, empty response.
+    // Needs MULTIPLE chunks — a small token budget over 40 segments, same
+    // shape as the `firstOkRestRefuse` setup above.
+    const transport: RawTransport = async () => {
+      call += 1
+      return call <= 2 ? { rawText: 'sorry, I cannot help' } : { rawText: emptyChunk() }
+    }
+    const r = await mapReduceGenerate(transport, {
+      segments: makeSegments(40),
+      system: 'S',
+      buildUserPrompt: (chunkSegs) => 'analyze ' + chunkSegs.length,
+      chunkOptions: { maxTokens: 120, overlapSeconds: 10 },
+      duration: 200,
+      minDuration: 15,
+      maxDuration: 90,
+      maxClips: 5
+    })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.value.clips).toEqual([])
+    // Both the "sections failed" AND the "found nothing" warning are present —
+    // neither shadows the other.
+    expect(r.warnings?.some((w) => /transcript sections failed/i.test(w))).toBe(true)
+    expect(r.warnings?.some((w) => /no moment matched/i.test(w))).toBe(true)
+  })
+})

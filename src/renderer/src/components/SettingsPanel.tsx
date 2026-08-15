@@ -177,7 +177,12 @@ export function SettingsPanel({
     if (baseUrlInvalid) return
     if (normalizedDraft !== settings.baseUrl) {
       setTestResult(null)
-      void save({ baseUrl: normalizedDraft })
+      void save({ baseUrl: normalizedDraft }).then(() => {
+        // A saved key is bound to the endpoint it was entered for, so pointing at
+        // a different server unbinds it MAIN-side. Re-read the status or the panel
+        // keeps showing "Key set ••••1a2b" for a key that will not be sent.
+        void refreshKeyStatus(settings.aiProvider)
+      })
     }
   }
 

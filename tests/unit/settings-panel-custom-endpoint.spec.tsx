@@ -152,6 +152,24 @@ describe('SettingsPanel: the custom endpoint Base URL', () => {
     expect(screen.getByTestId('model-picker').textContent).toMatch(/Set a Base URL above/i)
   })
 
+  it('re-reads the key status when the endpoint changes', async () => {
+    // A saved key is bound MAIN-side to the endpoint it was entered for, so
+    // pointing at a different server unbinds it. Without this the panel keeps
+    // showing "Key set ••••1a2b" for a key that will never be sent.
+    mount({ baseUrl: 'http://localhost:1234/v1' })
+    render(<SettingsPanel />)
+    const input = await baseUrlField()
+    const statusSpy = vi.mocked(bridge.settings.apiKeyStatus)
+    statusSpy.mockClear()
+
+    await act(async () => {
+      fireEvent.change(input, { target: { value: 'http://localhost:4321/v1' } })
+      fireEvent.blur(input)
+    })
+
+    await waitFor(() => expect(statusSpy).toHaveBeenCalledWith({ provider: 'custom' }))
+  })
+
   it('fetches once the endpoint is committed, without needing a key', async () => {
     mount({})
     render(<SettingsPanel />)

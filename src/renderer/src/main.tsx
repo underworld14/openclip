@@ -3,6 +3,7 @@ import './assets/index.css'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { useProjectStore } from './stores/projectStore'
 import { useJobsStore } from './stores/jobsStore'
@@ -57,6 +58,8 @@ window.__openclipTest = {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>
 )

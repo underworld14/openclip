@@ -1,14 +1,14 @@
 ---
 id: BUG-fcg251
 title: A renderer exception blanks the window permanently — no error boundary, no crash handler, no Reload
-status: todo
+status: doing
 priority: high
 labels:
     - resilience
 parent: EPIC-k83ghw
 phase: p0
 created: "2026-08-15T11:28:11Z"
-updated: "2026-08-15T11:28:11Z"
+updated: "2026-08-15T12:18:17Z"
 ---
 
 ## Problem

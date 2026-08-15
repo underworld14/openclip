@@ -58,7 +58,14 @@ function itemFor(
  */
 export function buildMenuTemplate(
   getWindow: () => BrowserWindow | null,
-  appName = app.name
+  appName = app.name,
+  /**
+   * "Check for Updates…" (EPIC-k83ghw / FEAT-x9femg). CHECK_UPDATE existed on
+   * the bridge already but nothing in the UI ever called it — this is the
+   * only reachable entry point. Optional so every existing test/caller that
+   * builds the template without it keeps working unchanged.
+   */
+  onCheckForUpdates?: () => void
 ): MenuItemConstructorOptions[] {
   const items = (menu: Parameters<typeof shortcutsForMenu>[0]): MenuItemConstructorOptions[] =>
     shortcutsForMenu(menu).map((s) => itemFor(s, getWindow))
@@ -70,6 +77,7 @@ export function buildMenuTemplate(
       label: appName,
       submenu: [
         { role: 'about' },
+        ...(onCheckForUpdates ? [{ label: 'Check for Updates…', click: onCheckForUpdates }] : []),
         { type: 'separator' },
         ...items('File').filter((i) => i.accelerator === 'CmdOrCtrl+,'),
         { type: 'separator' },
@@ -109,6 +117,11 @@ export function buildMenuTemplate(
       submenu: [
         ...items('View'),
         { type: 'separator' },
+        // A stuck/blank window (a renderer error the boundary could not
+        // recover, or a crashed renderer process) had NO way back but a full
+        // app relaunch — Cmd+R was never wired to anything (EPIC-k83ghw /
+        // BUG-fcg251). The built-in role reloads the focused window's page.
+        { role: 'reload' },
         { role: 'togglefullscreen' },
         { role: 'toggleDevTools' }
       ]
@@ -119,6 +132,11 @@ export function buildMenuTemplate(
 }
 
 /** Build and install the application menu. Call once, after `whenReady`. */
-export function installApplicationMenu(getWindow: () => BrowserWindow | null): void {
-  Menu.setApplicationMenu(Menu.buildFromTemplate(buildMenuTemplate(getWindow)))
+export function installApplicationMenu(
+  getWindow: () => BrowserWindow | null,
+  onCheckForUpdates?: () => void
+): void {
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(buildMenuTemplate(getWindow, app.name, onCheckForUpdates))
+  )
 }

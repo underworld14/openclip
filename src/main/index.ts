@@ -40,6 +40,7 @@ import {
 import { createMediaAccess } from './utils/media-access'
 import { mediaDir, openclipTempRoot } from './utils/paths'
 import { installApplicationMenu } from './menu'
+import { checkForUpdate } from './services/updater'
 
 let mainWindow: BrowserWindow | null = null
 const sidecar = new SidecarManager()
@@ -201,10 +202,27 @@ function createWindow(): void {
     if (url !== win.webContents.getURL()) event.preventDefault()
   })
 
+  // A crashed renderer process (OOM, a native crash) is NOT something the
+  // renderer's own React error boundary can catch — the whole process is
+  // gone, not just a component tree — and before this there was no handler
+  // at all: the window stayed permanently blank with no way back but a full
+  // app relaunch (EPIC-k83ghw / BUG-fcg251). 'clean-exit'/'killed' cover a
+  // normal teardown (e.g. quitting); only reload for reasons that mean the
+  // renderer actually broke.
+  win.webContents.on('render-process-gone', (_event, details) => {
+    if (details.reason === 'clean-exit' || details.reason === 'killed') return
+    console.error('[main] renderer process gone:', details.reason, '— reloading')
+    loadRenderer(win)
+  })
+
+  loadRenderer(mainWindow)
+}
+
+function loadRenderer(win: BrowserWindow): void {
   if (is.dev && process.env.ELECTRON_RENDERER_URL) {
-    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
+    win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    win.loadFile(join(__dirname, '../renderer/index.html'))
   }
 }
 
@@ -292,6 +310,42 @@ function activeJobMessage(kinds: JobKind[]): string {
 }
 
 /**
+ * "Check for Updates…" (EPIC-k83ghw / FEAT-x9femg). The only reachable entry
+ * point for CHECK_UPDATE, which previously existed on the bridge with no UI
+ * caller anywhere. Deliberately does not download or install anything — it
+ * only reports availability and, if an update exists, offers to open the
+ * releases page, matching `autoDownload = false` in `services/updater.ts`.
+ */
+async function attemptCheckForUpdates(): Promise<void> {
+  const win = BrowserWindow.getFocusedWindow() ?? mainWindow
+  const status = await checkForUpdate()
+  const opts = status.updateAvailable
+    ? {
+        type: 'info' as const,
+        message: `A new version is available${status.version ? ` (${status.version})` : ''}.`,
+        detail: 'Open the releases page to download it.',
+        buttons: ['Open Releases Page', 'Later'],
+        defaultId: 0,
+        cancelId: 1
+      }
+    : {
+        type: 'info' as const,
+        message: 'You’re up to date.',
+        detail: `OpenClip ${app.getVersion()} is the latest version.`,
+        buttons: ['OK'],
+        defaultId: 0,
+        cancelId: 0
+      }
+  const idx =
+    win && !win.isDestroyed()
+      ? dialog.showMessageBoxSync(win, opts)
+      : dialog.showMessageBoxSync(opts)
+  if (status.updateAvailable && idx === 0) {
+    void shell.openExternal('https://github.com/underworld14/openclip/releases')
+  }
+}
+
+/**
  * Quit-time autosave durability (audit fix openclip-49y): the renderer's `pagehide`
  * flush is an async IPC round-trip the unload path cannot await, so a save still inside
  * the debounce window at a hard quit could be lost. On `before-quit` we HOLD the quit,
@@ -375,7 +429,10 @@ app.whenReady().then(async () => {
   // this process, so the app shipped Electron's stock menu — no Cmd+N/O/I/E/,.
   // The window is resolved at CLICK time (a thunk, not a captured reference) so a
   // command reaches whichever window is focused, and survives window recreation.
-  installApplicationMenu(() => BrowserWindow.getFocusedWindow() ?? mainWindow)
+  installApplicationMenu(
+    () => BrowserWindow.getFocusedWindow() ?? mainWindow,
+    () => void attemptCheckForUpdates()
+  )
 
   // Use the production-grade p-queue limiter (ESM, dynamically imported).
   try {

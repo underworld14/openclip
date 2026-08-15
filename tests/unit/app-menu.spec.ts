@@ -143,6 +143,29 @@ describe('clicking an item', () => {
   })
 })
 
+describe('Check for Updates… (EPIC-k83ghw / FEAT-x9femg)', () => {
+  it('is absent when no handler is given (backward compatible)', () => {
+    const app = menuNamed(template(), 'OpenClip')
+    expect(app.submenu?.some((i) => i.label === 'Check for Updates…')).toBe(false)
+  })
+
+  it('appears in the app menu and calls the handler when clicked', () => {
+    const onCheckForUpdates = vi.fn()
+    const t = buildMenuTemplate(
+      (() => fakeWindow) as never,
+      'OpenClip',
+      onCheckForUpdates
+    ) as Item[]
+    const app = menuNamed(t, 'OpenClip')
+    const item = app.submenu?.find((i) => i.label === 'Check for Updates…') as
+      | { click?: () => void }
+      | undefined
+    expect(item).toBeTruthy()
+    item?.click?.()
+    expect(onCheckForUpdates).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('the menu and the keyboard map cannot disagree', () => {
   it('builds every menu-bearing shortcut into the template', () => {
     // Both read the one shared table — this asserts nothing is dropped in

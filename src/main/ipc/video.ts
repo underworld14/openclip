@@ -33,6 +33,7 @@ import { urlDownloadRunner } from '@main/services/jobs/url-download-runner'
 import { probeVideo } from '@main/utils/ffprobe'
 import { generateThumbnail } from '@main/services/ffmpeg-export'
 import { cacheDirFor } from '@main/utils/paths'
+import { checkForUpdate } from '@main/services/updater'
 
 export function registerVideoHandlers(ctx: IpcContext): void {
   // Plug the streaming export runner into the sidecar's JOB_RUNNERS registry
@@ -226,12 +227,13 @@ export function registerVideoHandlers(ctx: IpcContext): void {
   // ── System: check for updates (PRD §4.1) ─────────────────────────────────
   // The bridge derives `window.openclip.system.checkUpdate()` from CHECK_UPDATE, so
   // a missing handler made it reject with "No handler registered" at runtime (audit
-  // fix openclip-4qr). electron-updater is not wired yet (tracked by openclip-e5w),
-  // so this is an honest stub that reports no update rather than an unhandled reject.
+  // fix openclip-4qr). Wired to the real electron-updater feed (EPIC-k83ghw /
+  // FEAT-x9femg) — `checkForUpdate()` itself never throws, reporting "no update"
+  // on any failure rather than an unhandled reject.
   ctx.ipcMain.handle(
     IPCChannels.CHECK_UPDATE,
     async (): Promise<{ updateAvailable: boolean; version?: string }> => {
-      return { updateAvailable: false }
+      return checkForUpdate()
     }
   )
 

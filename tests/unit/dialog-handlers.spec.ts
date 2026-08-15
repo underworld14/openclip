@@ -10,12 +10,17 @@ import { IPCChannels } from '@shared/channels'
 
 const showOpenDialog = vi.fn()
 vi.mock('electron', () => ({
+  app: { isPackaged: false, getVersion: () => '2.0.0' },
   dialog: {
     showOpenDialog: (...args: unknown[]) => showOpenDialog(...args),
     showSaveDialog: vi.fn()
   },
   shell: { showItemInFolder: vi.fn(), openPath: vi.fn() }
 }))
+// checkForUpdate() short-circuits on `!app.isPackaged` before ever touching
+// autoUpdater (see updater.spec.ts for the real behaviour) — mocked here only
+// so importing it in an unpackaged test env is inert.
+vi.mock('electron-updater', () => ({ autoUpdater: { on: vi.fn(), checkForUpdates: vi.fn() } }))
 vi.mock('@main/services/jobs/export-runner', () => ({ exportRunner: vi.fn() }))
 vi.mock('@main/services/jobs/url-download-runner', () => ({ urlDownloadRunner: vi.fn() }))
 vi.mock('@main/utils/ffprobe', () => ({ probeVideo: vi.fn() }))
@@ -73,7 +78,10 @@ describe('CHECK_UPDATE handler (audit fix openclip-4qr — was an unhandled chan
     const h = handlers.get(IPCChannels.CHECK_UPDATE)
     expect(h).toBeTruthy() // previously absent → "No handler registered" at runtime
     const res = (await h!({}, undefined)) as { updateAvailable: boolean }
-    expect(res).toEqual({ updateAvailable: false }) // honest stub until electron-updater (openclip-e5w)
+    // Wired to the real electron-updater feed (EPIC-k83ghw / FEAT-x9femg), which
+    // is a no-op outside a packaged build (app.isPackaged is false here) — see
+    // updater.spec.ts for the packaged-build behaviour.
+    expect(res).toEqual({ updateAvailable: false })
   })
 })
 

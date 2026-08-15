@@ -1,14 +1,14 @@
 ---
 id: FEAT-x9femg
 title: 'No auto-update: CHECK_UPDATE is a stub, electron-updater is absent, and bundled yt-dlp rots'
-status: todo
+status: doing
 priority: high
 labels:
     - distribution
 parent: EPIC-k83ghw
 phase: p0
 created: "2026-08-15T11:28:11Z"
-updated: "2026-08-15T11:28:11Z"
+updated: "2026-08-15T12:20:25Z"
 ---
 
 ## Problem

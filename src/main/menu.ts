@@ -123,7 +123,11 @@ export function buildMenuTemplate(
         // BUG-fcg251). The built-in role reloads the focused window's page.
         { role: 'reload' },
         { role: 'togglefullscreen' },
-        { role: 'toggleDevTools' }
+        // A packaged build ships no way to open Chrome DevTools from the menu
+        // (BUG-hqbett): it is a debugging affordance with no legitimate use for
+        // the shipped app, and it is unconditionally available in dev already
+        // (electron-vite/Electron's own dev tooling), so nothing is lost.
+        ...(app.isPackaged ? [] : [{ role: 'toggleDevTools' as const }])
       ]
     },
     { role: 'windowMenu' },

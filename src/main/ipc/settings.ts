@@ -10,7 +10,7 @@
  * the renderer's settingsStore has a single backing channel.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { IPCChannels } from '@shared/channels'
 import { Settings, type Settings as SettingsType } from '@shared/schema'
@@ -106,7 +106,20 @@ export function readSettings(path: string): SettingsType {
 export function writeSettings(path: string, settings: SettingsType): void {
   mkdirSync(dirname(path), { recursive: true })
   const tmp = `${path}.tmp`
-  writeFileSync(tmp, JSON.stringify(settings, null, 2), 'utf8')
+  // 0o600 (owner read/write only), mirroring `fileBackend`'s secrets.json (audit
+  // fix openclip-g7f) — settings.json carries no secret today, but there is no
+  // reason to leave it group/other-readable either (BUG-4tscfq). `mode` only
+  // applies on CREATE, and the rename below transfers `tmp`'s permissions onto
+  // `path` — replacing whatever the pre-existing file had — so a fresh 0600
+  // `tmp` is enough to tighten an already-world-readable settings.json too. The
+  // extra chmod is belt-and-suspenders for a stale `.tmp` left by a previous
+  // crashed write and for a process umask that masked the create-time mode.
+  writeFileSync(tmp, JSON.stringify(settings, null, 2), { encoding: 'utf8', mode: 0o600 })
+  try {
+    chmodSync(tmp, 0o600)
+  } catch {
+    /* non-POSIX FS (e.g. Windows) — best-effort only */
+  }
   renameSync(tmp, path)
 }
 

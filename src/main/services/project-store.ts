@@ -64,9 +64,23 @@ export class ProjectStoreError extends Error {
 // Path helpers (pure — directory is always injected)
 // ============================================================================
 
+/**
+ * A project id must be a single path segment (no separators / `..` / NUL) —
+ * trust boundary: `id` reaches here from the renderer over IPC (SAVE_PROJECT /
+ * LOAD_PROJECT / DELETE_PROJECT — BUG-hqbett). Mirrors `assertSafeProjectId` in
+ * `paths.ts`/`media-store.ts` — duplicated rather than imported so this module
+ * stays Electron-free (its own header's documented testability property).
+ */
+function assertSafeProjectId(id: string): string {
+  if (!id || /[\\/]/.test(id) || id === '.' || id === '..' || id.includes('\0')) {
+    throw new ProjectStoreError('VALIDATION', `unsafe project id: ${JSON.stringify(id)}`)
+  }
+  return id
+}
+
 /** Absolute path to a project's `.ocproj` file inside `dir`. */
 export function projectFilePath(dir: string, id: string): string {
-  return join(dir, `${id}${OCPROJ_EXT}`)
+  return join(dir, `${assertSafeProjectId(id)}${OCPROJ_EXT}`)
 }
 
 // ============================================================================

@@ -21,6 +21,8 @@ import {
   type SecretStoreBackend
 } from '@main/utils/security'
 import { parseFfmpegProgress, progressPct } from '@main/services/ffmpeg-core'
+import { writeSettings } from '@main/ipc/settings'
+import { settingsFixture } from '../fixtures/contract'
 import { mkdtempSync, statSync, writeFileSync, chmodSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -83,6 +85,34 @@ describe('security: fileBackend writes secrets.json owner-only (audit fix opencl
       chmodSync(path, 0o644)
       expect(statSync(path).mode & 0o777).toBe(0o644)
       fileBackend(path).write({ anthropic: 'enc:xyz' })
+      expect(statSync(path).mode & 0o777).toBe(0o600)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("settings: writeSettings mirrors fileBackend's owner-only mode (BUG-4tscfq)", () => {
+  it('creates settings.json with mode 0o600 (no group/other read)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oc-settings-'))
+    try {
+      const path = join(dir, 'settings.json')
+      writeSettings(path, settingsFixture)
+      expect(statSync(path).mode & 0o777).toBe(0o600)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('tightens an already-existing world-readable settings file on the next write', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oc-settings-'))
+    try {
+      const path = join(dir, 'settings.json')
+      // Simulate a legacy file written before the fix (0o644, group/other readable).
+      writeFileSync(path, '{}', 'utf8')
+      chmodSync(path, 0o644)
+      expect(statSync(path).mode & 0o777).toBe(0o644)
+      writeSettings(path, settingsFixture)
       expect(statSync(path).mode & 0o777).toBe(0o600)
     } finally {
       rmSync(dir, { recursive: true, force: true })

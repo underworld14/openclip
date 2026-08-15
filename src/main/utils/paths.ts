@@ -48,6 +48,44 @@ function isDev(): boolean {
   return !!process.env.ELECTRON_RENDERER_URL || process.env.NODE_ENV === 'development'
 }
 
+/**
+ * Is this a REAL packaged Electron app (the shipped .app), as opposed to dev,
+ * a unit test, CI, or the `@serial` smoke harness — all of which run `paths.ts`
+ * under plain Node/vitest, never inside a packaged Electron main process
+ * (BUG-hqbett). `electronApp()` throws outside a real Electron runtime
+ * (`require('electron')` resolves to the Electron BINARY PATH — a string — so
+ * `.app` is `undefined` and `.isPackaged` throws), which is exactly the signal:
+ * anywhere this throws, it is by construction not a packaged app.
+ *
+ * The `OPENCLIP_*` overrides below gate on this rather than `isDev()`: an
+ * override must keep working in every non-packaged context (dev AND a
+ * `NODE_ENV=production` test run AND the smoke harness), and must be IGNORED
+ * only in the one context that matters for the vulnerability this closes — the
+ * real shipped app, where "anything that can set an env var for the process
+ * redirects every sidecar to an arbitrary executable" (BUG-hqbett evidence).
+ */
+let packagedOverrideForTests: boolean | null = null
+
+/**
+ * TEST-ONLY: force `isPackagedApp()`'s verdict. The lazy `require('electron')`
+ * it checks cannot be intercepted by `vi.mock('electron')` (the same native-require
+ * constraint `media-protocol.spec.ts` documents), so this mirrors that file's
+ * injectable-override pattern instead of fighting the mock system. `null` restores
+ * the real check (always `false` outside a genuine Electron runtime).
+ */
+export function __setPackagedOverrideForTests(value: boolean | null): void {
+  packagedOverrideForTests = value
+}
+
+export function isPackagedApp(): boolean {
+  if (packagedOverrideForTests !== null) return packagedOverrideForTests
+  try {
+    return electronApp().isPackaged === true
+  } catch {
+    return false
+  }
+}
+
 /** Look an executable up on PATH (dev-only fallback for whisper-cli). */
 function whichOnPath(bin: string): string | null {
   const dirs = (process.env.PATH ?? '').split(delimiter)
@@ -73,7 +111,7 @@ function whichOnPath(bin: string): string | null {
  * `OPENCLIP_FFMPEG` overrides everything (used by tests / smoke harness).
  */
 export function ffmpegPath(): string {
-  if (process.env.OPENCLIP_FFMPEG) return process.env.OPENCLIP_FFMPEG
+  if (!isPackagedApp() && process.env.OPENCLIP_FFMPEG) return process.env.OPENCLIP_FFMPEG
   if (isDev()) return devFfmpegBinary('ffmpeg')
   return join(process.resourcesPath, 'ffmpeg', platArch(), 'ffmpeg')
 }
@@ -83,7 +121,7 @@ export function ffmpegPath(): string {
  * dev → build/ffmpeg-cache redistributable, else ffmpeg-ffprobe-static; prod → bundled.
  */
 export function ffprobePath(): string {
-  if (process.env.OPENCLIP_FFPROBE) return process.env.OPENCLIP_FFPROBE
+  if (!isPackagedApp() && process.env.OPENCLIP_FFPROBE) return process.env.OPENCLIP_FFPROBE
   if (isDev()) return devFfmpegBinary('ffprobe')
   return join(process.resourcesPath, 'ffmpeg', platArch(), 'ffprobe')
 }
@@ -134,7 +172,7 @@ function devCachedFfmpeg(tool: 'ffmpeg' | 'ffprobe'): string | null {
  * `OPENCLIP_WHISPER_CLI` overrides everything (dev + smoke harness).
  */
 export function whisperCliPath(): string {
-  if (process.env.OPENCLIP_WHISPER_CLI) return process.env.OPENCLIP_WHISPER_CLI
+  if (!isPackagedApp() && process.env.OPENCLIP_WHISPER_CLI) return process.env.OPENCLIP_WHISPER_CLI
   if (isDev()) {
     const found = whichOnPath('whisper-cli')
     if (found) return found
@@ -155,7 +193,7 @@ export function whisperCliPath(): string {
  * verified standalone release into `resources/` at package time (plan F.6 / G.6).
  */
 export function ytDlpPath(): string {
-  if (process.env.OPENCLIP_YTDLP) return process.env.OPENCLIP_YTDLP
+  if (!isPackagedApp() && process.env.OPENCLIP_YTDLP) return process.env.OPENCLIP_YTDLP
   // The staged binary keeps its platform extension so Windows can spawn it by an
   // absolute path (CreateProcess does not auto-append .exe).
   const bin = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'
@@ -213,7 +251,7 @@ export function whisperResourcesDir(): string {
  * `<resources>/fonts/` (packaging phase, plan E.6) so the prod path resolves.
  */
 export function fontsDir(): string {
-  if (process.env.OPENCLIP_FONTS_DIR) return process.env.OPENCLIP_FONTS_DIR
+  if (!isPackagedApp() && process.env.OPENCLIP_FONTS_DIR) return process.env.OPENCLIP_FONTS_DIR
   if (isDev()) return join(process.cwd(), 'build', 'fonts')
   return join(process.resourcesPath, 'fonts')
 }
@@ -239,7 +277,7 @@ export const REFRAME_MODEL_FILE = 'face_detection_yunet_2023mar.onnx'
  * `OPENCLIP_ONNX_DIR` overrides (tests / smoke).
  */
 export function reframeOnnxDir(): string {
-  if (process.env.OPENCLIP_ONNX_DIR) return process.env.OPENCLIP_ONNX_DIR
+  if (!isPackagedApp() && process.env.OPENCLIP_ONNX_DIR) return process.env.OPENCLIP_ONNX_DIR
   if (isDev()) return join(process.cwd(), 'build', 'onnx')
   return join(process.resourcesPath, 'onnx')
 }

@@ -193,6 +193,40 @@ describe('load re-validates with the Project Zod schema', () => {
   })
 })
 
+// ── trust boundary: a project id must be one path segment (BUG-hqbett) ──────
+describe('projectFilePath rejects a non-single-segment id (path traversal)', () => {
+  const traversal = '../../../../etc/evil'
+
+  it('projectFilePath itself throws a typed VALIDATION error', () => {
+    expect(() => projectFilePath(dir, traversal)).toThrow(ProjectStoreError)
+    try {
+      projectFilePath(dir, traversal)
+    } catch (e) {
+      expect((e as ProjectStoreError).code).toBe('VALIDATION')
+    }
+  })
+
+  it('saveProject refuses to write OUTSIDE dir for a traversal id', async () => {
+    await expect(saveProject(dir, { ...projectFixture, id: traversal })).rejects.toMatchObject({
+      code: 'VALIDATION'
+    })
+  })
+
+  it('loadProject refuses to read OUTSIDE dir for a traversal id', async () => {
+    await expect(loadProject(dir, traversal)).rejects.toMatchObject({ code: 'VALIDATION' })
+  })
+
+  it('deleteProject refuses to delete OUTSIDE dir for a traversal id', async () => {
+    await expect(deleteProject(dir, traversal)).rejects.toMatchObject({ code: 'VALIDATION' })
+  })
+
+  it('rejects a bare ".." id, an empty id, and an embedded separator', async () => {
+    for (const bad of ['..', '.', '', 'a/b', 'a\\b']) {
+      await expect(loadProject(dir, bad)).rejects.toMatchObject({ code: 'VALIDATION' })
+    }
+  })
+})
+
 // ── list ────────────────────────────────────────────────────────────────────
 describe('listProjects', () => {
   it('lists saved projects as {id,name,updatedAt,path}, newest first', async () => {

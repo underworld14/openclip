@@ -32,7 +32,7 @@ import { exportRunner } from '@main/services/jobs/export-runner'
 import { urlDownloadRunner } from '@main/services/jobs/url-download-runner'
 import { probeVideo } from '@main/utils/ffprobe'
 import { generateThumbnail } from '@main/services/ffmpeg-export'
-import { cacheDirFor } from '@main/utils/paths'
+import { cacheDirFor, isPackagedApp } from '@main/utils/paths'
 import { checkForUpdate } from '@main/services/updater'
 
 export function registerVideoHandlers(ctx: IpcContext): void {
@@ -274,7 +274,10 @@ export function registerVideoHandlers(ctx: IpcContext): void {
   // the integration E2E can import without a real media file. Otherwise probe
   // the real file with the bundled ffprobe — the prod packaged-app path the
   // Gate-D smoke exercises (binary resolved from Contents/Resources).
-  if (process.env.OPENCLIP_FAKE_TRANSCRIBE) {
+  // `!isPackagedApp()` (BUG-hqbett): a packaged app must never let a stray
+  // `OPENCLIP_FAKE_TRANSCRIBE` in the environment silently swap the real ffprobe
+  // import for one that fabricates the SourceVideo metadata unread.
+  if (process.env.OPENCLIP_FAKE_TRANSCRIBE && !isPackagedApp()) {
     ctx.ipcMain.handle(
       IPCChannels.IMPORT_VIDEO,
       (_e, req: { filePath: string }): ImportVideoResult => {

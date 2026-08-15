@@ -26,7 +26,7 @@ import type { JobRunner, JobEmitter, JobRunnerContext } from '@main/services/sid
 import { runWhisper, type RunWhisperOptions } from '@main/services/whisper-spawn'
 import { groupSegments, endsSentence } from '@main/services/whisper-parse'
 import type { ParsedTranscript } from '@main/services/whisper-parse'
-import { modelFilePath } from '@main/utils/paths'
+import { isPackagedApp, modelFilePath } from '@main/utils/paths'
 import { isModelInstalled as defaultIsModelInstalled } from '@main/services/model-manager'
 
 // ============================================================================
@@ -210,7 +210,13 @@ export function createFixedTranscribeRunner(
   }
 }
 
-/** The default runner: env-stubbed fake for E2E, else the real whisper services. */
-export const transcribeRunner: JobRunner<'transcribe'> = process.env.OPENCLIP_FAKE_TRANSCRIBE
-  ? createFixedTranscribeRunner()
-  : createTranscribeRunner()
+/**
+ * The default runner: env-stubbed fake for E2E, else the real whisper services.
+ * `!isPackagedApp()` (BUG-hqbett): a packaged app must never let a stray
+ * `OPENCLIP_FAKE_TRANSCRIBE` in the environment silently swap real transcription
+ * for a fixed, fabricated transcript.
+ */
+export const transcribeRunner: JobRunner<'transcribe'> =
+  process.env.OPENCLIP_FAKE_TRANSCRIBE && !isPackagedApp()
+    ? createFixedTranscribeRunner()
+    : createTranscribeRunner()

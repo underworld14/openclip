@@ -268,12 +268,17 @@ export function buildKaraokeLine(
       if (kwBold) ov.push('\\b1')
     }
 
-    // Auto-emoji rides WITH the word so it reveals/highlights together.
+    // Auto-emoji rides WITH the word so it reveals/highlights together. The
+    // emoji is MODEL output (AI-suggested, PRD §7.5 Part K) — escape it exactly
+    // like the word itself, or a `{...}` override block in a hostile/misbehaving
+    // provider's response would be interpreted as styling directives rather than
+    // literal text (BUG-prkcq1).
     const escaped = escapeAssText(w.word)
-    const glyphs = w.emoji
+    const escapedEmoji = w.emoji ? escapeAssText(w.emoji) : undefined
+    const glyphs = escapedEmoji
       ? emojiBefore
-        ? `${w.emoji} ${escaped}`
-        : `${escaped} ${w.emoji}`
+        ? `${escapedEmoji} ${escaped}`
+        : `${escaped} ${escapedEmoji}`
       : escaped
 
     if (ov.length > 0) {

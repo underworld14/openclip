@@ -128,6 +128,22 @@ mac:
 dmg:
   artifactName: ${name}-${version}-${arch}.${ext}
 npmRebuild: false
+# Electron fuses (BUG-hqbett): the app never re-execs itself as plain Node
+# (every sidecar is spawned as its OWN standalone binary — ffmpeg/whisper-cli/
+# yt-dlp, never `child_process.fork()` of the Electron binary), so there is no
+# legitimate use for these in the shipped app; leaving them at their permissive
+# defaults only widens what a local attacker (or a compromised dependency) can
+# do to the packaged .app.
+#   runAsNode: false                      — ELECTRON_RUN_AS_NODE can no longer
+#     turn the packaged binary into an arbitrary Node interpreter.
+#   enableNodeCliInspectArguments: false  — --inspect/--inspect-brk can no
+#     longer attach a debugger (and read process memory) to the shipped app.
+#   onlyLoadAppFromAsar: true             — code can only load from app.asar,
+#     not a same-named `app`/`default_app.asar` planted beside it.
+electronFuses:
+  runAsNode: false
+  enableNodeCliInspectArguments: false
+  onlyLoadAppFromAsar: true
 # `publish:` — GitHub Releases is the real feed (EPIC-k83ghw / FEAT-azvb5c):
 # electron-updater is wired (FEAT-x9femg) and the repo now has a public
 # Releases page to check against. This block's job is `app-update.yml` (which

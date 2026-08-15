@@ -411,6 +411,22 @@ describe('Part K — keyword emphasis + per-word animation + auto-emoji (golden)
     expect(ass).toContain('💰 money')
   })
 
+  it('BUG-prkcq1: an AI-suggested "emoji" carrying an ASS override block renders literally', () => {
+    const style: CaptionStyle = { ...STYLE, autoEmoji: 'ai' }
+    // A hostile/misbehaving provider's response — not a real emoji at all.
+    const ass = buildAss({
+      words,
+      clipStart: 0,
+      clipEnd: 2,
+      style,
+      aiEmojiMap: { money: '{\\pos(0,0)}' }
+    })
+    // The braces and backslash are neutralized exactly like `escapeAssText`
+    // treats spoken text — never interpreted as a real override block.
+    expect(ass).toContain(' money \\{\\\\pos(0,0)\\}')
+    expect(ass).not.toContain(' money {\\pos(0,0)}')
+  })
+
   it('style.wordsPerLine controls line grouping', () => {
     const style: CaptionStyle = { ...STYLE, wordsPerLine: 2 }
     const ass = buildAss({ words, clipStart: 0, clipEnd: 2, style })

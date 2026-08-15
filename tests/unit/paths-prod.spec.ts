@@ -119,6 +119,41 @@ describe('paths.ts prod branch ↔ electron-builder extraResources (PRD §13)', 
     expect(ytDlpPath()).toBe('/override/yt-dlp')
   })
 
+  it('BUG-hqbett: a REAL packaged app (app.isPackaged) ignores every OPENCLIP_* override', async () => {
+    env.OPENCLIP_FFMPEG = '/override/ffmpeg'
+    env.OPENCLIP_FFPROBE = '/override/ffprobe'
+    env.OPENCLIP_WHISPER_CLI = '/override/whisper-cli'
+    env.OPENCLIP_FONTS_DIR = '/override/fonts'
+    env.OPENCLIP_YTDLP = '/override/yt-dlp'
+    vi.resetModules()
+    const {
+      ffmpegPath,
+      ffprobePath,
+      whisperCliPath,
+      fontsDir,
+      ytDlpPath,
+      isPackagedApp,
+      __setPackagedOverrideForTests,
+      platArch
+    } = await loadPaths()
+    // The escape hatch above simulates NODE_ENV=production under vitest — which
+    // is NOT a real packaged Electron app. `__setPackagedOverrideForTests` forces
+    // the one signal that IS ("`require('electron').app.isPackaged`"): the lazy
+    // require it reads can't be intercepted by `vi.mock('electron')` (the same
+    // native-require constraint `media-protocol.spec.ts` documents).
+    __setPackagedOverrideForTests(true)
+    try {
+      expect(isPackagedApp()).toBe(true)
+      expect(ffmpegPath()).toBe(join(RESOURCES, 'ffmpeg', platArch(), 'ffmpeg'))
+      expect(ffprobePath()).toBe(join(RESOURCES, 'ffmpeg', platArch(), 'ffprobe'))
+      expect(whisperCliPath()).toBe(join(RESOURCES, 'whisper', platArch(), 'whisper-cli'))
+      expect(fontsDir()).toBe(join(RESOURCES, 'fonts'))
+      expect(ytDlpPath()).toBe(join(RESOURCES, 'yt-dlp', platArch(), 'yt-dlp'))
+    } finally {
+      __setPackagedOverrideForTests(null)
+    }
+  })
+
   it('dev branch PREFERS the staged standalone yt-dlp, else youtube-dl-exec (F.4)', async () => {
     // Force the dev branch and clear the override. ytDlpPath() prefers the
     // self-contained standalone binary staged under resources/ (the documented

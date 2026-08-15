@@ -15,6 +15,7 @@ import type { JobResult, JobParams } from '@shared/jobs'
 import type { JobRunner, JobEmitter, JobRunnerContext } from '@main/services/sidecar-manager'
 import { extractAudio, type ExtractAudioOptions } from '@main/services/ffmpeg-extract'
 import { probeVideo } from '@main/utils/ffprobe'
+import { isPackagedApp } from '@main/utils/paths'
 
 // ============================================================================
 // Injectable dependencies (real defaults; tests pass fakes)
@@ -87,7 +88,13 @@ function createFakeExtractAudioRunner(): JobRunner<'extract-audio'> {
   }
 }
 
-/** The default runner: env-stubbed fake for E2E, else the real ffmpeg services. */
-export const extractAudioRunner: JobRunner<'extract-audio'> = process.env.OPENCLIP_FAKE_TRANSCRIBE
-  ? createFakeExtractAudioRunner()
-  : createExtractAudioRunner()
+/**
+ * The default runner: env-stubbed fake for E2E, else the real ffmpeg services.
+ * `!isPackagedApp()` (BUG-hqbett): a packaged app must never let a stray
+ * `OPENCLIP_FAKE_TRANSCRIBE` in the environment silently swap the real ffmpeg
+ * extraction for a no-op fake that returns a fabricated WAV path.
+ */
+export const extractAudioRunner: JobRunner<'extract-audio'> =
+  process.env.OPENCLIP_FAKE_TRANSCRIBE && !isPackagedApp()
+    ? createFakeExtractAudioRunner()
+    : createExtractAudioRunner()

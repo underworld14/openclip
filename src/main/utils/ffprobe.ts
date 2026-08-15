@@ -57,13 +57,37 @@ export function parseFrameRate(ratio: string | undefined): number {
 }
 
 /**
+ * Thrown for a file that probes cleanly but has no audio stream (EPIC-k83ghw /
+ * BUG-aryvgg): a screen recording made without a microphone, a muted export, or
+ * silent b-roll used to pass probing, commit a project, and then die minutes
+ * later inside audio extraction with a raw ffmpeg error. OpenClip's whole
+ * pipeline (transcribe, clip detection) is built on the audio track, so this is
+ * caught at the earliest possible point with a plain, actionable sentence
+ * instead of a stderr dump the user cannot act on.
+ */
+export class NoAudioTrackError extends Error {
+  constructor() {
+    super(
+      "This video has no audio track, so OpenClip can't transcribe it or find clips. " +
+        'Try a file that has narration, dialogue, or sound.'
+    )
+    this.name = 'NoAudioTrackError'
+  }
+}
+
+/**
  * Map an `ffprobe -show_format -show_streams` JSON document into `SourceVideo`.
- * Throws when the file has no video stream (the importer surfaces INPUT_INVALID).
+ * Throws when the file has no video stream (the importer surfaces INPUT_INVALID),
+ * or `NoAudioTrackError` when it has no audio stream (BUG-aryvgg).
  */
 export function parseFfprobeJson(json: FfprobeJson, path: string): SourceVideo {
   const video = (json.streams ?? []).find((s) => s.codec_type === 'video')
   if (!video) {
     throw new Error(`ffprobe: no video stream in ${path}`)
+  }
+  const hasAudio = (json.streams ?? []).some((s) => s.codec_type === 'audio')
+  if (!hasAudio) {
+    throw new NoAudioTrackError()
   }
   const fps = parseFrameRate(video.r_frame_rate) || parseFrameRate(video.avg_frame_rate)
   return {

@@ -120,9 +120,74 @@ export async function runImportPipeline(
   return { sourceVideo, wavPath, transcript }
 }
 
-/** True for an http(s) URL (used by the unified smart-import field, F.4). */
+/**
+ * A pasted bare domain, no scheme — e.g. "youtube.com/watch?v=…" (EPIC-k83ghw /
+ * BUG-aryvgg). Requires an explicit "dotted-hostname/path" shape: a bare
+ * filename like "my.video.mp4" has no trailing "/…" and correctly fails this;
+ * a filesystem path starts with "/" (macOS/Linux) or a drive letter + ":"
+ * (Windows), neither of which matches a leading hostname. The rare false
+ * positive this admits — a RELATIVE local path whose first segment happens to
+ * contain a dot, e.g. "my.folder/video.mp4" — is not a realistic paste target
+ * for this field (real local paths from Finder/Explorer are always absolute).
+ */
+const BARE_DOMAIN_URL = /^(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\/\S+$/i
+
+/**
+ * True for an http(s) URL, OR a bare domain that is unambiguously a URL (see
+ * `BARE_DOMAIN_URL`) — used by the unified smart-import field (F.4) to decide
+ * the "Download" vs "Import" label and route to `importUrl`/`importFile`.
+ */
 export function isUrl(value: string): boolean {
-  return /^https?:\/\//i.test(value.trim())
+  const v = value.trim()
+  return /^https?:\/\//i.test(v) || BARE_DOMAIN_URL.test(v)
+}
+
+/**
+ * Add a scheme to a bare-domain URL so it reaches yt-dlp / the main-process
+ * job validator in a shape they accept (both require `http(s)://`, BUG-aryvgg)
+ * — `isUrl` above ALREADY decided this is a URL; this only fills in the part
+ * the user didn't type. A value that already has a scheme, or isn't a URL at
+ * all, passes through unchanged.
+ */
+export function normalizeUrlInput(value: string): string {
+  const v = value.trim()
+  if (/^https?:\/\//i.test(v)) return v
+  return BARE_DOMAIN_URL.test(v) ? `https://${v}` : v
+}
+
+/** Soft extension check for a dropped file — advisory only; ffprobe is the real authority. */
+const DROPPABLE_VIDEO_EXTENSIONS = ['.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v']
+
+export interface DroppedFileResolution {
+  /** Absolute path, or null when the dropped item has no file on disk. */
+  path: string | null
+  /** Set for a soft, non-blocking concern — surface it, but still import. */
+  warning?: string
+}
+
+/**
+ * Resolve a dropped `File` to an absolute path (EPIC-k83ghw / BUG-aryvgg).
+ * Shared between `ImportPanel`'s own drop zone and the window-wide drop target
+ * in `App.tsx` so the two surfaces cannot drift on what counts as "looks like a
+ * video" or how a path-less drop (e.g. dragged web content) is worded.
+ *
+ * Electron removed `File.path`; `getPathForFile` is the preload `files.getPathForFile`.
+ */
+export function resolveDroppedFile(
+  file: File,
+  getPathForFile: (file: File) => string
+): DroppedFileResolution {
+  const path = getPathForFile(file)
+  if (!path) {
+    return { path: null, warning: 'That item has no file on disk — try the file picker instead.' }
+  }
+  const lower = path.toLowerCase()
+  if (!DROPPABLE_VIDEO_EXTENSIONS.some((ext) => lower.endsWith(ext))) {
+    // A soft warning, not a hard block: ffprobe is the real authority on what
+    // is decodable, and this list can only ever be an approximation.
+    return { path, warning: `“${file.name}” doesn't look like a video file. Importing anyway…` }
+  }
+  return { path }
 }
 
 export interface UrlDownloadOptions {

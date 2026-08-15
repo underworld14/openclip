@@ -14,7 +14,7 @@ import { useState } from 'react'
 import { FolderOpen, Loader2, Upload } from 'lucide-react'
 import type { WhisperModelSize } from '@shared/jobs'
 import { useImportController } from '@renderer/hooks/useImportController'
-import { isUrl } from '@renderer/components/import-pipeline'
+import { isUrl, resolveDroppedFile } from '@renderer/components/import-pipeline'
 import { useReadiness } from '@renderer/hooks/useReadiness'
 import { stageLabel } from '@renderer/components/jobStatus'
 import { Button } from '@renderer/components/ui/button'
@@ -72,33 +72,23 @@ export function ImportPanel({ onNeedModel }: ImportPanelProps = {}): React.JSX.E
 
   /**
    * Drag-and-drop import (FEAT-hmsg5h). The Welcome copy has always told the user
-   * to "drop a file", and it is the first acceptance criterion of PRD §6.1, but
-   * no drop target existed anywhere in the renderer.
+   * to "drop a file", and it is the first acceptance criterion of PRD §6.1.
    *
-   * Electron removed `File.path`, so the absolute path comes from
-   * `webUtils.getPathForFile` via the preload `files` namespace.
+   * `stopPropagation` (EPIC-k83ghw / BUG-aryvgg): the window now ALSO has a
+   * drop target (App.tsx, for anywhere outside this panel) — without this, a
+   * drop landing here would bubble up and get imported a second time.
    */
-  const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v']
-
   const onDrop = (e: React.DragEvent): void => {
     e.preventDefault()
+    e.stopPropagation()
     setDragging(false)
     setDropError(null)
     if (ctl.busy) return
     const file = e.dataTransfer.files?.[0]
     if (!file) return
-    const path = window.openclip.files.getPathForFile(file)
-    if (!path) {
-      setDropError('That item has no file on disk — try the file picker instead.')
-      return
-    }
-    const lower = path.toLowerCase()
-    if (!VIDEO_EXTENSIONS.some((ext) => lower.endsWith(ext))) {
-      // A soft warning, not a hard block: ffprobe is the real authority on what
-      // is decodable, and this list can only ever be an approximation.
-      setDropError(`“${file.name}” doesn't look like a video file. Importing anyway…`)
-    }
-    void ctl.importFile(path)
+    const { path, warning } = resolveDroppedFile(file, window.openclip.files.getPathForFile)
+    if (warning) setDropError(warning)
+    if (path) void ctl.importFile(path)
   }
 
   return (

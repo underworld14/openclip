@@ -19,6 +19,7 @@ import {
   runImportPipeline as defaultRunImportPipeline,
   runUrlDownload as defaultRunUrlDownload,
   isUrl,
+  normalizeUrlInput,
   type OpenClipBridge
 } from '@renderer/components/import-pipeline'
 import { drainJob } from '@renderer/hooks/useJob'
@@ -593,7 +594,11 @@ export function createImportController(deps: ImportControllerDeps): ImportContro
   }
 
   async function importUrl(url: string): Promise<void> {
-    const u = url.trim()
+    // Normalize a bare pasted domain ("youtube.com/watch?v=…") to a full URL
+    // (EPIC-k83ghw / BUG-aryvgg) — yt-dlp and the main-process job validator
+    // both require an explicit scheme, so this must happen before `u` reaches
+    // either, not just at the UI's isUrl() routing decision.
+    const u = normalizeUrlInput(url)
     if (!u) return
     // One-time yt-dlp / TOS consent (PRD §20.4) before the first URL download.
     if (storage && storage.getItem(CONSENT_KEY) !== '1') {

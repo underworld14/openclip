@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { isUrl, runUrlDownload } from '@renderer/components/import-pipeline'
+import { isUrl, normalizeUrlInput, runUrlDownload } from '@renderer/components/import-pipeline'
 import { createMockOpenclip } from '../mocks/openclip'
 
 describe('isUrl', () => {
@@ -18,6 +18,39 @@ describe('isUrl', () => {
     expect(isUrl('/Users/me/Movies/clip.mp4')).toBe(false)
     expect(isUrl('clip.mp4')).toBe(false)
     expect(isUrl('ftp://nope')).toBe(false)
+  })
+
+  // EPIC-k83ghw / BUG-aryvgg: a pasted "youtube.com/watch?v=…" (no scheme) used
+  // to be treated as a local file path and fail inside ffprobe instead of
+  // downloading.
+  it('detects a bare pasted domain (no scheme) as a URL', () => {
+    expect(isUrl('youtube.com/watch?v=dQw4w9WgXcQ')).toBe(true)
+    expect(isUrl('www.youtube.com/watch?v=dQw4w9WgXcQ')).toBe(true)
+    expect(isUrl('youtu.be/dQw4w9WgXcQ')).toBe(true)
+    expect(isUrl('  vimeo.com/12345  ')).toBe(true) // trimmed
+  })
+
+  it('does not misclassify a bare filename or an absolute path as a URL', () => {
+    // A filename with a dotted extension but no path after it is not a URL.
+    expect(isUrl('my.video.mp4')).toBe(false)
+    // Absolute paths (macOS/Linux and Windows) never look like a hostname.
+    expect(isUrl('/Users/me/Movies/talk.mp4')).toBe(false)
+    expect(isUrl('C:\\Users\\me\\Videos\\talk.mp4')).toBe(false)
+  })
+})
+
+describe('normalizeUrlInput', () => {
+  it('adds https:// to a bare domain, leaving a schemed URL untouched', () => {
+    expect(normalizeUrlInput('youtube.com/watch?v=dQw4w9WgXcQ')).toBe(
+      'https://youtube.com/watch?v=dQw4w9WgXcQ'
+    )
+    expect(normalizeUrlInput('http://example.com/v.mp4')).toBe('http://example.com/v.mp4')
+    expect(normalizeUrlInput('  https://x.test/v  ')).toBe('https://x.test/v')
+  })
+
+  it('leaves a non-URL value unchanged (a file path stays a file path)', () => {
+    expect(normalizeUrlInput('/Users/me/Movies/talk.mp4')).toBe('/Users/me/Movies/talk.mp4')
+    expect(normalizeUrlInput('my.video.mp4')).toBe('my.video.mp4')
   })
 })
 

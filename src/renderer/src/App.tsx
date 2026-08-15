@@ -31,6 +31,7 @@ import {
 import { Welcome } from '@renderer/components/Welcome'
 import { Dashboard } from '@renderer/components/Dashboard'
 import { ImportPanel } from '@renderer/components/ImportPanel'
+import { resolveDroppedFile } from '@renderer/components/import-pipeline'
 import { TranscriptPanel } from '@renderer/components/TranscriptPanel'
 import { ClipSidebar } from '@renderer/components/ClipSidebar'
 import { PreviewPlayer } from '@renderer/components/PreviewPlayer'
@@ -325,19 +326,6 @@ function App(): React.JSX.Element {
   useEffect(() => {
     void useSettingsStore.getState().load()
   }, [])
-  // Chromium's DEFAULT drop behaviour is to navigate to file:///… — so a video
-  // dropped anywhere outside ImportPanel replaced the whole app with the raw
-  // file and lost all state. The Welcome copy invites dropping, so this has to
-  // be window-wide, not just on the panel that handles it.
-  useEffect(() => {
-    const swallow = (e: DragEvent): void => e.preventDefault()
-    window.addEventListener('dragover', swallow)
-    window.addEventListener('drop', swallow)
-    return () => {
-      window.removeEventListener('dragover', swallow)
-      window.removeEventListener('drop', swallow)
-    }
-  }, [])
   // Default to the dark editor aesthetic; the header toggle flips chrome theme.
   useEffect(() => {
     document.documentElement.classList.toggle('dark', dark)
@@ -378,6 +366,43 @@ function App(): React.JSX.Element {
     // user had to dismiss a dialog to see the result of using it.
     onDone: () => setModal((m) => (m === 'import' ? 'none' : m))
   })
+
+  // Chromium's DEFAULT drop behaviour is to navigate to file:///… — so a video
+  // dropped anywhere outside ImportPanel replaced the whole app with the raw
+  // file and lost all state. The Welcome copy invites dropping, so this has to
+  // be window-wide, not just on the panel that handles it.
+  //
+  // ACTUALLY IMPORTS the file too (EPIC-k83ghw / BUG-aryvgg): before this, a
+  // drop anywhere outside the small ImportPanel card was silently swallowed —
+  // preventDefault stopped the navigation, but nothing else happened, which
+  // reads as a broken feature given the hero copy's explicit invitation.
+  // `importCtl` is the shared singleton (see the comment above it), so this is
+  // the SAME in-flight import ImportPanel's own drop zone would start —
+  // `stopPropagation` there keeps a drop landing on the panel from ALSO firing
+  // here and importing twice.
+  useEffect(() => {
+    const onDragOver = (e: DragEvent): void => e.preventDefault()
+    const onWindowDrop = (e: DragEvent): void => {
+      e.preventDefault()
+      if (importCtl.busy) return
+      const file = e.dataTransfer?.files?.[0]
+      if (!file) return
+      const { path, warning } = resolveDroppedFile(file, window.openclip.files.getPathForFile)
+      if (warning) toast.warning(warning)
+      if (path) void importCtl.importFile(path)
+    }
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('drop', onWindowDrop)
+    return () => {
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('drop', onWindowDrop)
+    }
+    // `importCtl` is a fresh object every render; `importFile` inside it is a
+    // stable reference to the singleton controller's method (see the comment
+    // above it), so depending on the object itself would re-subscribe on every
+    // render for no reason. `busy` is the only field that needs to be current.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [importCtl.busy, importCtl.importFile])
 
   // First-run readiness: what the user still has to set up, and whether Generate
   // can run at all (FEAT-c5a15c).

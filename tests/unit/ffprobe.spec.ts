@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { parseFfprobeJson, parseFrameRate } from '@main/utils/ffprobe'
+import { parseFfprobeJson, parseFrameRate, NoAudioTrackError } from '@main/utils/ffprobe'
 import { SourceVideo } from '@shared/schema'
 
 const FFPROBE_JSON = {
@@ -55,7 +55,10 @@ describe('ffprobe: parseFfprobeJson → SourceVideo (PRD §6.1/§9.3)', () => {
 
   it('prefers r_frame_rate but falls back to avg_frame_rate', () => {
     const json = {
-      streams: [{ codec_type: 'video', width: 640, height: 480, avg_frame_rate: '24/1' }],
+      streams: [
+        { codec_type: 'video', width: 640, height: 480, avg_frame_rate: '24/1' },
+        { codec_type: 'audio' }
+      ],
       format: { duration: '10', format_name: 'mp4' }
     }
     expect(parseFfprobeJson(json, '/x.mp4').fps).toBe(24)
@@ -66,9 +69,24 @@ describe('ffprobe: parseFfprobeJson → SourceVideo (PRD §6.1/§9.3)', () => {
     expect(() => parseFfprobeJson(json, '/audio-only.mp3')).toThrow(/no video stream/i)
   })
 
+  // EPIC-k83ghw / BUG-aryvgg: a screen recording with no microphone, a muted
+  // export, or silent b-roll used to pass probing, commit a project, and only
+  // fail minutes later inside audio extraction with raw ffmpeg output.
+  it('throws NoAudioTrackError with a plain, actionable sentence when there is no audio stream', () => {
+    const json = {
+      streams: [{ codec_type: 'video', width: 1920, height: 1080, r_frame_rate: '30/1' }],
+      format: { duration: '10', format_name: 'mp4' }
+    }
+    expect(() => parseFfprobeJson(json, '/silent.mp4')).toThrow(NoAudioTrackError)
+    expect(() => parseFfprobeJson(json, '/silent.mp4')).toThrow(/no audio track/i)
+  })
+
   it('coerces a non-finite ffprobe duration ("N/A") to a Zod-valid number (audit fix openclip-bro)', () => {
     const json = {
-      streams: [{ codec_type: 'video', width: 1280, height: 720, r_frame_rate: '25/1' }],
+      streams: [
+        { codec_type: 'video', width: 1280, height: 720, r_frame_rate: '25/1' },
+        { codec_type: 'audio' }
+      ],
       format: { duration: 'N/A', format_name: 'mp4' }
     }
     const sv = parseFfprobeJson(json, '/frag.mp4')

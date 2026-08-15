@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { runImportPipeline } from '@renderer/components/import-pipeline'
+import { runImportPipeline, resolveDroppedFile } from '@renderer/components/import-pipeline'
 import { createMockOpenclip } from '../mocks/openclip'
 import { transcribeResultFixture, transcribePartialFixture } from '../fixtures/contract'
 
@@ -110,5 +110,49 @@ describe('runImportPipeline: import → extract → transcribe', () => {
         model: 'base'
       })
     ).rejects.toThrow(/CANCELLED/)
+  })
+
+  // EPIC-k83ghw / BUG-aryvgg: a video with no audio track used to probe clean,
+  // commit a project, and only die minutes later inside extraction with raw
+  // ffmpeg output. `NoAudioTrackError` (ffprobe.ts) is a plain Error thrown
+  // from the probe step — this pins that the pipeline propagates it verbatim,
+  // the same as any other probe failure, rather than swallowing or wrapping it.
+  it('propagates a probe rejection (e.g. no-audio-track) as a thrown pipeline error', async () => {
+    const openclip = createMockOpenclip()
+    openclip.video.import = async () => {
+      throw new Error(
+        "This video has no audio track, so OpenClip can't transcribe it or find clips."
+      )
+    }
+    await expect(
+      runImportPipeline({
+        bridge: openclip,
+        filePath: '/tmp/silent.mp4',
+        projectId: 'p1',
+        model: 'base'
+      })
+    ).rejects.toThrow(/no audio track/i)
+  })
+})
+
+describe('resolveDroppedFile (EPIC-k83ghw / BUG-aryvgg — shared by ImportPanel and the window-wide drop target)', () => {
+  const file = new File(['x'], 'talk.mp4', { type: 'video/mp4' })
+
+  it('resolves a real video path with no warning', () => {
+    const result = resolveDroppedFile(file, () => '/Users/me/Movies/talk.mp4')
+    expect(result).toEqual({ path: '/Users/me/Movies/talk.mp4' })
+  })
+
+  it('warns and returns a null path for a dropped item with nothing on disk', () => {
+    const result = resolveDroppedFile(file, () => '')
+    expect(result.path).toBeNull()
+    expect(result.warning).toMatch(/no file on disk/i)
+  })
+
+  it('warns but still resolves the path for a non-video extension (ffprobe is the real authority)', () => {
+    const pdf = new File(['x'], 'notes.pdf', { type: 'application/pdf' })
+    const result = resolveDroppedFile(pdf, () => '/Users/me/Documents/notes.pdf')
+    expect(result.path).toBe('/Users/me/Documents/notes.pdf')
+    expect(result.warning).toMatch(/doesn't look like a video/i)
   })
 })

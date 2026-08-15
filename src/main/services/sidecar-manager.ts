@@ -30,6 +30,7 @@
 import { cpus } from 'node:os'
 import { JobError } from '@shared/jobs'
 import type { JobKind, JobParams, JobResult, JobPartial, JobErrorCode } from '@shared/jobs'
+import { describeSidecarFailure } from './sidecar-errors'
 
 // ============================================================================
 // Runner contract (the frozen seam every track implements)
@@ -372,15 +373,18 @@ export class SidecarManager {
           return
         }
         // A runner can CLASSIFY a failure by throwing a JobError (e.g. a permanent,
-        // non-retriable INPUT_INVALID for an invalid URL or an unverifiable model);
-        // otherwise an unexpected throw is a retriable SIDECAR_CRASH (audit fix
-        // openclip-1ly).
+        // non-retriable INPUT_INVALID for an invalid URL or an unverifiable model,
+        // or generate-clips's own ai-errors.describeProviderFailure); otherwise an
+        // unexpected throw is run through the sidecar classifier (EPIC-k83ghw /
+        // BUG-whdqsc) so a raw ffmpeg/whisper/yt-dlp failure never reaches the
+        // user as a wall of stderr — every job kind gets this for free from one
+        // place, rather than each runner classifying its own errors.
         if (err instanceof JobError) {
           emit.error(err.code, err.message, err.retriable)
           return
         }
-        const message = err instanceof Error ? err.message : String(err)
-        emit.error('SIDECAR_CRASH', message, true)
+        const failure = describeSidecarFailure(err)
+        emit.error(failure.code, failure.message, failure.retriable)
       })
 
     return jobId

@@ -18,6 +18,7 @@ import {
   describeDetail,
   describeTask,
   isCancellation,
+  stripJobErrorPrefix,
   activeTasks,
   childTasks,
   selectPrimaryTask,
@@ -186,6 +187,29 @@ describe('isCancellation', () => {
   it('does not mistake a real failure for one', () => {
     expect(isCancellation(new Error('export failed [SIDECAR_CRASH]: ffmpeg died'))).toBe(false)
     expect(isCancellation('some string')).toBe(false)
+  })
+})
+
+// EPIC-k83ghw / BUG-whdqsc: error codes must not be prefixed onto
+// user-facing text (AC3), even though drainJob's thrown Error still carries
+// `${kind} failed [${code}]:` so isCancellation above can keep sniffing it.
+describe('stripJobErrorPrefix', () => {
+  it('removes the kind+code prefix, leaving the already-human message', () => {
+    expect(
+      stripJobErrorPrefix('url-download failed [SIDECAR_CRASH]: This video refused the download.')
+    ).toBe('This video refused the download.')
+    expect(stripJobErrorPrefix('export failed [OUT_OF_MEMORY]: Ran out of memory.')).toBe(
+      'Ran out of memory.'
+    )
+    expect(stripJobErrorPrefix('extract-audio failed [SIDECAR_CRASH]: Your disk is full.')).toBe(
+      'Your disk is full.'
+    )
+  })
+
+  it('leaves a message with no matching prefix unchanged', () => {
+    expect(stripJobErrorPrefix('Could not save the project file.')).toBe(
+      'Could not save the project file.'
+    )
   })
 })
 

@@ -12,6 +12,7 @@ import { useProjectStore } from '@renderer/stores/projectStore'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { useBrandStore, activeBrand } from '@renderer/stores/brandStore'
 import { trackTask, useJobsStore } from '@renderer/stores/jobsStore'
+import { stripJobErrorPrefix } from '@renderer/components/jobStatus'
 import { buildExportParams } from '@renderer/stores/projectStore/exportSlice'
 import {
   exportToFile,
@@ -205,7 +206,9 @@ export function ExportPanel(): React.JSX.Element {
       })
       setPhase('done')
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e))
+      // EPIC-k83ghw / BUG-whdqsc: strip drainJob's `${kind} failed [${code}]:`
+      // prefix before this user-facing inline message.
+      setErr(stripJobErrorPrefix(e instanceof Error ? e.message : String(e)))
       setPhase('error')
     }
   }, [

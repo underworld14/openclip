@@ -11,7 +11,7 @@ import type { StateCreator } from 'zustand'
 import type { Clip, DetectedClip } from '@shared/schema'
 import type { GenerateClipsRequest } from '@shared/channels'
 import { runGenerateClips } from '@renderer/components/generate-clips-run'
-import { isCancellation } from '@renderer/components/jobStatus'
+import { isCancellation, stripJobErrorPrefix } from '@renderer/components/jobStatus'
 import type { ProjectStore } from './index'
 
 export interface ClipsSlice {
@@ -267,8 +267,12 @@ export const createClipsSlice: StateCreator<ProjectStore, [], [], ClipsSlice> = 
         generateJobId: null,
         provisionalClips: [],
         // A cancel is the user's own doing — say nothing rather than presenting
-        // their own click back to them as a failure.
-        generateError: isCancellation(err) ? null : err instanceof Error ? err.message : String(err)
+        // their own click back to them as a failure. Otherwise strip drainJob's
+        // `${kind} failed [${code}]:` prefix (EPIC-k83ghw / BUG-whdqsc) — this
+        // is user-facing text.
+        generateError: isCancellation(err)
+          ? null
+          : stripJobErrorPrefix(err instanceof Error ? err.message : String(err))
       })
     }
   },

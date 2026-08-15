@@ -14,7 +14,11 @@
 
 import type { WhisperModelSize, JobResult, JobPartial } from '@shared/jobs'
 import type { Project, SourceVideo } from '@shared/schema'
-import { isCancellation, type TaskDetail } from '@renderer/components/jobStatus'
+import {
+  isCancellation,
+  stripJobErrorPrefix,
+  type TaskDetail
+} from '@renderer/components/jobStatus'
 import {
   runImportPipeline as defaultRunImportPipeline,
   runUrlDownload as defaultRunUrlDownload,
@@ -212,7 +216,12 @@ function basename(p: string): string {
   return p.split(/[\\/]/).pop() || p
 }
 function asMessage(e: unknown): string {
-  return e instanceof Error ? e.message : String(e)
+  const raw = e instanceof Error ? e.message : String(e)
+  // EPIC-k83ghw / BUG-whdqsc: this is user-facing text (ctl.error, the status
+  // bar row) — drainJob's internal `${kind} failed [${code}]:` prefix stays
+  // for isCancellation() to sniff (it runs on the ORIGINAL `e`, before this),
+  // but a reader of the toast has no use for job kinds and error codes.
+  return stripJobErrorPrefix(raw)
 }
 
 export function createImportController(deps: ImportControllerDeps): ImportController {

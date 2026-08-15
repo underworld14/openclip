@@ -21,6 +21,7 @@ import { buildExportParams } from '@renderer/stores/projectStore/exportSlice'
 import { resolveEffectiveCaptionStyle } from './captionPresets'
 import { brandCaptionOverride, brandLogoParams } from './brandKit'
 import type { PlatformPreset } from './platformPresets'
+import { stripJobErrorPrefix } from './jobStatus'
 
 /** Join a directory + filename with the directory's separator (default '/'). */
 function joinPath(dir: string, name: string): string {
@@ -193,7 +194,9 @@ export async function runBatchExport(opts: RunBatchExportOptions): Promise<Batch
         opts.onClipStatus?.(clip.id, 'done', { outputPath })
         return { clipId: clip.id, outputPath, status: 'done', result }
       } catch (e) {
-        const error = e instanceof Error ? e.message : String(e)
+        // EPIC-k83ghw / BUG-whdqsc: strip drainJob's `${kind} failed [${code}]:`
+        // prefix — this per-clip row is user-facing.
+        const error = stripJobErrorPrefix(e instanceof Error ? e.message : String(e))
         const status: BatchClipStatus = aborted ? 'canceled' : 'error'
         opts.onClipStatus?.(clip.id, status, { error })
         return { clipId: clip.id, outputPath, status, error }

@@ -8,6 +8,7 @@
 import type { JobResult, WhisperModelSize } from '@shared/jobs'
 import { drainJob } from '@renderer/hooks/useJob'
 import { trackTask } from '@renderer/stores/jobsStore'
+import { stripJobErrorPrefix } from '@renderer/components/jobStatus'
 
 // ============================================================================
 // Model table (PRD §6.2 GGML model selection + §13 download UX)
@@ -143,7 +144,9 @@ export function startModelDownload(opts: StartModelDownloadOptions): {
       return true
     })
     .catch((e: unknown) => {
-      opts.onError?.(e instanceof Error ? e.message : String(e))
+      // EPIC-k83ghw / BUG-whdqsc: strip drainJob's `${kind} failed [${code}]:`
+      // prefix — every caller of `onError` shows this in a toast.
+      opts.onError?.(stripJobErrorPrefix(e instanceof Error ? e.message : String(e)))
       return false
     })
 

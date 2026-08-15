@@ -289,6 +289,21 @@ export function isCancellation(err: unknown): boolean {
   return /\[CANCELLED\]/.test(message)
 }
 
+/**
+ * Strip `drainJob`'s internal `` `${kind} failed [${code}]: ` `` prefix before
+ * a job error reaches the user (EPIC-k83ghw / BUG-whdqsc). The prefix exists
+ * so `isCancellation` above can sniff the code out of a thrown Error — a
+ * content creator reading a failure toast doesn't think in job kinds and
+ * error codes, and by the time a message gets here it has already been run
+ * through `sidecar-errors.describeSidecarFailure` / `ai-errors.humanTransportError`
+ * on the main side, so what follows the prefix is already a plain sentence.
+ * A message with no matching prefix (not job-plane in origin) passes through
+ * unchanged.
+ */
+export function stripJobErrorPrefix(message: string): string {
+  return message.replace(/^[a-z][a-z-]*\sfailed\s\[[A-Z_]+\]:\s*/, '')
+}
+
 /** Running/queued work, most recent first; children excluded (they nest). */
 export function activeTasks(tasks: Record<string, JobTask>): JobTask[] {
   return Object.values(tasks)

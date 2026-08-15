@@ -26,7 +26,12 @@
 
 import { create } from 'zustand'
 import type { JobTask, TaskDetail, TaskKind, TaskStatus } from '@renderer/components/jobStatus'
-import { activeTasks, childTasks, isCancellation } from '@renderer/components/jobStatus'
+import {
+  activeTasks,
+  childTasks,
+  isCancellation,
+  stripJobErrorPrefix
+} from '@renderer/components/jobStatus'
 
 /** How long a SUCCEEDED task stays on screen before it clears itself. */
 export const DONE_DISMISS_MS = 6000
@@ -241,7 +246,9 @@ export async function trackTask<T>(
     return result
   } catch (err) {
     if (abandoned) throw err
-    const message = err instanceof Error ? err.message : String(err)
+    // EPIC-k83ghw / BUG-whdqsc: strip drainJob's `${kind} failed [${code}]:`
+    // prefix for the user-facing row; isCancellation runs on `err` itself.
+    const message = stripJobErrorPrefix(err instanceof Error ? err.message : String(err))
     if (isCancellation(err)) useJobsStore.getState().settleTask(id, 'canceled')
     else useJobsStore.getState().settleTask(id, 'error', { error: message })
     throw err

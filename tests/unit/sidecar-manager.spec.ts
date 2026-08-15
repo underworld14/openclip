@@ -467,3 +467,37 @@ describe('SidecarManager.startJob drives a scripted runner to done over a real p
     expect(last?.code).toBe('CANCELLED')
   })
 })
+
+// EPIC-k83ghw / BUG-whdqsc: an unclassified runner throw (the raw ffmpeg/
+// whisper/yt-dlp shape — "<binary> exited with code N\n<stderr>") must reach
+// the job's terminal `error` event ALREADY run through the sidecar
+// classifier, not verbatim. `extract-audio` is unclaimed by any earlier test
+// in this file (unlike transcribe/export/model-download/url-download).
+describe('SidecarManager: an unclassified runner throw is run through describeSidecarFailure (BUG-whdqsc)', () => {
+  it('classifies a raw ffmpeg-shaped throw into a plain-language terminal error', async () => {
+    registerRunner('extract-audio', async () => {
+      throw new Error(
+        'ffmpeg exited with code 1\n[libx264 @ 0x600002a1c000] some encoder log\n' +
+          'av_interleaved_write_frame(): No space left on device\n'
+      )
+    })
+
+    const mgr = new SidecarManager({ coreCount: 10 })
+    const { port1, port2 } = new MessageChannel()
+    const eventPort: EventPort = {
+      postMessage: (v) => port2.postMessage(v),
+      close: () => port2.close(),
+      on: (e, l) => port2.on(e, l),
+      start: () => port2.start()
+    }
+    const collected = collectPort(port1 as never)
+    mgr.startJob('extract-audio', { projectId: 'p1', sourcePath: '/x.mp4' }, eventPort)
+    await collected.done
+
+    const last = collected.events.at(-1) as { t: string; code?: string; message?: string }
+    expect(last.t).toBe('error')
+    expect(last.code).toBe('SIDECAR_CRASH')
+    expect(last.message).toBe('Your disk is full. Free up some space and try again.')
+    expect(last.message).not.toMatch(/libx264|exited with code/)
+  })
+})

@@ -94,8 +94,12 @@ export function isSafeEndpointUrl(raw: string): boolean {
   // echoed by any code that renders the endpoint. The key belongs in safeStorage.
   if (url.username || url.password) return false
   // `${base}/models` and the SDK's `${base}/chat/completions` both append a path
-  // segment; a query or fragment silently lands in the wrong place.
-  if (url.search || url.hash) return false
+  // segment; a query or fragment silently lands in the wrong place. Test the RAW
+  // string, not the parsed parts: a trailing `http://host/v1?` parses to an empty
+  // `search`, so the parsed check alone accepts it — and the joins then produce
+  // `http://host/v1?/models`, which resolves to the wrong path with `/models` as
+  // a query string.
+  if (raw.includes('?') || raw.includes('#')) return false
   if (isMetadataHost(url.hostname)) return false
   return true
 }

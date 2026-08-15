@@ -30,6 +30,7 @@ import {
   clipFixture,
   projectFixture,
   settingsFixture,
+  customEndpointSettingsFixture,
   clipSchemaFixture,
   sourceVideoFixture,
   exportRecordFixture,
@@ -75,6 +76,15 @@ describe('contract fixtures validate against the frozen Zod schemas', () => {
 
   it('Settings', () => {
     expect(Settings.parse(settingsFixture)).toEqual(settingsFixture)
+  })
+
+  it('Settings with a custom endpoint (exercises the baseUrl refine)', () => {
+    expect(Settings.parse(customEndpointSettingsFixture)).toEqual(customEndpointSettingsFixture)
+    // …and the refine is live, not decorative.
+    expect(
+      Settings.safeParse({ ...customEndpointSettingsFixture, baseUrl: 'javascript:alert(1)' })
+        .success
+    ).toBe(false)
   })
 
   it('AI ClipSchema (strict — additionalProperties:false)', () => {

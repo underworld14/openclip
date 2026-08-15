@@ -24,7 +24,7 @@ import { JobError } from '@shared/jobs'
 import type { JobResult, JobParams } from '@shared/jobs'
 import type { AIProvider } from '@shared/schema'
 import { providerDisplay } from '@shared/ai-providers'
-import { describeProviderFailure } from '@main/services/ai-errors'
+import { describeProviderFailure, redactSecrets } from '@main/services/ai-errors'
 import type { JobRunner, JobEmitter, JobRunnerContext } from '@main/services/sidecar-manager'
 import {
   AI_REQUEST_TIMEOUT_MS,
@@ -146,14 +146,23 @@ export function createGenerateClipsRunner(
         // The repair ladder gave up. This is deterministic for this input —
         // retrying the identical prompt will fail identically — so it is a
         // non-retriable INPUT_INVALID, not a crash.
-        throw new JobError('INPUT_INVALID', `${result.error.code}: ${result.error.message}`, false)
+        //
+        // Redacted like every other outbound message: this one quotes the MODEL's
+        // output (a JSON.parse error embeds a slice of the response), which for a
+        // custom endpoint is chosen by a server we do not control.
+        throw new JobError(
+          'INPUT_INVALID',
+          `${result.error.code}: ${redactSecrets(result.error.message, apiKey)}`,
+          false
+        )
       }
 
       emit.progress(100, 'analyzing')
       // Carry non-fatal warnings (a chunk that failed while others succeeded)
       // through to the renderer, so a partial run stops looking complete
-      // (BUG-yq6qbw).
-      return result.warnings?.length ? { ...result.value, warnings: result.warnings } : result.value
+      // (BUG-yq6qbw). Same reasoning as above: they quote model output.
+      const warnings = result.warnings?.map((w) => redactSecrets(w, apiKey))
+      return warnings?.length ? { ...result.value, warnings } : result.value
     } catch (err) {
       // A deadline abort with the job itself NOT cancelled is the hung-provider
       // case this ticket exists for. Name it, and mark it retriable: a different

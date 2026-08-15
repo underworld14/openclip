@@ -126,6 +126,31 @@ describe('SettingsPanel: the custom endpoint Base URL', () => {
     expect(setSpy).not.toHaveBeenCalled()
   })
 
+  it('stays quiet while the URL is still being typed', async () => {
+    // A URL is invalid for most of the time it is being written (`http:/`), so
+    // validating per keystroke shows a red error from the second character and
+    // teaches the user to ignore it. Complain only about a finished attempt.
+    mount({})
+    render(<SettingsPanel />)
+    const input = await baseUrlField()
+
+    await act(async () => {
+      fireEvent.change(input, { target: { value: 'http:/' } })
+    })
+    expect(screen.queryByTestId('base-url-error')).toBeNull()
+
+    await act(async () => {
+      fireEvent.blur(input)
+    })
+    expect(await screen.findByTestId('base-url-error')).toBeTruthy()
+
+    // …and it clears again as soon as they resume typing.
+    await act(async () => {
+      fireEvent.change(input, { target: { value: 'http://localhost:1234/v1' } })
+    })
+    expect(screen.queryByTestId('base-url-error')).toBeNull()
+  })
+
   it('warns about plain HTTP to a host that is not this machine or LAN', async () => {
     mount({})
     render(<SettingsPanel />)

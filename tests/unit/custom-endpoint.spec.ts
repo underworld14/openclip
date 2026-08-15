@@ -18,12 +18,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildOpenAITransport,
+  clearStructuredModeMemo,
   clipsMemoKey,
   createTransport,
   extractJsonCandidate,
   isUnsupportedStructuredOutputError,
   OPENAI_COMPAT_MODES,
   resolvedStructuredMode,
+  runRepairLadder,
   SYSTEM_PROMPT,
   __resetStructuredModeMemoForTests,
   type OpenAILike
@@ -83,11 +85,14 @@ describe('structured-output downgrade ladder', () => {
     expect(bodies[2].response_format).toBeUndefined()
   })
 
-  it('sends the schema IN THE PROMPT for every non-strict rung', async () => {
+  it('sends the schema IN THE PROMPT on EVERY rung of an unknown endpoint', async () => {
     // The prompt never contained the schema — it lived only inside
-    // response_format. Downgrading without this asks the model to match
-    // something it was never shown, and also covers servers that silently
-    // IGNORE an unknown response_format and answer 200 with prose.
+    // response_format. Rung 0 needs it as much as the downgraded rungs do,
+    // because of the failure no error-driven ladder can ever see: a server that
+    // ACCEPTS an unrecognised response_format, ignores it, and answers 200 with
+    // prose. There is no error to downgrade on, so if rung 0 did not show the
+    // schema the model was never told what to produce — and the run dies as
+    // INPUT_INVALID for that server, permanently.
     const { client, bodies } = fakeClient({ failWith: httpError(400), failures: 2 })
     const transport = buildOpenAITransport(client, 'local-model', { modes: OPENAI_COMPAT_MODES })
 
@@ -97,10 +102,45 @@ describe('structured-output downgrade ladder', () => {
       const messages = bodies[i].messages as Array<{ role: string; content: string }>
       return messages.find((m) => m.role === 'user')!.content
     }
-    expect(userText(0)).toBe('USR')
-    expect(userText(1)).toContain('<schema>')
-    expect(userText(2)).toContain('<schema>')
-    expect(userText(2)).toContain('"additionalProperties":false')
+    for (const i of [0, 1, 2]) {
+      expect(userText(i), `rung ${i}`).toContain('<schema>')
+      expect(userText(i), `rung ${i}`).toContain('"additionalProperties":false')
+      expect(userText(i), `rung ${i}`).toContain('USR')
+    }
+  })
+
+  it('does NOT pad the prompt for a single-rung ladder', async () => {
+    // OpenAI and OpenRouter guarantee the schema through the API, so repeating
+    // it in the prompt is pure token cost on every chunk of every run.
+    const { client, bodies } = fakeClient({})
+    await buildOpenAITransport(client, 'gpt-4o-mini')(PROMPT)
+
+    const messages = bodies[0].messages as Array<{ role: string; content: string }>
+    expect(messages.find((m) => m.role === 'user')!.content).toBe('USR')
+  })
+
+  it('still produces JSON when the server IGNORES response_format (200 + prose)', async () => {
+    // The silent-ignore case, end to end: no error is ever raised, so the ladder
+    // never downgrades — the schema block in the prompt is the only thing making
+    // this work.
+    const bodies: Array<Record<string, unknown>> = []
+    const client: OpenAILike = {
+      chat: {
+        completions: {
+          create: async (body) => {
+            bodies.push(body as Record<string, unknown>)
+            return { choices: [{ message: { content: 'Sure! {"clips":[]}' } }] }
+          }
+        }
+      }
+    }
+    const res = await buildOpenAITransport(client, 'llama.cpp-build', {
+      modes: OPENAI_COMPAT_MODES,
+      downgradeOnEmpty: true
+    })(PROMPT)
+
+    expect(bodies).toHaveLength(1) // nothing to downgrade on
+    expect(JSON.parse(extractJsonCandidate(res.rawText))).toEqual({ clips: [] })
   })
 
   it('keeps the default single-rung behaviour for the fixed providers', async () => {
@@ -136,6 +176,20 @@ describe('structured-output downgrade ladder', () => {
     expect(isUnsupportedStructuredOutputError(httpError(422, ''))).toBe(true)
     expect(isUnsupportedStructuredOutputError(httpError(400, 'context_length exceeded'))).toBe(
       false
+    )
+  })
+
+  it('does not read a PORT as an HTTP status', () => {
+    // A bare \b\d{3}\b scan over the message classifies
+    // `ECONNREFUSED 127.0.0.1:400` as a downgradable 400 and burns two doomed
+    // requests against a server that simply is not running.
+    for (const port of [400, 422, 501]) {
+      const err = new Error(`connect ECONNREFUSED 127.0.0.1:${port}`)
+      expect(isUnsupportedStructuredOutputError(err), String(port)).toBe(false)
+    }
+    // A real SDK message still classifies: it leads with the status.
+    expect(isUnsupportedStructuredOutputError(new Error('400 {"error":{"message":"nope"}}'))).toBe(
+      true
     )
   })
 
@@ -236,6 +290,31 @@ describe('the per-endpoint memo', () => {
       clipsMemoKey('http://localhost:1234/v1', 'm')
     )
   })
+
+  it('can be cleared, so a transient 400 is not a life sentence', async () => {
+    // The floor only ever moves DOWN, which bounds the probe cost but has no
+    // recovery: one 400 from a server still loading its model would otherwise pin
+    // that endpoint to a weaker mode for the whole session, silently. Test
+    // connection clears the entry, which is why it is the user's remedy.
+    const memoKey = clipsMemoKey('http://localhost:1234/v1', 'local-model')
+    const flaky = fakeClient({ failWith: httpError(400), failures: 1 })
+    await buildOpenAITransport(flaky.client, 'local-model', {
+      modes: OPENAI_COMPAT_MODES,
+      memoKey
+    })(PROMPT)
+    expect(resolvedStructuredMode(memoKey)).toBe('json_object')
+
+    clearStructuredModeMemo(memoKey)
+    expect(resolvedStructuredMode(memoKey)).toBeUndefined()
+
+    const healthy = fakeClient({})
+    await buildOpenAITransport(healthy.client, 'local-model', {
+      modes: OPENAI_COMPAT_MODES,
+      memoKey
+    })(PROMPT)
+    expect(modeOf(healthy.bodies[0])).toBe('json_schema')
+    expect(resolvedStructuredMode(memoKey)).toBe('json_schema')
+  })
 })
 
 describe('createTransport: the custom provider', () => {
@@ -290,6 +369,44 @@ describe('createTransport: the custom provider', () => {
     await expect(
       createTransport({ provider: 'custom', model: 'local-model', apiKey: null })
     ).rejects.toThrow(/Base URL/i)
+  })
+})
+
+describe('the two ladders stay orthogonal', () => {
+  it('never exceeds modes × 2 provider calls — the ONE-repair invariant holds', async () => {
+    // The downgrade ladder lives INSIDE a single RawTransport call, below
+    // `runRepairLadder`. If the two ever nested the other way (or the downgrade
+    // leaked into the repair rung) a single chunk could cost 2 repairs × 3 modes,
+    // and "exactly one repair round-trip" would quietly stop being true.
+    const bodies: Array<Record<string, unknown>> = []
+    let calls = 0
+    const client: OpenAILike = {
+      chat: {
+        completions: {
+          create: async (body) => {
+            bodies.push(body as Record<string, unknown>)
+            calls += 1
+            // Refuse json_schema; then answer unparseable prose forever, which is
+            // what drives the repair ladder to its own limit.
+            if (
+              (body as { response_format?: { type?: string } }).response_format?.type ===
+              'json_schema'
+            ) {
+              throw httpError(400)
+            }
+            return { choices: [{ message: { content: 'not json at all' } }] }
+          }
+        }
+      }
+    }
+    const transport = buildOpenAITransport(client, 'local-model', { modes: OPENAI_COMPAT_MODES })
+
+    const result = await runRepairLadder(transport, PROMPT)
+
+    expect(result.ok).toBe(false)
+    // 1 refused json_schema + 1 json_object answer, then ONE repair round-trip
+    // (which starts at the memo-free rung 0 again: refused + answered).
+    expect(calls).toBeLessThanOrEqual(OPENAI_COMPAT_MODES.length * 2)
   })
 })
 

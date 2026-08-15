@@ -124,6 +124,8 @@ export function SettingsPanel({
   const modelsError = useSettingsStore((s) => s.modelsError)
   const modelsFetchedAt = useSettingsStore((s) => s.modelsFetchedAt)
   const loadModels = useSettingsStore((s) => s.loadModels)
+  /** A patch main refused (e.g. a base URL that fails the schema) — never silent. */
+  const saveError = useSettingsStore((s) => s.saveError)
 
   // Local-only key entry; cleared after submit (never persisted in renderer).
   const [keyDraft, setKeyDraft] = useState('')
@@ -170,7 +172,12 @@ export function SettingsPanel({
 
   const normalizedDraft = normalizeBaseUrl(baseUrlDraft)
   const baseUrlInvalid = normalizedDraft !== undefined && !isSafeEndpointUrl(normalizedDraft)
+  // Only complain about a URL the user has finished writing. A half-typed
+  // `http:/` is invalid by definition, so validating per keystroke would show a
+  // red error from the second character onwards and teach the user to ignore it.
+  const [baseUrlTouched, setBaseUrlTouched] = useState(false)
   const commitBaseUrl = (): void => {
+    setBaseUrlTouched(true)
     // Refuse to SEND an invalid value. `settings.set` rejects it main-side and
     // every caller here is `void save(...)`, so persisting-and-failing would look
     // exactly like persisting-and-succeeding (FEAT-bysdwg).
@@ -354,16 +361,24 @@ export function SettingsPanel({
                 id="ai-base-url"
                 value={baseUrlDraft}
                 placeholder="http://localhost:1234/v1"
-                onChange={(e) => setBaseUrlDraft(e.target.value)}
+                onChange={(e) => {
+                  setBaseUrlTouched(false)
+                  setBaseUrlDraft(e.target.value)
+                }}
                 onBlur={commitBaseUrl}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
                 }}
               />
-              {baseUrlInvalid && (
+              {baseUrlTouched && baseUrlInvalid && (
                 <span className="text-xs text-destructive" data-testid="base-url-error">
                   Must be an http(s) URL with no credentials, query or fragment — e.g.
                   http://localhost:1234/v1
+                </span>
+              )}
+              {saveError && (
+                <span className="text-xs text-destructive" data-testid="settings-save-error">
+                  {saveError}
                 </span>
               )}
               {!baseUrlInvalid && isInsecureHttpEndpoint(normalizedDraft) && (

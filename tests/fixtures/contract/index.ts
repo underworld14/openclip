@@ -154,6 +154,23 @@ export const settingsFixture: Settings = {
   telemetryOptIn: false
 }
 
+/**
+ * Settings for the custom OpenAI-compatible provider (FEAT-bysdwg).
+ *
+ * SEPARATE from `settingsFixture` on purpose: that one is also the renderer mock
+ * bridge's default document (`tests/mocks/openclip.ts`), so giving it a base URL
+ * silently changes the starting state of every renderer spec. This one exists so
+ * `contract.spec.ts` still exercises the `baseUrl` refine — a fixture that only
+ * ever leaves the field `undefined` would let the validation rot unnoticed.
+ */
+export const customEndpointSettingsFixture: Settings = {
+  ...settingsFixture,
+  aiProvider: 'custom',
+  model: 'qwen2.5-32b-instruct',
+  baseUrl: 'http://localhost:1234/v1',
+  customKeyEndpoint: 'http://localhost:1234'
+}
+
 // ── AI ClipSchema (LLM structured output) ────────────────────────────────────
 export const clipSchemaFixture: ClipSchema = {
   clips: [

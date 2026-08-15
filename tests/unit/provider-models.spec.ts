@@ -196,16 +196,40 @@ describe('fetchProviderModels: custom endpoint', () => {
     expect(models.map((m) => m.id)).toEqual(['gemma-3-27b'])
   })
 
-  it('returns [] rather than throwing when the body is a 200 of the wrong shape', async () => {
+  it('returns [] rather than throwing on ANY 200 of the wrong shape', async () => {
     // Discovery is a convenience over the free-text field; an unexpected but
-    // successful body must not read as an error.
+    // successful body must not read as an error. The URL is user-supplied, so a
+    // 200 from a reverse proxy, a health endpoint or a captive portal is one typo
+    // away — and each of these shapes threw a raw TypeError that the renderer
+    // then displayed as the model-list error.
+    for (const body of [
+      { object: 'list' }, // falls through the ?? chain
+      null, // reading .data of null
+      undefined,
+      'plain text',
+      [],
+      { data: {} }, // .map is not a function
+      { data: null },
+      { models: 'nope' }
+    ]) {
+      const models = await fetchProviderModels({
+        provider: 'custom',
+        apiKey: null,
+        baseUrl: 'http://localhost:1234/v1',
+        fetcher: async () => body
+      })
+      expect(models, JSON.stringify(body)).toEqual([])
+    }
+  })
+
+  it('skips entries with no usable id instead of emitting blanks', async () => {
     const models = await fetchProviderModels({
       provider: 'custom',
       apiKey: null,
       baseUrl: 'http://localhost:1234/v1',
-      fetcher: async () => ({ object: 'list' })
+      fetcher: async () => ({ data: [{ id: 'good' }, {}, { id: 42 }, { id: '' }, null] })
     })
-    expect(models).toEqual([])
+    expect(models.map((m) => m.id)).toEqual(['good'])
   })
 
   it('asks for a Base URL instead of guessing one', async () => {

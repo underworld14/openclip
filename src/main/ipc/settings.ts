@@ -179,13 +179,23 @@ export function registerSettingsHandlers(ctx: IpcContext): void {
     async (_e, req: { provider: SettingsType['aiProvider']; key: string }) => {
       // setKey persists the encrypted key and returns the renderer-safe status.
       const status = ctx.keyVault.setKey(req.provider, req.key)
-      // Bind the custom key to the endpoint it was entered for, in the same
-      // operation — a key and the URL it belongs to are one fact.
+      // Bind the custom key to the endpoint it was entered for — a key and the
+      // URL it belongs to are ONE fact, so if the binding cannot be written the
+      // key must not survive on its own: it would be bound to '' and become
+      // permanently unusable the moment a base URL exists, with no way for the
+      // user to tell why (FEAT-bysdwg).
       if (req.provider === 'custom') {
-        const path = settingsPath()
-        updateSettings(path, {
-          customKeyEndpoint: endpointFingerprint(readSettings(path).baseUrl)
-        })
+        try {
+          const path = settingsPath()
+          updateSettings(path, {
+            customKeyEndpoint: endpointFingerprint(readSettings(path).baseUrl)
+          })
+        } catch (e) {
+          ctx.keyVault.clearKey(req.provider)
+          throw new Error(
+            `Could not record which endpoint this key belongs to, so it was not saved: ${e instanceof Error ? e.message : String(e)}`
+          )
+        }
       }
       return status
     }

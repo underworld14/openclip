@@ -584,6 +584,40 @@ describe('custom endpoint: resolution, key binding and gates', () => {
     expect(res.message).not.toMatch(/internet connection/i)
   })
 
+  it('fails the test when the endpoint answers with nothing', async () => {
+    // A non-throwing call is not proof of a working endpoint: an empty completion
+    // is how a refusal, a content filter or a truncation arrives, and clip
+    // detection would fail on it every single time.
+    const { ctx, handlers } = makeCtx(CUSTOM)
+    __setTransportFactoryForTests(() => async () => ({ rawText: '   ' }))
+    registerAiHandlers(ctx)
+
+    const res = (await handlers.get(IPCChannels.AI_TEST_CONNECTION)!(null, {
+      provider: 'custom',
+      model: 'local-model'
+    })) as ChannelRes<typeof IPCChannels.AI_TEST_CONNECTION>
+
+    expect(res.ok).toBe(false)
+    expect(res.message).toMatch(/empty response/i)
+  })
+
+  it('does not claim strict JSON support it never observed', async () => {
+    // The note is derived from the ladder's memo. With an injected transport
+    // nothing is memoized, and the old fallthrough asserted "Strict JSON schema
+    // supported" for an endpoint that had never been probed.
+    const { ctx, handlers } = makeCtx(CUSTOM)
+    __setTransportFactoryForTests(() => async () => ({ rawText: 'pong' }))
+    registerAiHandlers(ctx)
+
+    const res = (await handlers.get(IPCChannels.AI_TEST_CONNECTION)!(null, {
+      provider: 'custom',
+      model: 'local-model'
+    })) as ChannelRes<typeof IPCChannels.AI_TEST_CONNECTION>
+
+    expect(res.ok).toBe(true)
+    expect(res.message).not.toMatch(/strict json/i)
+  })
+
   it('lists models from the configured endpoint, not the OpenRouter path', async () => {
     const { ctx, handlers } = makeCtx(CUSTOM)
     let openRouterCalls = 0

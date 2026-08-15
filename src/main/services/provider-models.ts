@@ -79,8 +79,10 @@ function isOpenAiChatModel(id: string): boolean {
 const CATALOGUE_TIMEOUT_MS = 10_000
 
 /**
- * A model list is a few KB. Anything remotely near this is a wrong endpoint or a
- * hostile one, and `res.json()` on a multi-GB body would take the app with it.
+ * A model list is a few KB. Anything near this is a wrong endpoint or a hostile
+ * one. NOTE what this does and does not bound: a declared `Content-Length` is
+ * rejected before the body is read, but a CHUNKED response is still buffered by
+ * `res.text()` first — for that case the 10 s timeout above is the real bound.
  */
 const CATALOGUE_MAX_BYTES = 2 * 1024 * 1024
 
@@ -210,10 +212,10 @@ export async function fetchProviderModels(args: FetchProviderModelsArgs): Promis
     if (!base) {
       throw new Error('Set a Base URL for your custom endpoint first, then press Load models.')
     }
-    let body: {
-      data?: Array<{ id?: string; name?: string }>
-      models?: Array<{ id?: string; name?: string }>
-    }
+    // `unknown`, not a hopeful shape: the response is whatever a user-supplied
+    // URL returned, and typing it as the shape we want is what turns a wrong URL
+    // into a TypeError instead of an empty list.
+    let body: { data?: unknown; models?: unknown } | null
     try {
       body = (await fetcher({
         url: `${base}/models`,
@@ -225,9 +227,24 @@ export async function fetchProviderModels(args: FetchProviderModelsArgs): Promis
       throw new Error(customCatalogueError(e, base))
     }
     // `data[]` is the OpenAI shape; a few gateways answer `models[]` instead.
-    const rows = body.data ?? body.models ?? []
+    //
+    // Every access is guarded because this body is whatever a user-supplied URL
+    // returned: a 200 from a reverse proxy, a health endpoint or a captive portal
+    // is one typo away, and `null`, `{data:{}}` or `{models:'nope'}` would each
+    // throw a raw TypeError that the renderer then shows as the model-list error.
+    // An unrecognised 200 is "no models", not a failure.
+    const rows: unknown[] = Array.isArray(body?.data)
+      ? body.data
+      : Array.isArray(body?.models)
+        ? body.models
+        : []
     return rows
-      .map((m) => m.id ?? m.name)
+      .map((row) => {
+        // Per-ENTRY guard, not just per-array: a `null` element is enough to
+        // throw, and one bad row must not cost the user the whole list.
+        const m = (row ?? {}) as { id?: unknown; name?: unknown }
+        return typeof m.id === 'string' ? m.id : typeof m.name === 'string' ? m.name : undefined
+      })
       .filter((id): id is string => typeof id === 'string' && id.length > 0)
       .sort((a, b) => a.localeCompare(b))
       .map((id) => ({

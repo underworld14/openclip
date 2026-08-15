@@ -25,8 +25,10 @@ import type {
 } from '@shared/channels'
 import type { AIProvider } from '@shared/schema'
 import {
+  clearStructuredModeMemo,
   clipsMemoKey,
   createTransport,
+  extractJsonCandidate,
   generateClips as runGenerate,
   resolvedStructuredMode,
   type RawTransport
@@ -353,6 +355,9 @@ export function registerAiHandlers(ctx: IpcContext): void {
       const factory =
         transportFactoryOverride ??
         (process.env.OPENCLIP_FAKE_TRANSCRIBE ? () => fakeTransport : createTransport)
+      // Test is the user's explicit "check again", so it must not report a verdict
+      // remembered from an earlier transient failure (FEAT-bysdwg).
+      if (providerNeedsBaseUrl(req.provider)) clearStructuredModeMemo(clipsMemoKey(baseUrl, model))
       const started = Date.now()
       try {
         const transport = await factory({ provider: req.provider, model, apiKey, baseUrl })
@@ -360,13 +365,22 @@ export function registerAiHandlers(ctx: IpcContext): void {
         // the strict ClipSchema response_format, so a model that cannot produce
         // it fails here — which is the more useful probe, since that is exactly
         // what clip detection needs. It is not the cheapest possible request.
-        await transport({
+        const probe = await transport({
           system: 'You are a connectivity probe. Answer with exactly one word.',
           user: 'Reply with the single word: pong'
         })
+        // A non-throwing call is NOT proof of a working endpoint. An empty
+        // completion is how a refusal, a content filter or a truncation arrives,
+        // and clip detection would fail on it every time.
+        if (!probe.rawText.trim()) {
+          return {
+            ok: false,
+            message: `${providerDisplay(req.provider, baseUrl)} accepted the request but returned an empty response for "${model}". Try another model.`
+          }
+        }
         return {
           ok: true,
-          message: `Connected to ${model}.${structuredModeNote(req.provider, baseUrl, model)}`,
+          message: `Connected to ${model}.${structuredModeNote(req.provider, baseUrl, model, probe.rawText)}`,
           latencyMs: Date.now() - started
         }
       } catch (err) {
@@ -438,13 +452,35 @@ export function registerAiHandlers(ctx: IpcContext): void {
 function structuredModeNote(
   provider: AIProvider,
   baseUrl: string | undefined,
-  model: string
+  model: string,
+  rawText: string
 ): string {
   if (provider !== 'custom') return ''
   const mode = resolvedStructuredMode(clipsMemoKey(baseUrl, model))
-  if (mode === 'json_object') return ' JSON mode — output will be repaired if needed.'
+  // Unknown = nothing was memoized (a fake transport, or an E2E run). Saying
+  // nothing is the honest answer; claiming strict support here would be a guess.
+  if (mode === undefined) return ''
   if (mode === 'none') {
     return ' No structured-output support — clip detection may need retries and can be unreliable.'
   }
+  // The server ACCEPTED a structured-output request. Whether it HONOURED it is a
+  // different question, and the one that decides whether clip detection works:
+  // several self-hosted builds ignore an unrecognised `response_format` and
+  // answer prose with a 200, which no error-driven ladder can see. The probe's
+  // own reply settles it, since both live modes force a JSON object.
+  if (!looksLikeJson(rawText)) {
+    return ' The server ignored the structured-output request — clip detection will rely on repairing plain text, and may be unreliable.'
+  }
+  if (mode === 'json_object') return ' JSON mode — output will be repaired if needed.'
   return ' Strict JSON schema supported.'
+}
+
+/** Did the endpoint answer with a JSON object, as both live modes require? */
+function looksLikeJson(rawText: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(extractJsonCandidate(rawText))
+    return typeof parsed === 'object' && parsed !== null
+  } catch {
+    return false
+  }
 }

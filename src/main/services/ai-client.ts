@@ -793,6 +793,20 @@ export function __resetStructuredModeMemoForTests(): void {
   structuredModeFloor.clear()
 }
 
+/**
+ * Forget one endpoint+model's verdict, so the next call re-probes from the top.
+ *
+ * The floor only ever moves DOWN the ladder, which is right for bounding cost but
+ * wrong for recovery: one transient 400 — a local server still loading a model, a
+ * gateway hiccup — would otherwise pin that endpoint to a weaker mode for the
+ * rest of the process, silently degrading every later run. "Test connection" is
+ * the user's explicit check-again gesture, so it clears the verdict first.
+ * (Changing the base URL needs no reset: the key contains it.)
+ */
+export function clearStructuredModeMemo(memoKey: string): void {
+  structuredModeFloor.delete(memoKey)
+}
+
 /** The memo key for a clip-detection transport against a custom endpoint. */
 export function clipsMemoKey(baseUrl: string | undefined, model: string): string {
   return `${normalizeBaseUrl(baseUrl) ?? ''}|${model}|clips`
@@ -819,7 +833,12 @@ function statusOf(err: unknown): number | undefined {
   const e = err as { status?: unknown; response?: { status?: unknown } } | null
   if (typeof e?.status === 'number') return e.status
   if (typeof e?.response?.status === 'number') return e.response.status
-  const match = /\b(4\d{2}|5\d{2})\b/.exec(err instanceof Error ? err.message : String(err))
+  // Text fallback for clients that expose no status field. Anchored, because a
+  // bare `\b\d{3}\b` scan reads a PORT as a status: `ECONNREFUSED 127.0.0.1:400`
+  // would look like a downgradable 400 and burn the ladder on a server that is
+  // simply not running. The OpenAI SDK's own message is `${status} ${body}`.
+  const raw = err instanceof Error ? err.message : String(err)
+  const match = /^\s*(?:HTTP\s+)?(4\d{2}|5\d{2})\b/.exec(raw)
   return match ? Number(match[1]) : undefined
 }
 
@@ -912,6 +931,22 @@ export function buildOpenAITransport(
   const schema = clipJsonSchema()
   const ladder = opts?.modes ?? ['json_schema']
   const memoKey = opts?.memoKey
+  /**
+   * Show the schema in the PROMPT for every rung of a multi-rung ladder —
+   * including the strict one.
+   *
+   * A multi-rung ladder means "this endpoint's capabilities are unknown", and the
+   * failure an error-driven ladder can NEVER see is a server that accepts an
+   * unrecognised `response_format`, ignores it, and answers 200 with prose (older
+   * llama.cpp, some vLLM builds, some gateways). There is no error to downgrade
+   * on, so rung 0 is the only chance to have shown the model what to produce.
+   * Costs a few hundred tokens; buys the difference between "works" and
+   * "INPUT_INVALID forever" on exactly the servers this provider exists for.
+   *
+   * Single-rung ladders (OpenAI, OpenRouter) are untouched: the API guarantees
+   * the schema, so repeating it in the prompt is pure cost.
+   */
+  const schemaInEveryPrompt = ladder.length > 1
 
   return async ({ system, user }, callOpts) => {
     const start = memoKey ? Math.min(structuredModeFloor.get(memoKey) ?? 0, ladder.length - 1) : 0
@@ -930,7 +965,10 @@ export function buildOpenAITransport(
               { role: 'system', content: system },
               {
                 role: 'user',
-                content: mode === 'json_schema' ? user : withSchemaBlock(user, schema)
+                content:
+                  schemaInEveryPrompt || mode !== 'json_schema'
+                    ? withSchemaBlock(user, schema)
+                    : user
               }
             ],
             ...responseFormatFor(mode, schema)
@@ -955,12 +993,11 @@ export function buildOpenAITransport(
       }
     }
 
-    // Only reachable when the last rung produced an empty completion; a thrown
-    // last rung rethrows above. An empty string is what the repair ladder's own
-    // empty-completion rung expects to see.
-    if (lastError && !(lastError instanceof Error && /empty completion/.test(lastError.message))) {
-      throw lastError
-    }
+    // Defensive only: every rung returns or throws from inside the loop (the last
+    // rung neither downgrades on empty nor swallows a throw), so this is reached
+    // only for an empty `modes` array. An empty string is what the repair
+    // ladder's own empty-completion rung expects to see.
+    if (lastError) throw lastError
     return { rawText: '' }
   }
 }

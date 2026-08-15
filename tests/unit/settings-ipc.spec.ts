@@ -25,6 +25,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { readSettings, updateSettings } from '@main/ipc/settings'
 import { Settings } from '@shared/schema'
+import { settingsFixture } from '../fixtures/contract'
 
 // The handler resolves its path through a lazy `require('electron')`, which
 // `vi.mock('electron')` cannot intercept (same constraint media-protocol.spec.ts
@@ -130,5 +131,52 @@ describe('the write is atomic', () => {
     const after = readSettings(file)
     expect(after.aiProvider).toBe('anthropic')
     expect(after.model).toBe('claude-sonnet-5')
+  })
+})
+
+// ── FEAT-bysdwg: the baseUrl refine must not cost an upgrading user their settings
+describe('a settings.json whose baseUrl fails the new validation', () => {
+  it('drops only that field and keeps everything else', () => {
+    // `Settings.baseUrl` was a bare string for several releases and is now
+    // refined (http(s), no credentials/query/fragment). The repair path exists so
+    // a newly-stricter field cannot reset a user's whole document on upgrade —
+    // the failure mode BUG-yxvrwx was filed for.
+    writeFileSync(
+      file,
+      JSON.stringify({
+        ...settingsFixture,
+        aiProvider: 'anthropic',
+        model: 'claude-opus-5',
+        maxClips: 9,
+        baseUrl: 'http://user:pw@localhost:11434/?x=1'
+      }),
+      'utf8'
+    )
+
+    const repaired = readSettings(file)
+
+    expect(repaired.baseUrl).toBeUndefined()
+    expect(repaired.aiProvider).toBe('anthropic')
+    expect(repaired.model).toBe('claude-opus-5')
+    expect(repaired.maxClips).toBe(9)
+    expect(console.warn).toHaveBeenCalled()
+  })
+
+  it('accepts a valid one unchanged, and lets it be cleared', () => {
+    updateSettings(file, { baseUrl: 'http://localhost:1234/v1' })
+    expect(readSettings(file).baseUrl).toBe('http://localhost:1234/v1')
+
+    // Clearing has to work too — `{...current, ...patch}` only clears the field
+    // if an own property with an `undefined` value survives the merge.
+    updateSettings(file, { baseUrl: undefined })
+    expect(readSettings(file).baseUrl).toBeUndefined()
+  })
+
+  it('rejects an invalid one at the write boundary instead of persisting it', () => {
+    updateSettings(file, { model: 'keep-me' })
+    expect(() => updateSettings(file, { baseUrl: 'javascript:alert(1)' })).toThrow(
+      /INPUT_INVALID settings/
+    )
+    expect(readSettings(file).model).toBe('keep-me')
   })
 })

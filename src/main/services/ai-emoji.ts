@@ -13,11 +13,13 @@
  * export.
  */
 
-import { z } from 'zod'
-import { extractJsonCandidate, type PromptPair, type RawTransport } from './ai-client'
+import {
+  EMOJI_MAP_SCHEMA,
+  extractJsonCandidate,
+  type PromptPair,
+  type RawTransport
+} from './ai-client'
 import { normalizeWord } from '@shared/caption-emphasis'
-
-const EMOJI_MAP_SCHEMA = z.record(z.string(), z.string())
 
 const SYSTEM_PROMPT = `You add a SINGLE relevant emoji to words for short-form video captions.
 Rules:

@@ -17,7 +17,9 @@ import {
   buildAnthropicTransport,
   buildOllamaTransport,
   clipJsonSchema,
+  createEmojiTransport,
   createTransport,
+  OPENAI_DEFAULT_BASE_URL,
   OPENROUTER_BASE_URL,
   OPENROUTER_APP_TITLE
 } from '@main/services/ai-client'
@@ -100,6 +102,43 @@ describe('Anthropic adapter', () => {
   })
 })
 
+describe('createTransport: openai (BUG-v4phgj)', () => {
+  it('passes an explicit baseURL so an OPENAI_BASE_URL env var cannot silently redirect the call', async () => {
+    const prevEnv = process.env.OPENAI_BASE_URL
+    process.env.OPENAI_BASE_URL = 'https://evil.example.com/v1'
+    try {
+      const ctorCalls: Array<Record<string, unknown>> = []
+      vi.doMock('openai', () => ({
+        default: class {
+          chat = {
+            completions: {
+              create: vi.fn(async () => ({ choices: [{ message: { content: '{}' } }] }))
+            }
+          }
+          constructor(opts: Record<string, unknown>) {
+            ctorCalls.push(opts)
+          }
+        }
+      }))
+      const transport = await createTransport({
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        apiKey: 'sk-XYZ'
+      })
+      expect(typeof transport).toBe('function')
+      expect(ctorCalls).toHaveLength(1)
+      // Explicit default, not `undefined` — the SDK falls back to
+      // `readEnv('OPENAI_BASE_URL')` only when the ctor arg is undefined.
+      expect(ctorCalls[0].baseURL).toBe(OPENAI_DEFAULT_BASE_URL)
+      expect(ctorCalls[0].baseURL).not.toBe(process.env.OPENAI_BASE_URL)
+      vi.doUnmock('openai')
+    } finally {
+      if (prevEnv === undefined) delete process.env.OPENAI_BASE_URL
+      else process.env.OPENAI_BASE_URL = prevEnv
+    }
+  })
+})
+
 describe('createTransport: OpenRouter (Part H)', () => {
   it('builds an OpenAI client at the OpenRouter base URL with attribution headers', async () => {
     const ctorCalls: Array<Record<string, unknown>> = []
@@ -149,5 +188,77 @@ describe('Ollama adapter', () => {
     expect((arg.format as Record<string, unknown>).additionalProperties).toBe(false)
     const messages = arg.messages as Array<{ role: string; content: string }>
     expect(messages.map((m) => m.role)).toEqual(['system', 'user'])
+  })
+})
+
+describe('createEmojiTransport (BUG-vh7vwp): not constrained to ClipSchema', () => {
+  it('openai: uses json_object, never the strict clips json_schema', async () => {
+    const create = vi.fn<(body: unknown) => Promise<{ choices: unknown[] }>>(async () => ({
+      choices: [{ message: { content: '{"fire":"🔥"}' } }]
+    }))
+    vi.doMock('openai', () => ({
+      default: class {
+        chat = { completions: { create } }
+      }
+    }))
+    const transport = await createEmojiTransport({
+      provider: 'openai',
+      model: 'gpt-4o-mini',
+      apiKey: 'sk-XYZ'
+    })
+    await transport(PROMPT)
+    const arg = create.mock.calls[0][0] as Record<string, unknown>
+    const rf = arg.response_format as { type: string; json_schema?: { name: string } }
+    expect(rf.type).toBe('json_object')
+    expect(rf.json_schema?.name).not.toBe('clips')
+    vi.doUnmock('openai')
+  })
+
+  it('ollama: format is the emoji-map schema, not clipJsonSchema (no clip fields required)', async () => {
+    const chat = vi.fn<(body: unknown) => Promise<{ message: { content: string } }>>(async () => ({
+      message: { content: '{"fire":"🔥"}' }
+    }))
+    vi.doMock('ollama', () => ({
+      Ollama: class {
+        chat = chat
+      }
+    }))
+    const transport = await createEmojiTransport({
+      provider: 'ollama',
+      model: 'llama3.1',
+      apiKey: null
+    })
+    await transport(PROMPT)
+    const arg = chat.mock.calls[0][0] as Record<string, unknown>
+    const format = arg.format as Record<string, unknown>
+    expect(format.required).not.toEqual(['analysis', 'clips'])
+    vi.doUnmock('ollama')
+  })
+
+  it('anthropic: output_config.format validates the emoji-map shape, not ClipSchema', async () => {
+    vi.doMock('@anthropic-ai/sdk', () => ({
+      default: class {
+        messages = {
+          // Exercise the SAME validating parse() the real client would call,
+          // so a regression back to ClipSchema fails this test even though
+          // both are "some JSON schema object" shape-wise: ClipSchema's
+          // zodOutputFormat().parse would reject `{"fire":"🔥"}` (missing the
+          // required `clips`/`analysis` fields).
+          parse: vi.fn(
+            async (body: { output_config: { format: { parse: (s: string) => unknown } } }) => ({
+              parsed_output: body.output_config.format.parse('{"fire":"🔥"}')
+            })
+          )
+        }
+      }
+    }))
+    const transport = await createEmojiTransport({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-5',
+      apiKey: 'sk-ant-XYZ'
+    })
+    const { rawText } = await transport(PROMPT)
+    expect(JSON.parse(rawText)).toEqual({ fire: '🔥' })
+    vi.doUnmock('@anthropic-ai/sdk')
   })
 })

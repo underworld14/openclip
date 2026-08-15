@@ -261,6 +261,20 @@ export function clipJsonSchema(): Record<string, unknown> {
   return z.toJSONSchema(ClipSchema) as Record<string, unknown>
 }
 
+/**
+ * The emoji-suggestion response shape: a lowercase word → single-emoji map.
+ * Lives here (not in `ai-emoji.ts`) so it is the ONE schema both the parser
+ * (`parseEmojiMap`) and the transport (`createEmojiTransport` below) validate
+ * against — the same "one Zod schema, several derived shapes" pattern as
+ * `ClipSchema`/`clipJsonSchema` (BUG-vh7vwp).
+ */
+export const EMOJI_MAP_SCHEMA = z.record(z.string(), z.string())
+
+/** JSON Schema derivation of `EMOJI_MAP_SCHEMA`, for OpenAI-compatible/Ollama transports. */
+export function emojiMapJsonSchema(): Record<string, unknown> {
+  return z.toJSONSchema(EMOJI_MAP_SCHEMA) as Record<string, unknown>
+}
+
 // ============================================================================
 // Repair ladder (PRD §16) — pure, provider-agnostic.
 // ============================================================================
@@ -913,11 +927,13 @@ export function withSchemaBlock(user: string, schema: unknown): string {
   ].join('\n')
 }
 
-function responseFormatFor(mode: StructuredMode, schema: unknown): Record<string, unknown> {
+function responseFormatFor(
+  mode: StructuredMode,
+  schema: unknown,
+  name: string
+): Record<string, unknown> {
   if (mode === 'json_schema') {
-    return {
-      response_format: { type: 'json_schema', json_schema: { name: 'clips', strict: true, schema } }
-    }
+    return { response_format: { type: 'json_schema', json_schema: { name, strict: true, schema } } }
   }
   if (mode === 'json_object') return { response_format: { type: 'json_object' } }
   return {}
@@ -939,6 +955,15 @@ export interface OpenAITransportOptions {
    * which is indistinguishable from a mode the server accepted but ignored.
    */
   downgradeOnEmpty?: boolean
+  /**
+   * Override the schema attached in `json_schema`/`json_object` mode and shown
+   * in-prompt for the non-strict rungs. Defaults to `clipJsonSchema()` — every
+   * pre-existing caller (clip detection) is unaffected. Lets a non-clip request
+   * (emoji suggestion, BUG-vh7vwp) stop being constrained to a Clip document.
+   */
+  responseSchema?: unknown
+  /** `response_format.json_schema.name`. Defaults to `'clips'`. */
+  schemaName?: string
 }
 
 export function buildOpenAITransport(
@@ -946,7 +971,8 @@ export function buildOpenAITransport(
   model: string,
   opts?: OpenAITransportOptions
 ): RawTransport {
-  const schema = clipJsonSchema()
+  const schema = opts?.responseSchema ?? clipJsonSchema()
+  const schemaName = opts?.schemaName ?? 'clips'
   const ladder = opts?.modes ?? ['json_schema']
   const memoKey = opts?.memoKey
   /**
@@ -989,7 +1015,7 @@ export function buildOpenAITransport(
                     : user
               }
             ],
-            ...responseFormatFor(mode, schema)
+            ...responseFormatFor(mode, schema, schemaName)
           },
           { signal: callOpts?.signal }
         )
@@ -1093,8 +1119,12 @@ export interface OllamaLike {
   abort?(): void
 }
 
-export function buildOllamaTransport(client: OllamaLike, model: string): RawTransport {
-  const format = clipJsonSchema()
+export function buildOllamaTransport(
+  client: OllamaLike,
+  model: string,
+  responseSchema?: unknown
+): RawTransport {
+  const format = responseSchema ?? clipJsonSchema()
   return async ({ system, user }, opts) => {
     const pending = client.chat({
       model,
@@ -1151,6 +1181,16 @@ async function withAbort<T>(
 // id + model + decrypted key (the key is used MAIN-SIDE only; PRD §12.2).
 // ============================================================================
 
+/**
+ * Explicit default for the built-in `openai` provider (BUG-v4phgj). The SDK's
+ * own fallback (`readEnv('OPENAI_BASE_URL')`, `node_modules/openai/client.js`)
+ * kicks in whenever `baseURL` is `undefined` — so a bare `args.baseUrl` here
+ * let an `OPENAI_BASE_URL` in the process environment silently redirect the
+ * user's key to a host never configured in OpenClip. Passing this explicitly
+ * closes the same fallback the `openrouter` branch already avoids below.
+ */
+export const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1'
+
 /** OpenRouter (Part H) — OpenAI-compatible gateway base URL + attribution headers. */
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 export const OPENROUTER_APP_URL = 'https://openclip.app'
@@ -1177,7 +1217,7 @@ export async function createTransport(args: TransportFactoryArgs): Promise<RawTr
       // clients previously carried no deadline whatsoever.
       const client = new OpenAI({
         apiKey: args.apiKey ?? '',
-        baseURL: args.baseUrl,
+        baseURL: args.baseUrl ?? OPENAI_DEFAULT_BASE_URL,
         timeout: AI_REQUEST_TIMEOUT_MS
       })
       return buildOpenAITransport(client as unknown as OpenAILike, args.model)
@@ -1241,6 +1281,115 @@ export async function createTransport(args: TransportFactoryArgs): Promise<RawTr
       return buildOpenAITransport(client as unknown as OpenAILike, args.model, {
         modes: OPENAI_COMPAT_MODES,
         memoKey: clipsMemoKey(baseURL, args.model),
+        downgradeOnEmpty: true
+      })
+    }
+    case 'google':
+      throw new Error('Google provider is not wired in the MVP (PRD §4.3)')
+    default: {
+      const exhaustive: never = args.provider
+      throw new Error(`unknown provider ${String(exhaustive)}`)
+    }
+  }
+}
+
+/** The memo key for the emoji-suggestion transport, distinct from `clipsMemoKey` — see `createEmojiTransport`. */
+export function emojiMemoKey(baseUrl: string | undefined, model: string): string {
+  return `${normalizeBaseUrl(baseUrl) ?? ''}|${model}|emoji_map`
+}
+
+/**
+ * Transport for the emoji-suggestion request (`suggestEmoji` / BUG-vh7vwp).
+ *
+ * `createTransport` always constrains every provider to the STRICT ClipSchema:
+ * OpenAI/OpenRouter via `response_format.json_schema` (`strict:true`), Anthropic
+ * via `zodOutputFormat(ClipSchema)`, Ollama via `format: clipJsonSchema()`.
+ * Reusing it for emoji asked every provider to emit a Clip document while
+ * `parseEmojiMap` expects a lowercase-word → emoji map, so the feature failed
+ * silently everywhere (confirmed broken on OpenAI/OpenRouter — the strict mode
+ * demands `additionalProperties:false` with fixed, all-required properties,
+ * which a dynamic-key map cannot satisfy at all; Anthropic and Ollama share the
+ * identical "asked for the wrong document" shape).
+ *
+ * Deliberately a SEPARATE function rather than an extra parameter threaded
+ * through `createTransport`: the per-provider client construction (timeouts,
+ * headers, the custom-endpoint safety options) is duplicated here rather than
+ * risking a behavior change to the well-exercised clip-detection path for a
+ * feature that only ever sends one short, cheap, best-effort request.
+ */
+export async function createEmojiTransport(args: TransportFactoryArgs): Promise<RawTransport> {
+  const emojiSchema = emojiMapJsonSchema()
+  switch (args.provider) {
+    case 'openai': {
+      const { default: OpenAI } = await import('openai')
+      const client = new OpenAI({
+        apiKey: args.apiKey ?? '',
+        baseURL: args.baseUrl ?? OPENAI_DEFAULT_BASE_URL,
+        timeout: AI_REQUEST_TIMEOUT_MS
+      })
+      // No `json_schema` rung: OpenAI's strict mode requires
+      // `additionalProperties:false` with fixed properties, which a
+      // dynamic-key map cannot express. `json_object` is the strongest mode
+      // that still fits ("valid JSON, no fixed shape").
+      return buildOpenAITransport(client as unknown as OpenAILike, args.model, {
+        modes: ['json_object', 'none'],
+        responseSchema: emojiSchema,
+        schemaName: 'emoji_map',
+        memoKey: emojiMemoKey(args.baseUrl, args.model)
+      })
+    }
+    case 'openrouter': {
+      const { default: OpenAI } = await import('openai')
+      const client = new OpenAI({
+        apiKey: args.apiKey ?? '',
+        baseURL: args.baseUrl ?? OPENROUTER_BASE_URL,
+        defaultHeaders: { 'HTTP-Referer': OPENROUTER_APP_URL, 'X-Title': OPENROUTER_APP_TITLE },
+        timeout: AI_REQUEST_TIMEOUT_MS
+      })
+      return buildOpenAITransport(client as unknown as OpenAILike, args.model, {
+        modes: ['json_object', 'none'],
+        responseSchema: emojiSchema,
+        schemaName: 'emoji_map',
+        memoKey: emojiMemoKey(args.baseUrl, args.model)
+      })
+    }
+    case 'anthropic': {
+      const { default: Anthropic } = await import('@anthropic-ai/sdk')
+      const client = new Anthropic({
+        apiKey: args.apiKey ?? '',
+        timeout: AI_REQUEST_TIMEOUT_MS
+      })
+      const { zodOutputFormat } = await import('@anthropic-ai/sdk/helpers/zod')
+      return buildAnthropicTransport(client as unknown as AnthropicLike, args.model, () =>
+        zodOutputFormat(EMOJI_MAP_SCHEMA)
+      )
+    }
+    case 'ollama': {
+      const { Ollama } = await import('ollama')
+      const client = new Ollama({ host: args.baseUrl })
+      return buildOllamaTransport(client as unknown as OllamaLike, args.model, emojiSchema)
+    }
+    case 'custom': {
+      const baseURL = normalizeBaseUrl(args.baseUrl)
+      if (!baseURL) {
+        throw new Error(
+          'No Base URL set for the custom endpoint. Add your server’s OpenAI-compatible URL in Settings.'
+        )
+      }
+      const { default: OpenAI } = await import('openai')
+      const client = new OpenAI({
+        apiKey: args.apiKey || 'openclip-no-key',
+        defaultHeaders: args.apiKey ? undefined : { Authorization: null },
+        baseURL,
+        timeout: AI_REQUEST_TIMEOUT_MS,
+        maxRetries: 0,
+        fetchOptions: { redirect: 'error' }
+      })
+      return buildOpenAITransport(client as unknown as OpenAILike, args.model, {
+        modes: ['json_object', 'none'],
+        responseSchema: emojiSchema,
+        schemaName: 'emoji_map',
+        memoKey: emojiMemoKey(baseURL, args.model),
         downgradeOnEmpty: true
       })
     }

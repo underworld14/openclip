@@ -27,6 +27,7 @@ import type { AIProvider } from '@shared/schema'
 import {
   clearStructuredModeMemo,
   clipsMemoKey,
+  createEmojiTransport,
   createTransport,
   extractJsonCandidate,
   generateClips as runGenerate,
@@ -44,6 +45,7 @@ import { humanTransportError } from '@main/services/ai-errors'
 import { suggestEmoji } from '@main/services/ai-emoji'
 import { createGenerateClipsRunner } from '@main/services/jobs/generate-clips-runner'
 import { registerRunner, hasRunner } from '@main/services/sidecar-manager'
+import { isPackagedApp } from '@main/utils/paths'
 import { fetchProviderModels } from '@main/services/provider-models'
 import type { CatalogueFetcher } from '@main/services/provider-models'
 import {
@@ -156,6 +158,16 @@ const fakeEmojiTransport: RawTransport = async () => ({
   rawText: JSON.stringify({ money: '💰', fire: '🔥', idea: '💡' })
 })
 
+/**
+ * Is the E2E fake-provider mode actually active? `!isPackagedApp()` (BUG-hqbett):
+ * a packaged app must never let a stray `OPENCLIP_FAKE_TRANSCRIBE` in the
+ * environment silently swap the real provider transport for one that answers a
+ * fixed, fabricated clip set / emoji map with no network call at all.
+ */
+function fakeTranscribeEnabled(): boolean {
+  return !!process.env.OPENCLIP_FAKE_TRANSCRIBE && !isPackagedApp()
+}
+
 /** Per-process result cache (PRD §16): (transcriptHash, promptVersion, model, style). */
 const clipCache = new Map<string, unknown>()
 
@@ -200,7 +212,7 @@ export function registerAiHandlers(ctx: IpcContext): void {
         createTransport: (args) =>
           (
             transportFactoryOverride ??
-            (process.env.OPENCLIP_FAKE_TRANSCRIBE ? () => fakeTransport : createTransport)
+            (fakeTranscribeEnabled() ? () => fakeTransport : createTransport)
           )(args),
         cache: clipCache
       })
@@ -214,8 +226,7 @@ export function registerAiHandlers(ctx: IpcContext): void {
     const baseUrl = endpointFor(req.provider, ctx)
 
     const factory =
-      transportFactoryOverride ??
-      (process.env.OPENCLIP_FAKE_TRANSCRIBE ? () => fakeTransport : createTransport)
+      transportFactoryOverride ?? (fakeTranscribeEnabled() ? () => fakeTransport : createTransport)
     const transport = await factory({
       provider: req.provider,
       model: req.model,
@@ -289,9 +300,12 @@ export function registerAiHandlers(ctx: IpcContext): void {
         )
       }
       const apiKey = keyFor(req.provider, ctx)
+      // `createEmojiTransport`, NOT `createTransport` (BUG-vh7vwp): the latter
+      // constrains every provider to the strict ClipSchema, which a word→emoji
+      // map can never satisfy — this request needs its own, unconstrained shape.
       const factory =
         transportFactoryOverride ??
-        (process.env.OPENCLIP_FAKE_TRANSCRIBE ? () => fakeEmojiTransport : createTransport)
+        (fakeTranscribeEnabled() ? () => fakeEmojiTransport : createEmojiTransport)
       const transport = await factory({
         provider: req.provider,
         model: req.model,
@@ -354,7 +368,7 @@ export function registerAiHandlers(ctx: IpcContext): void {
       }
       const factory =
         transportFactoryOverride ??
-        (process.env.OPENCLIP_FAKE_TRANSCRIBE ? () => fakeTransport : createTransport)
+        (fakeTranscribeEnabled() ? () => fakeTransport : createTransport)
       // Test is the user's explicit "check again", so it must not report a verdict
       // remembered from an earlier transient failure (FEAT-bysdwg).
       if (providerNeedsBaseUrl(req.provider)) clearStructuredModeMemo(clipsMemoKey(baseUrl, model))

@@ -1,6 +1,6 @@
 ---
 topic: renderer
-updated: 2026-08-14T11:41:50Z
+updated: 2026-08-15T11:30:22Z
 ---
 
 # renderer
@@ -13,3 +13,4 @@ updated: 2026-08-14T11:41:50Z
 - 2026-08-14: Renderer specs opt into a DOM with a '// @vitest-environment jsdom' docblock on line 1 (the suite default stays 'node'); call installRendererEnv() from tests/harness/renderer-env.ts in beforeEach to get a fresh mock bridge on window plus a reset of the import-controller, need-model and job-port module singletons. (cites: tests/harness/renderer-env.ts)
 - 2026-08-14: createMockOpenclip() calls registerJobPort() directly, so it bypasses the window-message listener in jobPort.ts. Any test that needs to prove the REAL port handoff must dispatch a tagged window 'message' event itself — a bug living only in that listener is invisible to every mock-bridge test. (cites: tests/mocks/openclip.ts)
 - 2026-08-14: Caption sizing is authored against a pinned 1080px design WIDTH: the ASS script sets PlayResX=1080 always and derives PlayResY from the export canvas, matching the preview's cqw (container-query width) units. Never set PlayRes to the raw output dimensions — that silently disagrees with the preview by 1.78x on 16:9. (cites: src/main/services/ass-captions.ts)
+- 2026-08-15: projectStore is a single GLOBAL store with no project scoping: transcriptSlice.hydrateTranscript/appendTranscriptPartial and clipsSlice.generateClips' done branch all set({...}) unconditionally, and autosave persists ~800ms later. Any long job landing after the user switches projects writes its result into the WRONG project's .ocproj. Job params/results carry no projectId to check against (EPIC-k83ghw / BUG-93txd0).

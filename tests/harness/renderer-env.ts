@@ -36,6 +36,31 @@ declare global {
 }
 
 /**
+ * jsdom implements no `ResizeObserver` at all (EPIC-k83ghw / BUG-t19z5j —
+ * PreviewPlayer's split-screen/blur tile sizing uses one to track the
+ * frame's live pixel size). A no-op stub is enough for every existing spec:
+ * it never fires, so `frameSize` stays `{0,0}` and the component's own
+ * fallback renders exactly the historical center-crop those specs assert —
+ * only a spec that explicitly wants split/blur sizing needs to drive this
+ * itself (there is nothing to polyfill an actual resize with in jsdom).
+ * Installed once at module load, not per-test — matches a real global.
+ */
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  class StubResizeObserver {
+    observe(): void {
+      // no-op
+    }
+    unobserve(): void {
+      // no-op
+    }
+    disconnect(): void {
+      // no-op
+    }
+  }
+  ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = StubResizeObserver
+}
+
+/**
  * Install a fresh mock bridge on `window` and reset the renderer singletons.
  * Returns the bridge so a spec can override individual methods (the mock is a
  * plain object) or assert on calls.

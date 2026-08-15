@@ -1,6 +1,42 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
+/**
+ * Caption template faces (EPIC-k83ghw / BUG-t19z5j): the SAME files
+ * `paths.fontsDir()` bundles for the libass burn (`build/fonts/`), registered
+ * here so the WYSIWYG preview and the caption-template gallery render in the
+ * actual chosen typeface instead of silently falling back to the system font
+ * — before this, all 14 caption templates previewed identically in San
+ * Francisco and differed only by colour, even though the burn always used the
+ * real face. `font-display: block` avoids a flash of the browser's fallback
+ * mid-word on the karaoke-highlighted text these faces are used for.
+ */
+@font-face {
+  font-family: 'DejaVu Sans';
+  src: url('../../../../build/fonts/DejaVuSans.ttf') format('truetype');
+  font-display: block;
+}
+@font-face {
+  font-family: 'Bebas Neue';
+  src: url('../../../../build/fonts/BebasNeue-Regular.ttf') format('truetype');
+  font-display: block;
+}
+@font-face {
+  font-family: 'Anton';
+  src: url('../../../../build/fonts/Anton-Regular.ttf') format('truetype');
+  font-display: block;
+}
+@font-face {
+  font-family: 'Archivo Black';
+  src: url('../../../../build/fonts/ArchivoBlack-Regular.ttf') format('truetype');
+  font-display: block;
+}
+@font-face {
+  font-family: 'Poppins ExtraBold';
+  src: url('../../../../build/fonts/Poppins-ExtraBold.ttf') format('truetype');
+  font-display: block;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

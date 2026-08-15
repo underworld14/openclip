@@ -7,7 +7,7 @@
  */
 
 import type { CSSProperties } from 'react'
-import type { CaptionStyle } from '@shared/schema'
+import type { AspectRatio, CaptionStyle } from '@shared/schema'
 
 /** A fully-transparent (ASS alpha 00) background hex ⇒ outlined text, no box. */
 export function isTransparentBg(hex: string): boolean {
@@ -31,12 +31,43 @@ function outlineShadow(color: string, width: number): string {
 const ASS_CANVAS_WIDTH = 1080
 
 /**
+ * The ASS `MarginV` the burn's Style line hardcodes (`ass-captions.ts`
+ * `buildStyleLine`'s `'80', // MarginV`) — kept in sync manually, the same way
+ * `ASS_CANVAS_WIDTH` above already duplicates `ass-captions.ts`'s constant
+ * rather than importing a main-process-only module into the renderer.
+ */
+const ASS_MARGIN_V = 80
+
+/**
+ * PlayResY for a target aspect — mirrors `ass-captions.ts`'s `playResFor`
+ * exactly (PlayResX pinned to the design width, PlayResY scaled to preserve
+ * the canvas's aspect ratio), but from the aspect RATIO string alone: the
+ * formula only ever depends on height/width, never the actual output
+ * resolution, so no real pixel dimensions are needed here.
+ */
+function playResYFor(aspect: AspectRatio): number {
+  const [w, h] = aspect.split(':').map(Number)
+  return Math.round((ASS_CANVAS_WIDTH * h) / w)
+}
+
+/**
  * The caption LINE container style (position within the frame + font + outline).
  * fontSize uses container-query width units (`cqw`) so it scales with the preview
  * frame automatically — the frame must set `container-type: inline-size`. A
  * fontSize of N (in 1080-canvas px) renders at `N/1080 * frameWidth`.
+ *
+ * `aspect` determines the vertical offset (EPIC-k83ghw / BUG-t19z5j): the burn's
+ * MarginV is a FIXED pixel value in a PlayResY that itself scales with the
+ * output aspect ratio, so the same MarginV is a different PERCENTAGE of frame
+ * height on a 9:16 export (~4%) than on a 1:1 or 16:9 one — the preview
+ * hardcoded a single 8% for every aspect, which matched none of them exactly.
+ * Defaults to '9:16' (the app's primary target) for callers with no live
+ * project aspect, e.g. the caption-template comparison gallery.
  */
-export function captionContainerStyle(style: CaptionStyle): CSSProperties {
+export function captionContainerStyle(
+  style: CaptionStyle,
+  aspect: AspectRatio = '9:16'
+): CSSProperties {
   const cqw = ((style.fontSize / ASS_CANVAS_WIDTH) * 100).toFixed(3)
   const css: CSSProperties = {
     position: 'absolute',
@@ -52,11 +83,12 @@ export function captionContainerStyle(style: CaptionStyle): CSSProperties {
     pointerEvents: 'none',
     whiteSpace: 'pre-wrap'
   }
-  if (style.position === 'top') css.top = '6%'
+  const marginPct = `${((ASS_MARGIN_V / playResYFor(aspect)) * 100).toFixed(3)}%`
+  if (style.position === 'top') css.top = marginPct
   else if (style.position === 'middle') {
     css.top = '50%'
     css.transform = 'translateY(-50%)'
-  } else css.bottom = '8%'
+  } else css.bottom = marginPct
   return css
 }
 

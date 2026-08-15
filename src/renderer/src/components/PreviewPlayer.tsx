@@ -18,7 +18,7 @@
  * the burn is libass-exact). Transport / seek / playhead-sync are unchanged.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { toast } from 'sonner'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { useBrandStore, activeBrand } from '@renderer/stores/brandStore'
@@ -28,7 +28,7 @@ import { sourceMediaUrl } from '@renderer/components/source-media'
 import { formatTime } from '@renderer/components/timeline-math'
 import { resolveEffectiveCaptionStyle } from '@renderer/components/captionPresets'
 import { brandCaptionOverride } from '@renderer/components/brandKit'
-import { cssAspectRatio } from '@renderer/components/preview-crop'
+import { cssAspectRatio, coverFitTransform } from '@renderer/components/preview-crop'
 import {
   captionContainerStyle,
   captionWordStyle,
@@ -40,6 +40,17 @@ import { Play, Pause } from 'lucide-react'
 
 export function PreviewPlayer(): React.JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null)
+  const frameRef = useRef<HTMLDivElement>(null)
+  /**
+   * A SECOND, non-interactive `<video>` element, reused for whichever of the
+   * two modes needs it (they are mutually exclusive by the app's own design —
+   * reframe composes only with `fitMode: 'fill'`): the blurred COVER
+   * background layer under `fitMode: 'blur'`, or the second (bottom) tile
+   * under `reframeMode: 'split'` (EPIC-k83ghw / BUG-t19z5j). Kept in lockstep
+   * with the primary video below rather than driven independently, so there
+   * is exactly one source of playback truth.
+   */
+  const shadowVideoRef = useRef<HTMLVideoElement>(null)
 
   const currentProject = useProjectStore((s) => s.currentProject)
   const clips = useProjectStore((s) => s.clips)
@@ -53,6 +64,15 @@ export function PreviewPlayer(): React.JSX.Element {
   const aspectOverride = useProjectStore((s) => s.aspectOverride)
   const reframeMode = useProjectStore((s) => s.reframeMode)
   const captionsPreviewEnabled = useProjectStore((s) => s.captionsPreviewEnabled)
+  /**
+   * How a source that does not match the target aspect is fitted
+   * (EPIC-k83ghw / BUG-t19z5j) — previously read by nothing here: the preview
+   * always centre-cropped regardless of this, so picking "Fit (bars)" or
+   * "Fit (blur)" changed nothing on screen and the export then produced a
+   * DIFFERENT picture than what was shown, most confusingly for a source that
+   * was already portrait/square and got cropped when it should not have been.
+   */
+  const fitMode = currentProject?.settings.fitMode ?? 'fill'
   // Part K — preview the active brand's caption colors/font + the auto-emoji source.
   const brands = useBrandStore((s) => s.brands)
   const brandLoaded = useBrandStore((s) => s.loaded)
@@ -182,6 +202,65 @@ export function PreviewPlayer(): React.JSX.Element {
   }, [reframeMode, reframePlan, sourceVideo, playhead, bounds, manualCropX, cropW])
 
   /**
+   * The frame's rendered CSS pixel size, tracked live (EPIC-k83ghw /
+   * BUG-t19z5j). Only `fitMode: 'blur'` and `reframeMode: 'split'` need real
+   * pixel values — the single center-crop transform above stays
+   * percentage-only and byte-identical for the historical `fill`+`off` case.
+   * A face-cluster region's aspect ratio is not generally the tile's own (see
+   * `clusterTileRegion`), so cover-fitting it composes correctly only in
+   * absolute px, not nested CSS percentages.
+   */
+  const [frameSize, setFrameSize] = useState({ width: 0, height: 0 })
+  useEffect(() => {
+    const el = frameRef.current
+    if (!el) return
+    const ro = new ResizeObserver(([entry]) => {
+      const box = entry.contentRect
+      setFrameSize({ width: box.width, height: box.height })
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  /** True in either of the two modes that need the second (shadow) video. */
+  const isSplitActive =
+    fitMode === 'fill' && reframeMode === 'split' && reframePlan?.mode === 'split'
+  const isBlurActive = fitMode === 'blur'
+  const shadowVideoNeeded = isSplitActive || isBlurActive
+
+  /** The two split-screen tiles' size+position, or null outside split mode. */
+  const splitTiles = useMemo(() => {
+    if (!isSplitActive || !sourceVideo || reframePlan?.mode !== 'split' || !(frameSize.width > 0)) {
+      return null
+    }
+    const tile = { width: frameSize.width, height: frameSize.height / 2 }
+    const [top, bottom] = reframePlan.regions
+    return {
+      top: coverFitTransform(sourceVideo.resolution, top, tile),
+      bottom: coverFitTransform(sourceVideo.resolution, bottom, tile)
+    }
+  }, [isSplitActive, sourceVideo, reframePlan, frameSize])
+
+  // The shadow video mirrors the primary one's position and play state — it
+  // never drives `playhead`/`isPlaying` itself, so there is exactly one
+  // source of playback truth — and only while actually needed, so it is not
+  // silently decoding (and burning CPU) in `fill`/`letterbox` mode. A
+  // generous 0.1s deadband avoids fighting its own decode; unlike the
+  // primary video's sync effect this runs regardless of `isPlaying` since the
+  // shadow never emits its own `timeupdate` feedback.
+  useEffect(() => {
+    const shadow = shadowVideoRef.current
+    if (!shadow || !shadowVideoNeeded) return
+    if (Math.abs(shadow.currentTime - playhead) > 0.1) shadow.currentTime = playhead
+  }, [playhead, shadowVideoNeeded])
+  useEffect(() => {
+    const shadow = shadowVideoRef.current
+    if (!shadow || !src) return
+    if (isPlaying && shadowVideoNeeded) void shadow.play().catch(() => {})
+    else shadow.pause()
+  }, [isPlaying, src, shadowVideoNeeded])
+
+  /**
    * Drag horizontally to place the crop.
    *
    * The pointer's x within the FRAME maps to the crop window's centre in source
@@ -285,11 +364,110 @@ export function PreviewPlayer(): React.JSX.Element {
     setPlaying(!isPlaying)
   }, [bounds, isPlaying, setPlaying])
 
+  /**
+   * The primary and shadow video LAYERS' wrapper+video styles for the current
+   * mode (EPIC-k83ghw / BUG-t19z5j). Both layers are ALWAYS rendered in the
+   * SAME tree position across every mode (only their styles change) — a mode
+   * switch must restyle the existing `<video>` elements, not swap which JSX
+   * branch contains them, or React would remount them and the user would
+   * lose playback position on every framing change.
+   */
+  const { primary, shadow } = useMemo((): {
+    primary: { wrapper: CSSProperties; video: CSSProperties }
+    shadow: { wrapper: CSSProperties; video: CSSProperties }
+  } => {
+    if (isSplitActive && splitTiles) {
+      const tileWrapper: CSSProperties = {
+        position: 'absolute',
+        left: 0,
+        width: '100%',
+        height: '50%',
+        overflow: 'hidden'
+      }
+      const tileVideo = (t: (typeof splitTiles)['top']): CSSProperties => ({
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: `${t.width}px`,
+        height: `${t.height}px`,
+        transform: `translate(${t.translateX}px, ${t.translateY}px)`
+      })
+      return {
+        primary: { wrapper: { ...tileWrapper, top: 0 }, video: tileVideo(splitTiles.top) },
+        shadow: { wrapper: { ...tileWrapper, top: '50%' }, video: tileVideo(splitTiles.bottom) }
+      }
+    }
+    if (isBlurActive) {
+      return {
+        primary: {
+          wrapper: { position: 'absolute', inset: 0, zIndex: 1 },
+          video: {
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: 'contain'
+          }
+        },
+        shadow: {
+          // The blurred COVER background, mirroring the export's `scale=…
+          // force_original_aspect_ratio=increase,crop=…,gblur=` chain. Scaled
+          // up 10% past `cover` so blur sampling never reaches the (already
+          // cropped-away) source edge and shows a hard line.
+          wrapper: { position: 'absolute', inset: 0, zIndex: 0, overflow: 'hidden' },
+          video: {
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            filter: 'blur(20px)',
+            transform: 'scale(1.1)'
+          }
+        }
+      }
+    }
+    if (fitMode === 'letterbox') {
+      return {
+        primary: {
+          wrapper: { position: 'absolute', inset: 0 },
+          video: {
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: 'contain'
+          }
+        },
+        shadow: { wrapper: { display: 'none' }, video: {} }
+      }
+    }
+    // fill (default) — the historical centre-crop transform, byte-identical.
+    return {
+      primary: {
+        wrapper: { position: 'absolute', inset: 0 },
+        video: {
+          position: 'absolute',
+          height: '100%',
+          width: 'auto',
+          maxWidth: 'none',
+          left: '50%',
+          // The extra shift is the auto-reframe crop (FEAT-kzej8t); it is 0
+          // with reframe off, leaving the historical centre-crop transform
+          // byte-for-byte unchanged.
+          transform: `translateX(calc(-50% + ${reframeShiftPct.toFixed(3)}%))`
+        }
+      },
+      shadow: { wrapper: { display: 'none' }, video: {} }
+    }
+  }, [isSplitActive, splitTiles, isBlurActive, fitMode, reframeShiftPct])
+
   return (
     <div data-testid="preview-player" className="flex flex-col gap-2">
       {/* The aspect-cropped frame: container-type drives caption `cqw` font sizing. */}
       <div className="flex w-full items-center justify-center">
         <div
+          ref={frameRef}
           data-testid="preview-frame"
           // Dragging places the reframe crop by hand (FEAT-kzej8t). Only armed
           // while reframing is on; otherwise the frame behaves exactly as before.
@@ -304,28 +482,35 @@ export function PreviewPlayer(): React.JSX.Element {
         >
           {src ? (
             <>
-              <video
-                ref={videoRef}
-                data-testid="preview-video"
-                src={src}
-                // Center-crop: fill the frame height, center horizontally, clip sides.
-                style={{
-                  position: 'absolute',
-                  height: '100%',
-                  width: 'auto',
-                  maxWidth: 'none',
-                  left: '50%',
-                  // The extra shift is the auto-reframe crop (FEAT-kzej8t); it is
-                  // 0 with reframe off, leaving the historical centre-crop
-                  // transform byte-for-byte unchanged.
-                  transform: `translateX(calc(-50% + ${reframeShiftPct.toFixed(3)}%))`
-                }}
-                onTimeUpdate={handleTimeUpdate}
-                onPlay={() => setPlaying(true)}
-                onPause={() => setPlaying(false)}
-                onError={() => setErroredSrc(src)}
-                preload="metadata"
-              />
+              {/* The shadow layer — the split-screen BOTTOM tile, or the blurred
+                COVER background under `fitMode: 'blur'` (EPIC-k83ghw /
+                BUG-t19z5j). Rendered BEFORE the primary layer so it sits behind
+                it in paint order regardless of the wrapper's own `zIndex`
+                (belt and braces); hidden (not unmounted) outside those two
+                modes so switching modes never remounts/reloads it. */}
+              <div style={shadow.wrapper}>
+                <video
+                  ref={shadowVideoRef}
+                  data-testid="preview-video-shadow"
+                  src={src}
+                  style={shadow.video}
+                  muted
+                  preload="metadata"
+                />
+              </div>
+              <div style={primary.wrapper}>
+                <video
+                  ref={videoRef}
+                  data-testid="preview-video"
+                  src={src}
+                  style={primary.video}
+                  onTimeUpdate={handleTimeUpdate}
+                  onPlay={() => setPlaying(true)}
+                  onPause={() => setPlaying(false)}
+                  onError={() => setErroredSrc(src)}
+                  preload="metadata"
+                />
+              </div>
               {sourceMissing && (
                 <div
                   data-testid="preview-source-missing"
@@ -347,7 +532,10 @@ export function PreviewPlayer(): React.JSX.Element {
                 </div>
               )}
               {showCaptions && active && (
-                <div data-testid="preview-captions" style={captionContainerStyle(captionStyle)}>
+                <div
+                  data-testid="preview-captions"
+                  style={captionContainerStyle(captionStyle, aspect)}
+                >
                   {active.words.map((w, i) => {
                     // Per-word reveal animation on the CURRENT word only (openclip-4v1);
                     // re-key it ('on' suffix) so React remounts and replays the CSS

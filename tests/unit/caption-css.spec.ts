@@ -28,12 +28,24 @@ describe('captionContainerStyle', () => {
   it('scales fontSize via cqw (1080-canvas px → frame width) + bottom by default', () => {
     const css = captionContainerStyle({ ...base, fontSize: 108, position: 'bottom' })
     expect(css.fontSize).toBe('10.000cqw') // 108 / 1080 * 100
-    expect(css.bottom).toBe('8%')
+    // The burn's ASS Style hardcodes MarginV=80 in a PlayResY of 1920 for a
+    // 9:16 export (ass-captions.ts buildStyleLine + playResFor) — 80/1920 =
+    // 4.167%, NOT an arbitrary preview-only constant (EPIC-k83ghw / BUG-t19z5j).
+    expect(css.bottom).toBe('4.167%')
   })
 
   it('honors top/middle position', () => {
-    expect(captionContainerStyle({ ...base, position: 'top' }).top).toBe('6%')
+    expect(captionContainerStyle({ ...base, position: 'top' }).top).toBe('4.167%')
     expect(captionContainerStyle({ ...base, position: 'middle' }).top).toBe('50%')
+  })
+
+  it('the vertical margin percentage varies by aspect (EPIC-k83ghw / BUG-t19z5j)', () => {
+    // MarginV is a FIXED pixel value in a PlayResY that itself scales with the
+    // output aspect ratio — a single hardcoded percentage could not be correct
+    // for more than one aspect at a time. 1:1 → PlayResY 1080 → 80/1080=7.407%.
+    expect(captionContainerStyle({ ...base, position: 'bottom' }, '1:1').bottom).toBe('7.407%')
+    // 16:9 → PlayResY round(1080*9/16)=608 → 80/608=13.158%.
+    expect(captionContainerStyle({ ...base, position: 'bottom' }, '16:9').bottom).toBe('13.158%')
   })
 })
 

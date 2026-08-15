@@ -31,6 +31,7 @@ import { Timeline } from '@renderer/components/Timeline'
 import { cropXAt, type ReframePlan } from '@shared/reframe-plan'
 import { FRAMING_MODES, framingMode, framingModeFor } from '@shared/framing-modes'
 import { projectFixture, clipFixture } from '../fixtures/contract'
+import { computeVisibleWindow, windowToFraction } from '@renderer/components/timeline-math'
 
 const SOURCE = { width: 1920, height: 1080 }
 
@@ -440,10 +441,18 @@ describe('the timeline shows WHERE the crop moves', () => {
     })
     render(<Timeline />)
     const dot = screen.getByTestId('reframe-keyframe')
-    // Source duration 3600 (projectFixture); t=5 within a clip starting at 10s
-    // is 15s absolute → 15/3600 = 0.4167%.
+    // t=5 within a clip starting at 10s is 15s absolute. The track renders the
+    // current visible WINDOW (a margin around the clip's own bounds,
+    // BUG-9v667j), not the whole 3600s source, so the dot's position is
+    // relative to THAT window — computed declaratively here via the same pure
+    // helper Timeline.tsx itself calls, rather than a hardcoded fraction.
+    const window = computeVisibleWindow(
+      { start: 10, end: 30 },
+      projectFixture.sourceVideo.duration,
+      1
+    )
     const left = Number.parseFloat(dot.style.left)
-    expect(left).toBeCloseTo((15 / projectFixture.sourceVideo.duration) * 100, 3)
+    expect(left).toBeCloseTo(windowToFraction(15, window) * 100, 3)
   })
 
   it('draws nothing for a static or split plan, or none at all', () => {

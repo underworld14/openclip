@@ -117,3 +117,60 @@ export function formatTime(seconds: number): string {
   // Thin wrapper over the single `formatSeconds` formatter (audit fix openclip-64e).
   return formatSeconds(seconds, { precision: 'cs' })
 }
+
+// ============================================================================
+// Visible window (EPIC-k83ghw / BUG-9v667j)
+// ============================================================================
+
+/** The time span (seconds) the track currently renders — not necessarily the whole source. */
+export interface TimeWindow {
+  start: number
+  end: number
+}
+
+/**
+ * The window the track actually renders.
+ *
+ * The track used to always map the FULL source duration onto its width. On
+ * the app's own headline use case — a 60-minute podcast cut into 45-second
+ * shorts — the clip occupied ~1% of the track and both trim handles sat on
+ * top of each other, un-grabbable with a mouse; any drag jumped the bounds
+ * to wherever the pointer landed. The window is centred on the clip with
+ * padding on both sides (room to drag OUTWARD past the current bounds),
+ * sized relative to the clip's OWN span — a 3s clip and a 90s clip both get
+ * comfortably more room than themselves, not a fixed number of seconds —
+ * and clamped to `[0, duration]`. `zoom` (1 = default) scales the padding
+ * inversely: zooming IN shrinks the window (magnifies the clip), zooming
+ * out widens it back toward the full source.
+ */
+export function computeVisibleWindow(
+  bounds: TrimBounds,
+  duration: number,
+  zoom: number
+): TimeWindow {
+  if (!(duration > 0)) return { start: 0, end: 0 }
+  const span = Math.max(bounds.end - bounds.start, 0.001)
+  const z = zoom > 0 ? zoom : 1
+  // At least a few seconds of room on each side even for a very short clip,
+  // and proportional room for a long one — both shrink together as zoom grows.
+  const padding = Math.max(span * 0.75, 3) / z
+  const start = clamp(bounds.start - padding, 0, duration)
+  const end = clamp(bounds.end + padding, 0, duration)
+  // Degenerate only when the clip (plus padding) already covers the source.
+  if (end - start < 0.001) return { start: 0, end: duration }
+  return { start, end }
+}
+
+/** Map an absolute time to a 0..1 fraction of the CURRENT window (not the whole source). */
+export function windowToFraction(time: number, window: TimeWindow): number {
+  const span = window.end - window.start
+  if (!(span > 0)) return 0
+  return clamp((time - window.start) / span, 0, 1)
+}
+
+/** Map a pixel X (relative to the track's left edge) to an absolute time within `window`. */
+export function pxToWindowTime(px: number, trackWidthPx: number, window: TimeWindow): number {
+  const span = window.end - window.start
+  if (!(trackWidthPx > 0) || !(span > 0)) return window.start
+  return window.start + pxToTime(px, trackWidthPx, span)
+}

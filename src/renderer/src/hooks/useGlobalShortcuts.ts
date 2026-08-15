@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useRef } from 'react'
-import { isTypingTarget, shortcutFor, type ShortcutId } from '@shared/shortcuts'
+import { isTypingTarget, isActivationTarget, shortcutFor, type ShortcutId } from '@shared/shortcuts'
 
 /**
  * The window-message tag the preload posts menu commands under.
@@ -69,6 +69,13 @@ export function useGlobalShortcuts(handlers: ShortcutHandlers, enabled = true): 
       })
       if (!shortcut) return
       if (!ref.current[shortcut.id]) return
+      // A focused button/link/checkbox already owns bare Space for its own
+      // native activation — let THAT win instead of hijacking the keystroke
+      // into a global command (EPIC-k83ghw / BUG-bxqmex). Scoped to Space
+      // with no modifier: a Cmd-chord landing on a button (e.g. ⌘E while
+      // focus happens to be on the Export button) is still a deliberate
+      // global command and must still fire.
+      if (!meta && e.key === ' ' && isActivationTarget(e.target as HTMLElement | null)) return
       // Only prevent the default once we KNOW we are handling it — swallowing a
       // keystroke we then ignore is how a shortcut layer breaks scrolling.
       e.preventDefault()

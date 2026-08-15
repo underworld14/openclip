@@ -371,6 +371,38 @@ export function isTypingTarget(
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
 }
 
+/**
+ * True for an element whose own native/ARIA semantics already consume the
+ * Space key to activate it — a focused `<button>`, `<a href>`, checkbox/
+ * radio, or anything with `role="button"` (EPIC-k83ghw / BUG-bxqmex).
+ *
+ * Browsers fire a native click from a focused button's Space KEYUP only if
+ * Space's keydown default was never suppressed elsewhere first. The global
+ * shortcut layer's blanket `preventDefault()` on a matched shortcut swallowed
+ * that default for EVERY focused element, so Tab-ing to any button and
+ * pressing Space silently played the video instead of activating the
+ * button — the standard button-activation key stopped working anywhere in
+ * the app (WCAG 2.1.1).
+ */
+export function isActivationTarget(
+  target: {
+    tagName?: string
+    getAttribute?(name: string): string | null
+    type?: string
+  } | null
+): boolean {
+  if (!target) return false
+  const tag = (target.tagName ?? '').toUpperCase()
+  if (tag === 'BUTTON' || tag === 'A') return true
+  const role = target.getAttribute?.('role')
+  if (role === 'button' || role === 'checkbox' || role === 'radio' || role === 'link') return true
+  if (tag === 'INPUT') {
+    const type = (target.type ?? '').toLowerCase()
+    return type === 'checkbox' || type === 'radio'
+  }
+  return false
+}
+
 /** Shortcuts grouped for the `?` sheet, in table order. */
 export function shortcutGroups(): { group: Shortcut['group']; items: Shortcut[] }[] {
   const order: Shortcut['group'][] = ['Project', 'Playback', 'Trimming', 'Clips', 'View']

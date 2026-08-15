@@ -17,6 +17,9 @@ import {
   markInAt,
   markOutAt,
   formatTime,
+  computeVisibleWindow,
+  windowToFraction,
+  pxToWindowTime,
   MIN_TRIM_GAP,
   type TrimBounds
 } from '@renderer/components/timeline-math'
@@ -129,5 +132,82 @@ describe('formatTime', () => {
   it('carries centisecond rounding cleanly', () => {
     // 9.999 rounds cs to 100 → carries to the next whole second.
     expect(formatTime(9.999)).toBe('0:10.00')
+  })
+})
+
+describe('computeVisibleWindow (EPIC-k83ghw / BUG-9v667j)', () => {
+  it('is a comfortable multiple of a SHORT clip on a LONG source, not the whole source', () => {
+    // The bug this fixes: a 45s clip in a 60-minute (3600s) source used to
+    // render at ~1.25% of the track. The window must be small relative to
+    // the full duration so the clip occupies a real, grabbable fraction.
+    const bounds: TrimBounds = { start: 1800, end: 1845 } // 45s clip, mid-source
+    const win = computeVisibleWindow(bounds, 3600, 1)
+    const windowSpan = win.end - win.start
+    expect(windowSpan).toBeLessThan(200) // nowhere near the 3600s source
+    expect(win.start).toBeLessThan(bounds.start) // padding on the left…
+    expect(win.end).toBeGreaterThan(bounds.end) // …and the right, to drag outward
+  })
+
+  it('gives even a very short clip a minimum floor of room, not a near-zero window', () => {
+    const bounds: TrimBounds = { start: 100, end: 100.5 } // 0.5s clip
+    const win = computeVisibleWindow(bounds, 3600, 1)
+    expect(win.end - win.start).toBeGreaterThan(5) // the 3s-per-side floor, not span*0.75
+  })
+
+  it('zooming IN (higher zoom) shrinks the window; zooming OUT widens it', () => {
+    const bounds: TrimBounds = { start: 100, end: 140 }
+    const base = computeVisibleWindow(bounds, 3600, 1)
+    const zoomedIn = computeVisibleWindow(bounds, 3600, 2)
+    const zoomedOut = computeVisibleWindow(bounds, 3600, 0.5)
+    expect(zoomedIn.end - zoomedIn.start).toBeLessThan(base.end - base.start)
+    expect(zoomedOut.end - zoomedOut.start).toBeGreaterThan(base.end - base.start)
+  })
+
+  it('clamps to [0, duration] near the edges of the source', () => {
+    const win = computeVisibleWindow({ start: 0, end: 5 }, 3600, 1)
+    expect(win.start).toBe(0)
+    const winEnd = computeVisibleWindow({ start: 3595, end: 3600 }, 3600, 1)
+    expect(winEnd.end).toBe(3600)
+  })
+
+  it('falls back to the whole source for a degenerate/zero duration', () => {
+    expect(computeVisibleWindow({ start: 0, end: 0 }, 0, 1)).toEqual({ start: 0, end: 0 })
+  })
+
+  it('a non-positive zoom is treated as 1x rather than dividing by zero/negative', () => {
+    const bounds: TrimBounds = { start: 100, end: 140 }
+    const zoomZero = computeVisibleWindow(bounds, 3600, 0)
+    const zoomOne = computeVisibleWindow(bounds, 3600, 1)
+    expect(zoomZero).toEqual(zoomOne)
+  })
+})
+
+describe('windowToFraction', () => {
+  it('maps a time within the window to 0..1, unlike timeToFraction which uses the whole source', () => {
+    const win = { start: 100, end: 200 }
+    expect(windowToFraction(100, win)).toBe(0)
+    expect(windowToFraction(150, win)).toBe(0.5)
+    expect(windowToFraction(200, win)).toBe(1)
+  })
+  it('clamps outside the window', () => {
+    const win = { start: 100, end: 200 }
+    expect(windowToFraction(50, win)).toBe(0)
+    expect(windowToFraction(250, win)).toBe(1)
+  })
+  it('returns 0 for a degenerate window', () => {
+    expect(windowToFraction(50, { start: 100, end: 100 })).toBe(0)
+  })
+})
+
+describe('pxToWindowTime', () => {
+  it('maps a pixel to an absolute time OFFSET by the window start', () => {
+    // 200px track, a 100..160 (60s span) window → 100px = halfway = 130.
+    expect(pxToWindowTime(100, 200, { start: 100, end: 160 })).toBe(130)
+    expect(pxToWindowTime(0, 200, { start: 100, end: 160 })).toBe(100)
+    expect(pxToWindowTime(200, 200, { start: 100, end: 160 })).toBe(160)
+  })
+  it('stays within the window even for an out-of-bounds pixel', () => {
+    expect(pxToWindowTime(-50, 200, { start: 100, end: 160 })).toBe(100)
+    expect(pxToWindowTime(500, 200, { start: 100, end: 160 })).toBe(160)
   })
 })

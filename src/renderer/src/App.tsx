@@ -159,12 +159,37 @@ function App(): React.JSX.Element {
       getPreflight: () => config
     })()
 
-  /** Open the panel, seeded from the last run (or the project defaults). */
+  /**
+   * Open the panel, seeded from the last run (or the project defaults).
+   *
+   * This is now the ONE gate every entry point shares — the header button,
+   * ⌘G, and the "Generate Clips…" menu item all call it. Before this, the
+   * header button alone checked `readiness.canGenerate` (via its `disabled`
+   * attribute) while ⌘G/the menu called this function directly with no
+   * check at all, so exactly the user this app is for — no key yet, or a
+   * blank model after switching provider — got a raw SDK/Zod error instead
+   * of the same "add a key in Settings" guidance the button already computes
+   * (EPIC-k83ghw / BUG-hfwbeb).
+   */
   const openPreflight = (): void => {
     const project = useProjectStore.getState().composeProject()
     if (!project) {
       toast.error('Cannot generate clips', {
         description: 'No project is open — import a video before generating clips.'
+      })
+      return
+    }
+    if (!hasTranscript) {
+      toast.error('Cannot generate clips', { description: 'Transcribe the video first.' })
+      return
+    }
+    if (generating) {
+      toast.error('Cannot generate clips', { description: 'A generation is already running.' })
+      return
+    }
+    if (!readiness.canGenerate) {
+      toast.error('Cannot generate clips', {
+        description: readiness.blockingReason ?? 'Finish setup in Settings first.'
       })
       return
     }
@@ -485,10 +510,20 @@ function App(): React.JSX.Element {
                 <Button
                   variant="secondary"
                   size="sm"
-                  className="gap-1.5"
+                  // `aria-disabled`, not `disabled` (EPIC-k83ghw / BUG-hfwbeb): a
+                  // truly disabled button gets `pointer-events-none` from the base
+                  // Button styles, which suppresses the hover Chromium needs to
+                  // ever render a native `title` — so the ONE explanation this app
+                  // computes for why Generate is blocked was permanently
+                  // unreachable. Left clickable, `openPreflight` itself is the
+                  // real gate now and surfaces the same reason as a toast, which
+                  // is visible without hovering at all.
+                  className={
+                    'gap-1.5' +
+                    (!hasTranscript || generating || !readiness.canGenerate ? ' opacity-50' : '')
+                  }
                   data-testid="auto-generate-clips"
-                  disabled={!hasTranscript || generating || !readiness.canGenerate}
-                  // Name the missing piece instead of a dead grey button.
+                  aria-disabled={!hasTranscript || generating || !readiness.canGenerate}
                   title={
                     readiness.blockingReason ??
                     (!hasTranscript ? 'Transcribe a video first.' : 'Generate clips with AI')

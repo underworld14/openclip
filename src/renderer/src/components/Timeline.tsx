@@ -6,18 +6,20 @@
  * Space play/pause). NO multi-track / split / waveform / undo (v0.6 — PRD §6.6).
  *
  * All trim arithmetic lives in the pure `timeline-math` helpers; this component
- * is the thin DOM shell that maps pointer X → time (`pxToTime`) and dispatches
+ * is the thin DOM shell that maps pointer X → time (`pxToWindowTime`, within the
+ * current visible WINDOW — see `computeVisibleWindow`, BUG-9v667j) and dispatches
  * the store's trim actions (`dragClipHandle` / `markIn` / `markOut`), which
  * persist `editedStart`/`editedEnd` so `resolveBounds` honours them on export
  * (PRD §6.6 "Export honors the edited bounds").
  */
 
-import { useCallback, useRef } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 import { useProjectStore } from '@renderer/stores/projectStore'
 import { resolveBounds } from '@shared/clip-bounds'
 import {
-  pxToTime,
-  timeToFraction,
+  computeVisibleWindow,
+  windowToFraction,
+  pxToWindowTime,
   formatTime,
   type TrimHandle
 } from '@renderer/components/timeline-math'
@@ -33,25 +35,37 @@ export function Timeline(): React.JSX.Element {
   // The computed reframe plan, for the keyframe dots (FEAT-kzej8t).
   const reframePlan = useProjectStore((s) => s.reframePlan)
   const setPlayhead = useProjectStore((s) => s.setPlayhead)
-  const isPlaying = useProjectStore((s) => s.isPlaying)
-  const setPlaying = useProjectStore((s) => s.setPlaying)
   const dragClipHandle = useProjectStore((s) => s.dragClipHandle)
   const markIn = useProjectStore((s) => s.markIn)
   const markOut = useProjectStore((s) => s.markOut)
+  // The ⌘+/⌘- zoom level (App.tsx). Previously read by nothing (EPIC-k83ghw /
+  // BUG-9v667j) — the track always mapped the FULL source onto its width no
+  // matter what this said.
+  const zoom = useProjectStore((s) => s.zoom)
 
   const duration = currentProject?.sourceVideo.duration ?? 0
   const clip = clips.find((c) => c.id === selectedClipId) ?? clips[0] ?? null
   const bounds = clip ? resolveBounds(clip) : null
+  // Keyed off the PRIMITIVE bounds, not the `bounds` object (resolveBounds
+  // returns a fresh one every render) — otherwise this (and `eventTime`
+  // below, which depends on it) would recompute on every render regardless
+  // of whether the clip's actual bounds moved.
+  const visibleWindow = useMemo(
+    () => (bounds ? computeVisibleWindow(bounds, duration, zoom) : { start: 0, end: duration }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [bounds?.start, bounds?.end, duration, zoom]
+  )
 
-  // Map a pointer event to an absolute source time using the track's geometry.
+  // Map a pointer event to an absolute source time using the track's geometry
+  // — within the current visible WINDOW, not the whole source (BUG-9v667j).
   const eventTime = useCallback(
     (clientX: number): number => {
       const el = trackRef.current
-      if (!el) return 0
+      if (!el) return visibleWindow.start
       const rect = el.getBoundingClientRect()
-      return pxToTime(clientX - rect.left, rect.width, duration)
+      return pxToWindowTime(clientX - rect.left, rect.width, visibleWindow)
     },
-    [duration]
+    [visibleWindow]
   )
 
   const onHandlePointerDown = useCallback(
@@ -93,7 +107,18 @@ export function Timeline(): React.JSX.Element {
     [bounds, eventTime, setPlayhead]
   )
 
-  // MVP keyboard set (PRD §6.6 / §11.3): I mark-in, O mark-out, Space play/pause.
+  // MVP keyboard set (PRD §6.6 / §11.3): I mark-in, O mark-out.
+  //
+  // Space is deliberately NOT handled here (EPIC-k83ghw / BUG-bxqmex): it
+  // used to toggle play/pause locally AND the app-wide shortcut layer
+  // (useGlobalShortcuts) ALSO matched bare Space and toggled the SAME
+  // isPlaying flag — but the two handlers read it from different sources
+  // (this one from the React-subscribed hook value, the global one via a
+  // live `store.getState()` read) and fired in the same synchronous keydown
+  // dispatch, so one toggled it and the other immediately toggled it back:
+  // Space did nothing at all with the timeline focused, which is exactly
+  // what clicking the timeline to seek leaves focused. The global handler
+  // now owns playback exclusively.
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>): void => {
       if (!clip) return
@@ -108,14 +133,9 @@ export function Timeline(): React.JSX.Element {
           e.preventDefault()
           markOut(clip.id, duration)
           break
-        case ' ':
-        case 'Spacebar':
-          e.preventDefault()
-          setPlaying(!isPlaying)
-          break
       }
     },
-    [clip, duration, isPlaying, markIn, markOut, setPlaying]
+    [clip, duration, markIn, markOut]
   )
 
   if (!clip || !bounds || !(duration > 0)) {
@@ -131,9 +151,9 @@ export function Timeline(): React.JSX.Element {
     )
   }
 
-  const startFrac = timeToFraction(bounds.start, duration)
-  const endFrac = timeToFraction(bounds.end, duration)
-  const playFrac = timeToFraction(playhead, duration)
+  const startFrac = windowToFraction(bounds.start, visibleWindow)
+  const endFrac = windowToFraction(bounds.end, visibleWindow)
+  const playFrac = windowToFraction(playhead, visibleWindow)
 
   return (
     <div
@@ -153,7 +173,8 @@ export function Timeline(): React.JSX.Element {
         </span>
       </div>
 
-      {/* The single track spanning the full source duration. */}
+      {/* The single track spanning the current visible WINDOW (a comfortable
+        margin around the clip, not necessarily the whole source — BUG-9v667j). */}
       <div
         ref={trackRef}
         data-testid="timeline-track"
@@ -187,7 +208,7 @@ export function Timeline(): React.JSX.Element {
                 data-testid="reframe-keyframe"
                 title={`Crop x=${Math.round(k.x)} at ${(bounds.start + k.t).toFixed(2)}s`}
                 className="pointer-events-none absolute top-0 size-1.5 -translate-x-1/2 rounded-full bg-sky-400"
-                style={{ left: `${timeToFraction(t, duration) * 100}%` }}
+                style={{ left: `${windowToFraction(t, visibleWindow) * 100}%` }}
               />
             )
           })}

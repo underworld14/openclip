@@ -8,15 +8,22 @@
  * committed to the flow. This channel makes that state readable up front so the
  * renderer can show a red chip before anything is started.
  *
- * Deliberately NON-THROWING per tool: `paths.ts` throws when it cannot locate a
- * binary, and one missing sidecar must not blank the entire readiness bar — the
- * whole point is telling the user *which* piece is missing.
+ * Deliberately NON-THROWING per tool: `paths.ts` CAN throw when it cannot locate
+ * a binary (the dev PATH-lookup branches do), and one missing sidecar must not
+ * blank the entire readiness bar — the whole point is telling the user *which*
+ * piece is missing. But the PACKAGED-build branches never throw at all — they
+ * end in an unconditional `join(process.resourcesPath, …)` with no existence
+ * check — so a damaged install (a sidecar stripped by AV/quarantine, an
+ * incomplete copy off the dmg) used to report every chip green regardless
+ * (EPIC-k83ghw / BUG-phta04). `probe()` now stats the resolved path itself
+ * rather than trusting the resolver's silence.
  *
  * The other `system:*` handlers (dialogs, open-folder, check-update) live in
  * `ipc/video.ts` for historical reasons; this file is registered separately in
  * HANDLER_REGISTRARS rather than growing that one further.
  */
 
+import { existsSync } from 'node:fs'
 import { app, Notification } from 'electron'
 import { IPCChannels } from '@shared/channels'
 import type { PreflightResult, PreflightTool } from '@shared/channels'
@@ -24,11 +31,14 @@ import { ffmpegPath, ffprobePath, whisperCliPath, ytDlpPath } from '@main/utils/
 import { encoderBackend } from '@main/services/encoder-probe'
 import type { IpcContext } from './index'
 
-/** Run one resolver, mapping both a throw and an empty result to `{ok:false}`. */
+/**
+ * Run one resolver, mapping a throw, an empty result, or a path that does not
+ * actually exist on disk to `{ok:false}`.
+ */
 function probe(resolve: () => string): PreflightTool {
   try {
     const path = resolve()
-    if (!path || !path.trim()) return { ok: false }
+    if (!path || !path.trim() || !existsSync(path)) return { ok: false }
     return { ok: true, path }
   } catch {
     return { ok: false }

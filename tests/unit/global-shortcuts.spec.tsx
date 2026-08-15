@@ -155,6 +155,50 @@ describe('the focus rule', () => {
   })
 })
 
+describe('Space on a focused button (EPIC-k83ghw / BUG-bxqmex)', () => {
+  const withButton = (): HTMLButtonElement => {
+    const el = document.createElement('button')
+    document.body.appendChild(el)
+    return el
+  }
+
+  it('leaves bare Space alone so the button keeps its native activation', () => {
+    // Before this fix, the blanket preventDefault() on every matched shortcut
+    // suppressed Space's keydown default EVERYWHERE, including on a focused
+    // button — and a browser only fires a native click from Space's KEYUP if
+    // that default was never suppressed, so Tab-ing to any button and
+    // pressing Space silently played the video instead of activating it.
+    const playPause = vi.fn()
+    renderHook(() => useGlobalShortcuts({ 'play-pause': playPause }))
+    let e!: KeyboardEvent
+    act(() => {
+      e = press(' ', { target: withButton() })
+    })
+    expect(playPause).not.toHaveBeenCalled()
+    expect(e.defaultPrevented).toBe(false)
+  })
+
+  it('still fires play-pause for Space anywhere else (a plain div, e.g. the timeline)', () => {
+    const playPause = vi.fn()
+    renderHook(() => useGlobalShortcuts({ 'play-pause': playPause }))
+    const div = document.createElement('div')
+    document.body.appendChild(div)
+    act(() => {
+      press(' ', { target: div })
+    })
+    expect(playPause).toHaveBeenCalledTimes(1)
+  })
+
+  it('still fires a Cmd-chord landing on a button — only bare Space is scoped', () => {
+    const exportClip = vi.fn()
+    renderHook(() => useGlobalShortcuts({ 'export-clip': exportClip }))
+    act(() => {
+      press('e', { metaKey: true, target: withButton() })
+    })
+    expect(exportClip).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('application-menu commands', () => {
   it('runs the same handler a keystroke would', () => {
     // One dispatch table for both sources, so a menu item and its key cannot

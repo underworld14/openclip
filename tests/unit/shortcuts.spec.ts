@@ -23,6 +23,7 @@ import { describe, expect, it } from 'vitest'
 import {
   SHORTCUTS,
   isTypingTarget,
+  isActivationTarget,
   matchesShortcut,
   shortcutFor,
   shortcutGroups,
@@ -159,6 +160,30 @@ describe('isTypingTarget: the rule that makes bare letters safe', () => {
     expect(isTypingTarget({ tagName: 'BUTTON' })).toBe(false)
     expect(isTypingTarget(null)).toBe(false)
     expect(isTypingTarget({})).toBe(false)
+  })
+})
+
+describe('isActivationTarget: what already owns Space (EPIC-k83ghw / BUG-bxqmex)', () => {
+  it('reports buttons, links, and checkbox/radio inputs', () => {
+    expect(isActivationTarget({ tagName: 'BUTTON' })).toBe(true)
+    expect(isActivationTarget({ tagName: 'A' })).toBe(true)
+    expect(isActivationTarget({ tagName: 'INPUT', type: 'checkbox' })).toBe(true)
+    expect(isActivationTarget({ tagName: 'INPUT', type: 'radio' })).toBe(true)
+    expect(isActivationTarget({ tagName: 'INPUT', type: 'checkbox' })).toBe(true)
+  })
+
+  it('reports an ARIA role="button"/"checkbox"/"radio"/"link" regardless of tag', () => {
+    for (const role of ['button', 'checkbox', 'radio', 'link']) {
+      expect(isActivationTarget({ tagName: 'DIV', getAttribute: () => role }), role).toBe(true)
+    }
+  })
+
+  it('does not report a plain text input, or a timeline-shaped div', () => {
+    expect(isActivationTarget({ tagName: 'INPUT', type: 'text' })).toBe(false)
+    expect(isActivationTarget({ tagName: 'DIV' })).toBe(false)
+    expect(isActivationTarget({ tagName: 'DIV', getAttribute: () => null })).toBe(false)
+    expect(isActivationTarget(null)).toBe(false)
+    expect(isActivationTarget({})).toBe(false)
   })
 })
 

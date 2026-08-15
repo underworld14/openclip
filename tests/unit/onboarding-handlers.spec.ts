@@ -13,8 +13,21 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { IPCChannels } from '@shared/channels'
 import type { PreflightResult, ModelDeleteResult } from '@shared/channels'
+
+/** A REAL file on disk — `probe()` now existsSync-checks the resolved path
+ * (EPIC-k83ghw / BUG-phta04), so a fake `/bin/ffmpeg`-shaped string that
+ * merely LOOKS plausible is no longer enough to report `ok: true`. */
+function realFile(name: string): string {
+  const dir = mkdtempSync(join(tmpdir(), 'openclip-preflight-'))
+  const p = join(dir, name)
+  writeFileSync(p, '')
+  return p
+}
 
 const paths = {
   ffmpegPath: vi.fn(),
@@ -64,10 +77,10 @@ describe('SYSTEM_PREFLIGHT (FEAT-c5a15c)', () => {
   })
 
   it('reports every resolved binary with its path', async () => {
-    paths.ffmpegPath.mockReturnValue('/bin/ffmpeg')
-    paths.ffprobePath.mockReturnValue('/bin/ffprobe')
-    paths.whisperCliPath.mockReturnValue('/bin/whisper-cli')
-    paths.ytDlpPath.mockReturnValue('/bin/yt-dlp')
+    paths.ffmpegPath.mockReturnValue(realFile('ffmpeg'))
+    paths.ffprobePath.mockReturnValue(realFile('ffprobe'))
+    paths.whisperCliPath.mockReturnValue(realFile('whisper-cli'))
+    paths.ytDlpPath.mockReturnValue(realFile('yt-dlp'))
 
     const { ctx, handlers } = makeCtx()
     registerSystemPreflightHandler(ctx)
@@ -76,20 +89,20 @@ describe('SYSTEM_PREFLIGHT (FEAT-c5a15c)', () => {
       undefined
     )) as PreflightResult
 
-    expect(res.ffmpeg).toEqual({ ok: true, path: '/bin/ffmpeg' })
-    expect(res.whisperCli).toEqual({ ok: true, path: '/bin/whisper-cli' })
+    expect(res.ffmpeg.ok).toBe(true)
+    expect(res.whisperCli.ok).toBe(true)
     expect(res.ytDlp.ok).toBe(true)
   })
 
   it('reports a THROWING resolver as not-ok instead of failing the whole probe', async () => {
     // paths.ts throws when a binary cannot be located. One missing sidecar must
     // not blank the entire readiness bar — the user needs to see which one.
-    paths.ffmpegPath.mockReturnValue('/bin/ffmpeg')
-    paths.ffprobePath.mockReturnValue('/bin/ffprobe')
+    paths.ffmpegPath.mockReturnValue(realFile('ffmpeg'))
+    paths.ffprobePath.mockReturnValue(realFile('ffprobe'))
     paths.whisperCliPath.mockImplementation(() => {
       throw new Error('whisper-cli not found on PATH')
     })
-    paths.ytDlpPath.mockReturnValue('/bin/yt-dlp')
+    paths.ytDlpPath.mockReturnValue(realFile('yt-dlp'))
 
     const { ctx, handlers } = makeCtx()
     registerSystemPreflightHandler(ctx)
@@ -104,9 +117,9 @@ describe('SYSTEM_PREFLIGHT (FEAT-c5a15c)', () => {
 
   it('treats an empty resolved path as not-ok', async () => {
     paths.ffmpegPath.mockReturnValue('')
-    paths.ffprobePath.mockReturnValue('/bin/ffprobe')
-    paths.whisperCliPath.mockReturnValue('/bin/whisper-cli')
-    paths.ytDlpPath.mockReturnValue('/bin/yt-dlp')
+    paths.ffprobePath.mockReturnValue(realFile('ffprobe'))
+    paths.whisperCliPath.mockReturnValue(realFile('whisper-cli'))
+    paths.ytDlpPath.mockReturnValue(realFile('yt-dlp'))
 
     const { ctx, handlers } = makeCtx()
     registerSystemPreflightHandler(ctx)
@@ -115,6 +128,27 @@ describe('SYSTEM_PREFLIGHT (FEAT-c5a15c)', () => {
       undefined
     )) as PreflightResult
     expect(res.ffmpeg.ok).toBe(false)
+  })
+
+  it('treats a resolved path that does not exist on disk as not-ok (EPIC-k83ghw / BUG-phta04)', async () => {
+    // Every packaged-build resolver in paths.ts ends in an unconditional
+    // `join(process.resourcesPath, …)` with no existence check — a damaged
+    // install (a sidecar quarantined/stripped by AV, an incomplete copy off
+    // the dmg) previously reported every chip green right up until the first
+    // real spawn failed mid-import.
+    paths.ffmpegPath.mockReturnValue('/nonexistent/dir/that/is/never/created/ffmpeg')
+    paths.ffprobePath.mockReturnValue(realFile('ffprobe'))
+    paths.whisperCliPath.mockReturnValue(realFile('whisper-cli'))
+    paths.ytDlpPath.mockReturnValue(realFile('yt-dlp'))
+
+    const { ctx, handlers } = makeCtx()
+    registerSystemPreflightHandler(ctx)
+    const res = (await handlers.get(IPCChannels.SYSTEM_PREFLIGHT)!(
+      null,
+      undefined
+    )) as PreflightResult
+    expect(res.ffmpeg).toEqual({ ok: false })
+    expect(res.ffprobe.ok).toBe(true) // the rest still reported
   })
 })
 

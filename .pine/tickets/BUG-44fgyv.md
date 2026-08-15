@@ -1,14 +1,14 @@
 ---
 id: BUG-44fgyv
 title: Auto-reframe's motion pass decodes at full resolution and frame rate — roughly 20x the cost of the face pass
-status: todo
+status: done
 priority: low
 labels:
     - perf
 parent: EPIC-k83ghw
 phase: p2
 created: "2026-08-15T11:28:11Z"
-updated: "2026-08-15T11:28:11Z"
+updated: "2026-08-15T16:36:44Z"
 ---
 
 ## Problem
@@ -33,6 +33,219 @@ Downscale and frame-sample the motion pass, cache plans per clip-bounds, put the
 on the job plane so it is cancellable, and pass words by reference/once per batch.
 
 ## Acceptance Criteria
-- [ ] Motion analysis time drops materially on a 90s clip
-- [ ] Switching clips mid-analysis never shows the previous clip's crop
-- [ ] A reframe plan is cancellable
+- [x] Motion analysis time drops materially on a 90s clip
+- [x] Switching clips mid-analysis never shows the previous clip's crop
+- [x] A reframe plan is cancellable
+
+## Resolution
+
+All 3 ACs closed (commit `0fae3cc`):
+
+- `motionArgs` (reframe-detect.ts) now runs `fps=8,crop=…,scale=200:-2` before
+  the per-frame `tblend`/`signalstats` cost, instead of the source's native
+  resolution/frame rate with no reduction at all. Verified against the real
+  ffmpeg binary (`reframe.serial.spec.ts`, not skipped in this environment) —
+  the left/right motion-routing assertions still hold at the new rate/scale.
+- `previewSlice.loadReframePlan`'s `reframePlanFor === key || reframePlanLoading`
+  guard was the actual cause of "leaves the previous clip's crop on screen":
+  it silently DROPPED a request for a newly-selected clip whenever the
+  previous clip's request hadn't settled, so the new clip's plan was simply
+  never fetched. Replaced the loading half with a monotonic request-sequence
+  guard — a later call always starts, and a stale response is ignored.
+- `ipc/video.ts`'s `PLAN_REFRAME` handler now aborts the previous in-flight
+  request for the same project when a new one arrives. `planReframe` already
+  threaded an `AbortSignal` all the way to both ffmpeg passes (confirmed both
+  `SIGKILL` the child on abort) — it was simply never wired up from the
+  handler. An aborted run is reported `detect-failed` and never cached.
+
+"Trimming a clip with 'Follow speaker' on re-runs the whole detection pass
+each time" (Evidence): the plan cache is already keyed on clip bounds
+(`startTime`/`endTime` are part of `reframeCacheKey`) — exactly "cache plans
+per clip-bounds", the Fix section's own wording. A trim changing the bounds
+correctly invalidates the cache; what this ticket's 3 ACs actually fix is the
+COST of each such re-run (the downscale) and a rapid trim-drag no longer
+piling up abandoned analyses (the abort wiring, which applies to a
+trim-triggered request exactly the same as a clip-selection one).
+
+**Deliberately deferred** (present in Evidence, not required by the checked
+ACs):
+- Kill-on-quit PID tracking for these two ffmpeg passes: no existing
+  non-job PID-tracking hook to hang it on (the job plane's `SidecarManager`
+  only tracks job-runner children); building a parallel mechanism for two
+  call sites is a larger, separate change. The AbortSignal path this ticket
+  adds is the actual cancellation the ACs asked for.
+- Passing the batch-export transcript word array by reference/once per
+  batch: untouched — no evidence gathered this session that it regressed
+  since FEAT-rmh08k's "one copy per queued job" framing, and it is a
+  separate code path (export-runner.ts) from the preview cancellation this
+  ticket's ACs are actually about.
+
+## Work Evidence
+
+Closed by `pine close --evidence` on 2026-08-15.
+
+- Base: `216f85f1` (last commit at or before ticket created 2026-08-15)
+- Commits (2):
+  - `0fae3cc3` — perf(reframe): downscale/frame-sample the motion pass, cancel a superseded plan request
+  - `0ab7f99d` — chore(pine): file the production-readiness & UX audit (EPIC-k83ghw)
+- Files changed (base → working tree):
+
+```
+ .pine/MEMORY.md                                    |   2 +
+ .pine/memory/renderer.md                           |   4 +-
+ .pine/memory/testing.md                            |   3 +-
+ .pine/tickets/BUG-08sb0x.md                        | 194 +++++++++++++
+ .pine/tickets/BUG-12bxbk.md                        | 191 +++++++++++++
+ .pine/tickets/BUG-15cddx.md                        | 138 ++++++++++
+ .pine/tickets/BUG-1m642d.md                        |  59 ++++
+ .pine/tickets/BUG-44fgyv.md                        |  81 ++++++
+ .pine/tickets/BUG-4c3gj3.md                        | 118 ++++++++
+ .pine/tickets/BUG-4tscfq.md                        | 183 ++++++++++++-
+ .pine/tickets/BUG-5jwaxf.md                        | 118 ++++++++
+ .pine/tickets/BUG-8kgcxs.md                        | 129 +++++++++
+ .pine/tickets/BUG-93txd0.md                        | 126 +++++++++
+ .pine/tickets/BUG-9v667j.md                        | 128 +++++++++
+ .pine/tickets/BUG-adfj3b.md                        | 119 ++++++++
+ .pine/tickets/BUG-aryvgg.md                        | 214 +++++++++++++++
+ .pine/tickets/BUG-bxqmex.md                        | 134 +++++++++
+ .pine/tickets/BUG-fcg251.md                        | 119 ++++++++
+ .pine/tickets/BUG-gasxqq.md                        | 122 +++++++++
+ .pine/tickets/BUG-hfwbeb.md                        | 133 +++++++++
+ .pine/tickets/BUG-hkmsng.md                        | 209 ++++++++++++++
+ .pine/tickets/BUG-hqbett.md                        | 199 ++++++++++++++
+ .pine/tickets/BUG-phta04.md                        | 127 +++++++++
+ .pine/tickets/BUG-prkcq1.md                        | 191 +++++++++++++
+ .pine/tickets/BUG-qcvhcn.md                        | 250 +++++++++++++++++
+ .pine/tickets/BUG-sg6kqg.md                        | 203 ++++++++++++++
+ .pine/tickets/BUG-t19z5j.md                        | 186 +++++++++++++
+ .pine/tickets/BUG-tdgtfb.md                        | 125 +++++++++
+ .pine/tickets/BUG-v4phgj.md                        | 183 ++++++++++++-
+ .pine/tickets/BUG-vh7vwp.md                        | 183 ++++++++++++-
+ .pine/tickets/BUG-vv87d6.md                        | 120 ++++++++
+ .pine/tickets/BUG-w2jv3w.md                        | 106 +++++++
+ .pine/tickets/BUG-whdqsc.md                        | 231 ++++++++++++++++
+ .pine/tickets/BUG-y9km1j.md                        |  73 +++++
+ .pine/tickets/EPIC-k83ghw.md                       |  66 +++++
+ .pine/tickets/FEAT-azvb5c.md                       | 226 +++++++++++++++
+ .pine/tickets/FEAT-rmgkee.md                       | 234 ++++++++++++++++
+ .pine/tickets/FEAT-vz5vya.md                       | 118 ++++++++
+ .pine/tickets/FEAT-x9femg.md                       | 125 +++++++++
+ README.md                                          |  74 +++--
+ electron-builder.yml                               |  35 ++-
+ package-lock.json                                  | 100 ++++++-
+ package.json                                       |   1 +
+ src/main/index.ts                                  | 120 +++++++-
+ src/main/ipc/ai.ts                                 |  24 +-
+ src/main/ipc/audio.ts                              |  50 ++--
+ src/main/ipc/job-start-validation.ts               |  13 +-
+ src/main/ipc/media.ts                              |  15 +-
+ src/main/ipc/project.ts                            |  32 ++-
+ src/main/ipc/settings.ts                           |  17 +-
+ src/main/ipc/system.ts                             |  20 +-
+ src/main/ipc/video.ts                              |  58 +++-
+ src/main/menu.ts                                   |  30 +-
+ src/main/services/ai-client.ts                     | 193 ++++++++++++-
+ src/main/services/ai-emoji.ts                      |  10 +-
+ src/main/services/ass-captions.ts                  |  13 +-
+ src/main/services/ffmpeg-extract.ts                |   6 +
+ src/main/services/jobs/extract-audio-runner.ts     | 100 +++++++
+ src/main/services/jobs/generate-clips-runner.ts    |  84 ++++--
+ src/main/services/jobs/transcribe-runner.ts        |  16 +-
+ src/main/services/media-store.ts                   |  29 ++
+ src/main/services/project-store.ts                 |  16 +-
+ src/main/services/reframe-detect.ts                |  39 ++-
+ src/main/services/sidecar-errors.ts                | 172 ++++++++++++
+ src/main/services/sidecar-manager.ts               |  54 +++-
+ src/main/services/updater.ts                       |  59 ++++
+ src/main/utils/ffprobe.ts                          |  26 +-
+ src/main/utils/paths.ts                            |  50 +++-
+ src/preload/api/audio.ts                           |  12 -
+ src/preload/index.ts                               |   4 -
+ src/renderer/src/App.tsx                           | 253 ++++++++++++-----
+ src/renderer/src/assets/index.css                  |  79 +++++-
+ src/renderer/src/components/ClipCard.tsx           |  12 +-
+ src/renderer/src/components/Dashboard.tsx          |  12 +-
+ src/renderer/src/components/ErrorBoundary.tsx      |  86 ++++++
+ src/renderer/src/components/ExportPanel.tsx        |  30 +-
+ .../src/components/GeneratePreflightDialog.tsx     |  39 ++-
+ src/renderer/src/components/ImportPanel.tsx        |  28 +-
+ src/renderer/src/components/JobStatusBar.tsx       |  14 +
+ src/renderer/src/components/PreviewPlayer.tsx      | 303 +++++++++++++++++++--
+ src/renderer/src/components/SettingsPanel.tsx      | 128 ++++++---
+ src/renderer/src/components/Timeline.tsx           |  65 +++--
+ src/renderer/src/components/TranscriptPanel.tsx    |  27 +-
+ src/renderer/src/components/batch-export.ts        |  42 ++-
+ src/renderer/src/components/caption-css.ts         |  40 ++-
+ src/renderer/src/components/import-pipeline.ts     |  90 +++++-
+ src/renderer/src/components/jobStatus.ts           |  15 +
+ src/renderer/src/components/model-download.ts      |   5 +-
+ src/renderer/src/components/preview-crop.ts        |  49 +++-
+ src/renderer/src/components/readinessView.ts       |   2 +-
+ src/renderer/src/components/theme.ts               |  38 +++
+ src/renderer/src/components/timeline-math.ts       |  57 ++++
+ src/renderer/src/hooks/import-controller.ts        | 219 ++++++++++++++-
+ src/renderer/src/hooks/useGlobalShortcuts.ts       |   9 +-
+ src/renderer/src/hooks/useImportController.ts      |   9 +-
+ src/renderer/src/hooks/usePrefersReducedMotion.ts  |  29 ++
+ src/renderer/src/hooks/useProject.ts               | 115 +++++++-
+ src/renderer/src/main.tsx                          |   5 +-
+ src/renderer/src/stores/jobsStore.ts               |  11 +-
+ src/renderer/src/stores/projectStore/clipsSlice.ts | 121 ++++++--
+ .../src/stores/projectStore/previewSlice.ts        |  34 ++-
+ src/shared/ai-providers.ts                         |  39 +++
+ src/shared/channels.ts                             |  17 +-
+ src/shared/jobs.ts                                 |  26 ++
+ src/shared/schema.ts                               |  12 +-
+ src/shared/shortcuts.ts                            |  32 +++
+ tests/e2e/vertical-slice.e2e.spec.ts               |  78 +++++-
+ tests/harness/renderer-env.ts                      |  54 ++++
+ tests/mocks/openclip.ts                            |  12 +-
+ tests/unit/ai-mapreduce.spec.ts                    |  75 +++++
+ tests/unit/ai-providers-meta.spec.ts               |  49 ++++
+ tests/unit/ai-providers.spec.ts                    | 111 ++++++++
+ tests/unit/ai-stores.spec.ts                       |  93 ++++++-
+ tests/unit/app-menu.spec.ts                        |  23 ++
+ tests/unit/ass-captions.spec.ts                    |  16 ++
+ tests/unit/batch-export.spec.ts                    |  62 +++++
+ tests/unit/caption-css.spec.ts                     |  16 +-
+ tests/unit/clip-card-preview.spec.tsx              |  22 ++
+ tests/unit/clip-reject-undo.spec.tsx               |  29 ++
+ tests/unit/dialog-handlers.spec.ts                 |  10 +-
+ tests/unit/error-boundary.spec.tsx                 |  64 +++++
+ tests/unit/export-cancel.spec.tsx                  |  26 ++
+ tests/unit/extract-audio-runner.spec.ts            | 100 +++++++
+ tests/unit/ffprobe.spec.ts                         |  24 +-
+ tests/unit/generate-clips-runner.spec.ts           | 117 ++++++++
+ tests/unit/generate-preflight-dialog.spec.tsx      |  37 ++-
+ tests/unit/global-shortcuts.spec.tsx               |  76 ++++++
+ tests/unit/import-controller.spec.ts               |  16 +-
+ tests/unit/import-pipeline.spec.ts                 |  93 ++++++-
+ tests/unit/import-url.spec.ts                      |  35 ++-
+ tests/unit/ipc-media.spec.ts                       |  25 +-
+ tests/unit/ipc-project.spec.ts                     |  51 +++-
+ tests/unit/ipc-video-plan-reframe.spec.ts          | 179 ++++++++++++
+ tests/unit/job-start-validation.spec.ts            |  55 ++++
+ tests/unit/job-status-bar-a11y.spec.tsx            |  56 ++++
+ tests/unit/job-status.spec.ts                      |  24 ++
+ tests/unit/onboarding-handlers.spec.ts             |  58 +++-
+ tests/unit/paths-prod.spec.ts                      |  35 +++
+ tests/unit/preload-parity.spec.ts                  |   6 +-
+ tests/unit/preview-crop.spec.ts                    |  72 ++++-
+ tests/unit/preview-fitmode.spec.tsx                | 201 ++++++++++++++
+ tests/unit/project-management.spec.tsx             |  11 +
+ tests/unit/project-store.spec.ts                   |  34 +++
+ tests/unit/reframe-detect.spec.ts                  |  50 +++-
+ tests/unit/reframe-visibility.spec.tsx             | 113 +++++++-
+ tests/unit/settings-panel-copy.spec.tsx            | 130 +++++++++
+ tests/unit/settings-tabs.spec.tsx                  |   4 +-
+ tests/unit/shortcuts.spec.ts                       |  25 ++
+ tests/unit/sidecar-errors.spec.ts                  | 142 ++++++++++
+ tests/unit/sidecar-manager.spec.ts                 |  63 +++++
+ tests/unit/theme.spec.ts                           |  66 +++++
+ tests/unit/timeline-math.spec.ts                   |  80 ++++++
+ tests/unit/transcript-seek.spec.tsx                |  32 ++-
+ tests/unit/trunk-infra.spec.ts                     |  30 ++
+ tests/unit/updater.spec.ts                         |  88 ++++++
+ tests/unit/use-project.spec.ts                     | 134 ++++++++-
+ 156 files changed, 11520 insertions(+), 516 deletions(-)
+```

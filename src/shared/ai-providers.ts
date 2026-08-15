@@ -31,6 +31,45 @@ export function providerLabel(provider: AIProvider): string {
 }
 
 /**
+ * Where to get a key, shown as a "Get a key →" link beside the key field
+ * (EPIC-k83ghw / FEAT-rmgkee). `undefined` for a provider with no ONE key
+ * page to send someone to: `ollama` needs no key at all, and `custom` is
+ * whatever server the user configured — its key (if any) comes from wherever
+ * that server's operator issues one, not from OpenClip.
+ */
+const PROVIDER_KEY_URLS: Partial<Record<AIProvider, string>> = {
+  openai: 'https://platform.openai.com/api-keys',
+  anthropic: 'https://console.anthropic.com/settings/keys',
+  google: 'https://aistudio.google.com/apikey',
+  openrouter: 'https://openrouter.ai/keys'
+}
+
+export function providerKeyUrl(provider: AIProvider): string | undefined {
+  return PROVIDER_KEY_URLS[provider]
+}
+
+/**
+ * A rough, hedged cost hint per provider (EPIC-k83ghw / FEAT-rmgkee) — shown
+ * next to the key field so "what does this cost" has SOME answer before the
+ * first run, not just OpenRouter's live per-model pricing after a key is
+ * already saved. Deliberately qualitative rather than a hard dollar figure:
+ * clip detection sends TRANSCRIPT TEXT ONLY (never the video), so the actual
+ * cost is a few thousand tokens per hour of source — cheap on any efficient
+ * model — but a specific number would drift out of date independent of any
+ * OpenClip release and could read as a promise this app cannot keep.
+ */
+const PROVIDER_COST_HINTS: Partial<Record<AIProvider, string>> = {
+  openai: 'Typically a few cents per hour of video with an efficient (mini-class) model.',
+  anthropic: 'Typically a few cents per hour of video with an efficient (Haiku-class) model.',
+  google: 'Typically a few cents per hour of video with an efficient (Flash-class) model.',
+  openrouter: 'Pay-per-use, varies by model — OpenRouter shows live pricing once you load models.'
+}
+
+export function providerCostHint(provider: AIProvider): string | undefined {
+  return PROVIDER_COST_HINTS[provider]
+}
+
+/**
  * How to NAME the provider inside an error sentence.
  *
  * For the four fixed providers this is just the brand. For `custom` the brand

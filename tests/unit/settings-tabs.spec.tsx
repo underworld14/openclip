@@ -34,7 +34,9 @@ const clickTab = async (testId: string): Promise<void> => {
 describe('SettingsPanel: three tabs, nothing lost in the split', () => {
   it('shows the AI section by default — the reason most people open Settings', async () => {
     render(<SettingsPanel />)
-    expect(await screen.findByLabelText('AI Provider (BYOK)')).toBeTruthy()
+    // EPIC-k83ghw / FEAT-rmgkee: "BYOK" was implementation jargon, not
+    // something a first-time user recognises.
+    expect(await screen.findByLabelText('AI Provider')).toBeTruthy()
     expect(screen.getByPlaceholderText('Pick one below, or type a model id')).toBeTruthy()
   })
 

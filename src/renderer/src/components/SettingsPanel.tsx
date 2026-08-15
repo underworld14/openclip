@@ -13,7 +13,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { AIProvider } from '@shared/schema'
 import type { WhisperModelSize } from '@shared/jobs'
-import { providerNeedsBaseUrl, providerRequiresKey } from '@shared/ai-providers'
+import {
+  providerNeedsBaseUrl,
+  providerRequiresKey,
+  providerKeyUrl,
+  providerCostHint
+} from '@shared/ai-providers'
 import { isInsecureHttpEndpoint, isSafeEndpointUrl, normalizeBaseUrl } from '@shared/endpoint-url'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { Button } from '@renderer/components/ui/button'
@@ -337,8 +342,21 @@ export function SettingsPanel({
         </TabsList>
 
         <TabsContent value="ai" className="flex flex-col gap-4">
+          {/* Plain-language explainer (EPIC-k83ghw / FEAT-rmgkee): the ONE hard
+              prerequisite of the app used to be presented as a password box with
+              no context — a creator who had never used an LLM API was told WHAT
+              was missing and never WHY or HOW. */}
+          <p className="text-xs text-muted-foreground">
+            Clip detection reads your transcript with an AI model to find the best moments —{' '}
+            <span className="font-medium text-foreground">only transcript text is ever sent</span>,
+            never your video. You use your own account with the provider you pick below, so you pay
+            them directly — OpenClip never bills you or sees your key. Prefer not to pay anyone?{' '}
+            <span className="font-medium text-foreground">Ollama (local)</span> runs free, on this
+            Mac, with no key at all.
+          </p>
+
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ai-provider">AI Provider (BYOK)</Label>
+            <Label htmlFor="ai-provider">AI Provider</Label>
             <Select value={provider} onValueChange={(v) => void onProviderChange(v)}>
               <SelectTrigger id="ai-provider">
                 <SelectValue />
@@ -347,11 +365,30 @@ export function SettingsPanel({
                 {providerOptions().map(({ provider: p, disabled }) => (
                   <SelectItem key={p} value={p} disabled={disabled}>
                     {providerLabel(p)}
+                    {p === 'ollama' ? ' — free, no key' : ''}
                     {disabled ? ' — not available yet' : ''}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {provider === 'ollama' && (
+              <p
+                className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1.5 text-xs text-emerald-600"
+                data-testid="ollama-free-badge"
+              >
+                Free · runs on this Mac · no key needed. Ollama is separate, free software — if you
+                haven’t installed it yet,{' '}
+                <a
+                  href="https://ollama.com"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline underline-offset-2"
+                >
+                  get it at ollama.com ↗
+                </a>
+                .
+              </p>
+            )}
           </div>
 
           {providerNeedsBaseUrl(provider) && (
@@ -491,38 +528,64 @@ export function SettingsPanel({
                 )}
               </ScrollArea>
               <p className="text-xs text-muted-foreground">
-                Clip detection needs a model that supports strict JSON output. Not every listed
-                model does — press Test to check one before relying on it. You can also type a model
-                id that isn’t listed.
+                Clip detection needs a model that can reliably follow the exact result format it
+                asks for. Not every listed model does — press Test to check one before relying on
+                it. You can also type a model id that isn’t listed.
               </p>
             </div>
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="api-key">
-              API key for {providerLabel(provider)}
-              {providerRequiresKey(provider) ? '' : ' (optional)'} —{' '}
-              <span className="text-muted-foreground">{keyStatusLabel(status)}</span>
-            </Label>
-            <div className="flex gap-2">
-              <Input
-                id="api-key"
-                type="password"
-                value={keyDraft}
-                placeholder="Stored in the OS keychain; never leaves this machine"
-                onChange={(e) => setKeyDraft(e.target.value)}
-              />
-              <Button size="sm" onClick={() => void onSaveKey()} disabled={!keyDraft.trim()}>
-                Save
-              </Button>
+          {provider !== 'ollama' && (
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="api-key">
+                  API key for {providerLabel(provider)}
+                  {providerRequiresKey(provider) ? '' : ' (optional)'} —{' '}
+                  <span className="text-muted-foreground">{keyStatusLabel(status)}</span>
+                </Label>
+                {/* "Get a key →" (FEAT-rmgkee) — the ticket's own evidence found
+                    ZERO links to a provider's key page anywhere in the app. */}
+                {providerKeyUrl(provider) && (
+                  <a
+                    href={providerKeyUrl(provider)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-primary underline underline-offset-2"
+                    data-testid="get-a-key-link"
+                  >
+                    Get a key ↗
+                  </a>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Input
+                  id="api-key"
+                  type="password"
+                  value={keyDraft}
+                  placeholder="Stored in the OS keychain; never leaves this machine"
+                  onChange={(e) => setKeyDraft(e.target.value)}
+                />
+                <Button size="sm" onClick={() => void onSaveKey()} disabled={!keyDraft.trim()}>
+                  Save
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                An API key is a password that identifies YOUR account to {providerLabel(provider)} —
+                it is encrypted in your OS keychain and used only on this device for outbound AI
+                calls. It is never sent to OpenClip.
+                {providerNeedsBaseUrl(provider) &&
+                  ' Leave it blank for a local server that needs no key — a saved key is only ever sent to the endpoint it was entered for.'}
+              </p>
+              {/* Rough cost hint (FEAT-rmgkee) — previously shown for NO provider
+                  except OpenRouter, and only after Settings had already been
+                  opened once that session. */}
+              {providerCostHint(provider) && (
+                <p className="text-xs text-muted-foreground" data-testid="provider-cost-hint">
+                  {providerCostHint(provider)}
+                </p>
+              )}
             </div>
-            <p className="text-xs text-muted-foreground">
-              The key is encrypted with the OS keychain (safeStorage) and used only on this device
-              for outbound AI calls. It is never sent to OpenClip.
-              {providerNeedsBaseUrl(provider) &&
-                ' Leave it blank for a local server that needs no key — a saved key is only ever sent to the endpoint it was entered for.'}
-            </p>
-          </div>
+          )}
 
           {/* Emoji AI (Part K) — an OPTIONAL independent provider/model/key for the
           auto-emoji "AI" mode. Defaults to the clip-detection provider/model. */}

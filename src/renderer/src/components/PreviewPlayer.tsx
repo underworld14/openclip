@@ -154,7 +154,27 @@ export function PreviewPlayer(): React.JSX.Element {
       sourceResolution: sourceVideo.resolution,
       aspectRatio: aspect
     })
-  }, [reframeMode, clip, sourceVideo, currentProject, bounds, aspect, loadReframePlan])
+    // Depend on VALUES (clip id, bounds start/end), not object identity
+    // (BUG-44fgyv self-review follow-up). `clips` is a whole-array store
+    // selector, so it — and every clip object `clip`/`bounds` derive from —
+    // gets a NEW reference on every `setClips` call, including
+    // `regeneratePosterFrames`'s background poster-frame regeneration pass
+    // (BUG-08sb0x), which updates one clip's `thumbnailPath` at a time while
+    // the actual clip/bounds/aspect the reframe request cares about are
+    // unchanged. Depending on the objects re-fired this effect on every
+    // completed poster grab — not just the selected clip's — aborting and
+    // restarting a (possibly still-running) reframe analysis each time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    reframeMode,
+    clip?.id,
+    sourceVideo,
+    currentProject,
+    bounds?.start,
+    bounds?.end,
+    aspect,
+    loadReframePlan
+  ])
 
   /**
    * Horizontal offset for the `<video>`, in PERCENT of the source width.

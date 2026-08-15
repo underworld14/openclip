@@ -308,6 +308,45 @@ describe('the plan is fetched, once, and refetched when it changes', () => {
     expect(useProjectStore.getState().reframePlan).toBeNull()
     expect(useProjectStore.getState().reframePlanFor).toBeNull()
   })
+
+  it('BUG-44fgyv self-review: an UNRELATED clips-array update mid-flight does not re-fire the request', async () => {
+    // `clips` is a whole-array store selector — `regeneratePosterFrames`
+    // (BUG-08sb0x) calls setClips once per clip as its poster frames finish
+    // regenerating in the background, which is a NEW array (and a NEW object
+    // for the selected clip, even though its id/bounds/mode are unchanged)
+    // every time. Before depending on VALUES instead of object identity,
+    // one of those background updates arriving WHILE a reframe request was
+    // still in flight re-fired this effect — the `reframePlanFor === key`
+    // guard alone does not catch this, because it is only set on SUCCESS;
+    // the race window is specifically before the first request settles.
+    let resolvePlan!: (v: { plan: ReframePlan }) => void
+    const pending = new Promise<{ plan: ReframePlan }>((r) => {
+      resolvePlan = r
+    })
+    const planReframe = vi.fn(async () => pending)
+    window.openclip.video.planReframe = planReframe as never
+    useProjectStore.setState({ reframeMode: 'auto' })
+    render(<PreviewPlayer />)
+    await waitFor(() => expect(planReframe).toHaveBeenCalledTimes(1))
+
+    // Simulate regeneratePosterFrames patching the SAME clip's thumbnailPath
+    // WHILE the request above is still unresolved: a brand-new clips array
+    // and a brand-new object for clip c1, but every value the reframe
+    // request actually cares about (id, bounds, mode) is identical.
+    act(() => {
+      const live = useProjectStore.getState().clips
+      useProjectStore
+        .getState()
+        .setClips(live.map((c) => (c.id === 'c1' ? { ...c, thumbnailPath: '/new/thumb.jpg' } : c)))
+    })
+    // Give a spurious effect a chance to fire before the first call settles.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(planReframe).toHaveBeenCalledTimes(1)
+
+    resolvePlan({ plan: STATIC })
+    await waitFor(() => expect(useProjectStore.getState().reframePlan).toEqual(STATIC))
+    expect(planReframe).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('BUG-44fgyv: switching clips mid-analysis never shows the previous clip crop', () => {

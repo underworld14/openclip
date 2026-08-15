@@ -37,6 +37,8 @@ export interface SettingsStore {
   modelsLoading: boolean
   modelsError: string | null
   modelsFetchedAt: number | null
+  /** Why the last `save` was rejected by main, if it was (FEAT-bysdwg). */
+  saveError: string | null
   setSettings: (patch: Partial<Settings>) => void
   setKeyStatus: (status: ApiKeyStatus) => void
   /** Fetch the current provider's model list via the bridge (Part H). */
@@ -62,6 +64,7 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => ({
   modelsLoading: false,
   modelsError: null,
   modelsFetchedAt: null,
+  saveError: null,
   setSettings: (patch) => set((s) => ({ settings: { ...s.settings, ...patch } })),
   setKeyStatus: (status) =>
     set((s) => ({ keyStatus: { ...s.keyStatus, [status.provider]: status } })),
@@ -99,12 +102,27 @@ export const useSettingsStore = create<SettingsStore>()((set, get) => ({
     })
   },
   save: async (patch) => {
-    const settings = await window.openclip.settings.set({ settings: patch })
-    // Switching provider invalidates the model list (it's per-provider).
+    let settings: Settings
+    try {
+      settings = await window.openclip.settings.set({ settings: patch })
+    } catch (e) {
+      // `updateSettings` rejects a patch that fails the schema (BUG-yxvrwx). Every
+      // caller here is `void save(...)`, so an unhandled rejection would leave the
+      // user with a field that silently did not persist — now a real signal
+      // (FEAT-bysdwg). Fields validate before calling; this is the backstop.
+      set({ saveError: e instanceof Error ? e.message : String(e) })
+      return
+    }
+    // Switching provider invalidates the model list (it's per-provider) — and so
+    // does pointing the custom provider at a DIFFERENT server, where a list from
+    // the previous endpoint is worse than none.
+    const providerChanged = !!patch.aiProvider
+    const endpointChanged = 'baseUrl' in patch
     set((s) =>
-      patch.aiProvider && patch.aiProvider !== s.settings.aiProvider
-        ? { settings, models: [], modelsError: null, modelsFetchedAt: null }
-        : { settings }
+      (providerChanged && patch.aiProvider !== s.settings.aiProvider) ||
+      (endpointChanged && patch.baseUrl !== s.settings.baseUrl)
+        ? { settings, saveError: null, models: [], modelsError: null, modelsFetchedAt: null }
+        : { settings, saveError: null }
     )
   },
   setApiKey: async (provider, key) => {

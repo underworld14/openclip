@@ -12,6 +12,7 @@
  */
 
 import type { AIProvider } from '@shared/schema'
+import { providerLabel, providerNeedsBaseUrl, providerRequiresKey } from '@shared/ai-providers'
 import type { PreflightResult } from '@shared/channels'
 import type { WhisperModelSize } from '@shared/jobs'
 
@@ -20,6 +21,8 @@ export interface ReadinessInput {
   preflight: PreflightResult | null
   provider: AIProvider
   hasKey: boolean
+  /** The custom provider's endpoint — its equivalent of a key (FEAT-bysdwg). */
+  baseUrl?: string
   model: string
   whisperModel: WhisperModelSize
   /** null while the on-disk check is still in flight — distinct from "checked and absent". */
@@ -49,10 +52,9 @@ export interface ReadinessView {
   blockingReason: string | null
 }
 
-/** Ollama runs on this machine and needs no BYOK key. */
-function needsKey(provider: AIProvider): boolean {
-  return provider !== 'ollama'
-}
+// "Needs a key" / "needs an endpoint" live in `@shared/ai-providers` — the rule
+// was hand-copied into three files, and a keyless custom endpoint made every
+// copy wrong in a different way (FEAT-bysdwg).
 
 export function readinessView(input: ReadinessInput): ReadinessView {
   // An unprobed engine is NOT a failure. Treating it as one would lock the user
@@ -68,9 +70,14 @@ export function readinessView(input: ReadinessInput): ReadinessView {
   const whisperProbed = input.whisperInstalled !== null
   const whisperReady = !whisperProbed || (input.whisperInstalled === true && whisperCliOk)
 
-  const keyOk = !needsKey(input.provider) || input.hasKey
+  const keyOk = !providerRequiresKey(input.provider) || input.hasKey
   const modelOk = input.model.trim().length > 0
-  const aiOk = keyOk && modelOk
+  // A custom endpoint with no URL is not "missing a key" — it has nowhere to
+  // send anything, and saying "add an API key" sends the user hunting for one
+  // their local server does not want.
+  const endpointOk =
+    !providerNeedsBaseUrl(input.provider) || (input.baseUrl ?? '').trim().length > 0
+  const aiOk = endpointOk && keyOk && modelOk
 
   const chips: ReadinessChip[] = [
     {
@@ -91,11 +98,13 @@ export function readinessView(input: ReadinessInput): ReadinessView {
     {
       id: 'ai',
       label: aiOk ? `AI: ${input.model}` : 'AI: not configured',
-      detail: !keyOk
-        ? `No API key saved for ${input.provider}. Only transcript text is ever sent.`
-        : !modelOk
-          ? 'No model chosen yet.'
-          : `${input.provider} · ${input.model}`,
+      detail: !endpointOk
+        ? 'No endpoint URL set for your custom provider. Add it in Settings.'
+        : !keyOk
+          ? `No API key saved for ${providerLabel(input.provider)}. Only transcript text is ever sent.`
+          : !modelOk
+            ? 'No model chosen yet.'
+            : `${providerLabel(input.provider)} · ${input.model}`,
       ok: aiOk,
       state: aiOk ? 'ok' : 'missing',
       action: aiOk ? 'none' : 'settings'
@@ -125,7 +134,10 @@ export function readinessView(input: ReadinessInput): ReadinessView {
   // wrong is harder to act on than the next step.
   let blockingReason: string | null = null
   if (!engineOk) blockingReason = 'ffmpeg could not be found — video processing will fail.'
-  else if (!keyOk) blockingReason = `Add an API key for ${input.provider} in Settings.`
+  // The endpoint comes first: without one there is nowhere to send a key.
+  else if (!endpointOk) blockingReason = 'Add your endpoint’s Base URL in Settings.'
+  else if (!keyOk)
+    blockingReason = `Add an API key for ${providerLabel(input.provider)} in Settings.`
   else if (!modelOk) blockingReason = 'Choose a model in Settings.'
 
   return { chips, canTranscribe, canGenerate, blockingReason }

@@ -54,6 +54,36 @@ describe('readinessView', () => {
     expect(vm.canGenerate).toBe(true)
   })
 
+  it('does not require a key for a custom endpoint either (FEAT-bysdwg)', () => {
+    // A keyless LM Studio setup used to show a permanently red AI chip, which
+    // left Generate disabled forever for exactly the users this provider is for.
+    const vm = readinessView({
+      ...READY,
+      provider: 'custom',
+      hasKey: false,
+      baseUrl: 'http://localhost:1234/v1',
+      model: 'qwen2.5-32b-instruct'
+    })
+    expect(vm.canGenerate).toBe(true)
+    expect(vm.blockingReason).toBeNull()
+  })
+
+  it('blocks a custom endpoint on the missing URL, not on a missing key', () => {
+    const vm = readinessView({
+      ...READY,
+      provider: 'custom',
+      hasKey: false,
+      baseUrl: undefined,
+      model: 'qwen2.5-32b-instruct'
+    })
+    expect(vm.canGenerate).toBe(false)
+    // "Add an API key" would send the user hunting for one their local server
+    // does not want.
+    expect(vm.blockingReason).toMatch(/base url/i)
+    expect(vm.blockingReason).not.toMatch(/api key/i)
+    expect(vm.chips.find((c) => c.id === 'ai')!.detail).toMatch(/endpoint/i)
+  })
+
   it('blocks transcription when the whisper model is not installed', () => {
     const vm = readinessView({ ...READY, whisperInstalled: false })
     expect(vm.canTranscribe).toBe(false)

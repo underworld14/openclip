@@ -76,6 +76,9 @@
 | **OpenAI** | Current-gen GPT (`gpt-4o`-class or newer) | `response_format: json_schema` (strict) | Viral moment detection, title generation |
 | **Google** | Gemini current-gen | Schema-constrained JSON | Multimodal (later) |
 | **Local** | Llama / Mistral / Qwen via **Ollama** | `format: <jsonSchema>` (grammar-constrained) | Fully offline AI |
+| **Custom (OpenAI-compatible)** | Whatever the endpoint serves (free-text id + `/models` discovery) | `json_schema` (strict) → `json_object` → prompt-only, auto-detected per endpoint | LM Studio / vLLM / LiteLLM / Groq / Together / DeepSeek / a company gateway |
+
+> The **custom** provider stores ONE endpoint at a time (`Settings.baseUrl`, an http(s) URL with no credentials/query/fragment). Its key is optional — local servers usually need none — and is bound to the endpoint origin it was entered for, so a key saved for one server is never sent to another. The base URL is resolved MAIN-SIDE from settings and is deliberately absent from the IPC/job contracts: it must not be possible for the renderer to name the destination a decrypted BYOK key is attached to (§12.2).
 
 > Model IDs change frequently — the implementation resolves current model names via provider docs (`ctx7` / official docs) at build time rather than hardcoding stale ones. **All providers now support real structured output** — the v1 PRD's OpenAI `json_object` was the weak legacy mode and the Anthropic "force-a-tool" hack is superseded by `messages.parse`.
 

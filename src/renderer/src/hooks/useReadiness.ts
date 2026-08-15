@@ -78,6 +78,7 @@ export function useReadiness(): UseReadiness {
       preflight,
       provider: settings.aiProvider,
       hasKey: keyStatus[settings.aiProvider]?.hasKey ?? false,
+      baseUrl: settings.baseUrl,
       model: settings.model,
       whisperModel: settings.whisperModel,
       whisperInstalled

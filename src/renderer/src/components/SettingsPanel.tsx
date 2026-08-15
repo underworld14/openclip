@@ -13,6 +13,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { AIProvider } from '@shared/schema'
 import type { WhisperModelSize } from '@shared/jobs'
+import { providerNeedsBaseUrl, providerRequiresKey } from '@shared/ai-providers'
+import { isInsecureHttpEndpoint, isSafeEndpointUrl, normalizeBaseUrl } from '@shared/endpoint-url'
 import { useSettingsStore } from '@renderer/stores/settingsStore'
 import { Button } from '@renderer/components/ui/button'
 import { Input } from '@renderer/components/ui/input'
@@ -143,6 +145,11 @@ export function SettingsPanel({
   // the curated-list Select.
   const [modelDraft, setModelDraft] = useState(settings.model)
   const [prevModel, setPrevModel] = useState(settings.model)
+  // The custom endpoint's Base URL follows the same draft/blur rule as the model
+  // id, and for the same reason — it is long, and a URL mid-type is invalid
+  // (`http:/`), so a per-keystroke save would be rejected on almost every one.
+  const [baseUrlDraft, setBaseUrlDraft] = useState(settings.baseUrl ?? '')
+  const [prevBaseUrl, setPrevBaseUrl] = useState(settings.baseUrl)
   const [emojiModelDraft, setEmojiModelDraft] = useState(settings.emojiModel ?? '')
   const [prevEmojiModel, setPrevEmojiModel] = useState(settings.emojiModel)
   // React's "adjust state during render when a prop/store value changes" pattern (no
@@ -155,6 +162,23 @@ export function SettingsPanel({
   if (settings.emojiModel !== prevEmojiModel) {
     setPrevEmojiModel(settings.emojiModel)
     setEmojiModelDraft(settings.emojiModel ?? '')
+  }
+  if (settings.baseUrl !== prevBaseUrl) {
+    setPrevBaseUrl(settings.baseUrl)
+    setBaseUrlDraft(settings.baseUrl ?? '')
+  }
+
+  const normalizedDraft = normalizeBaseUrl(baseUrlDraft)
+  const baseUrlInvalid = normalizedDraft !== undefined && !isSafeEndpointUrl(normalizedDraft)
+  const commitBaseUrl = (): void => {
+    // Refuse to SEND an invalid value. `settings.set` rejects it main-side and
+    // every caller here is `void save(...)`, so persisting-and-failing would look
+    // exactly like persisting-and-succeeding (FEAT-bysdwg).
+    if (baseUrlInvalid) return
+    if (normalizedDraft !== settings.baseUrl) {
+      setTestResult(null)
+      void save({ baseUrl: normalizedDraft })
+    }
   }
 
   useEffect(() => {
@@ -180,11 +204,22 @@ export function SettingsPanel({
     // before a key exists: the handler rejects without one, and the first thing a
     // brand-new user would see in Settings is a raw IPC error string. They can
     // still press "Load models" explicitly.
-    const keyed = provider === 'ollama' || (status?.hasKey ?? false)
-    if (keyed && modelsFetchedAt === null && !modelsLoading && !modelsError) {
+    // A custom endpoint may need no key at all, but it always needs a URL — and
+    // the handler rejects without one (FEAT-bysdwg).
+    const keyed = !providerRequiresKey(provider) || (status?.hasKey ?? false)
+    const addressed = !providerNeedsBaseUrl(provider) || !!normalizeBaseUrl(settings.baseUrl)
+    if (keyed && addressed && modelsFetchedAt === null && !modelsLoading && !modelsError) {
       void loadModels(false)
     }
-  }, [provider, status?.hasKey, modelsFetchedAt, modelsLoading, modelsError, loadModels])
+  }, [
+    provider,
+    status?.hasKey,
+    settings.baseUrl,
+    modelsFetchedAt,
+    modelsLoading,
+    modelsError,
+    loadModels
+  ])
 
   // Never leave the model field empty (FEAT-6v92dk): as soon as we know what the
   // provider offers, seed it. Only fills a BLANK field — it never overwrites a
@@ -307,6 +342,39 @@ export function SettingsPanel({
             </Select>
           </div>
 
+          {providerNeedsBaseUrl(provider) && (
+            <div className="flex flex-col gap-1.5" data-testid="custom-base-url">
+              <Label htmlFor="ai-base-url">Base URL</Label>
+              <Input
+                id="ai-base-url"
+                value={baseUrlDraft}
+                placeholder="http://localhost:1234/v1"
+                onChange={(e) => setBaseUrlDraft(e.target.value)}
+                onBlur={commitBaseUrl}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+                }}
+              />
+              {baseUrlInvalid && (
+                <span className="text-xs text-destructive" data-testid="base-url-error">
+                  Must be an http(s) URL with no credentials, query or fragment — e.g.
+                  http://localhost:1234/v1
+                </span>
+              )}
+              {!baseUrlInvalid && isInsecureHttpEndpoint(normalizedDraft) && (
+                <span className="text-xs text-amber-500" data-testid="base-url-insecure">
+                  This endpoint is plain HTTP — your API key would be sent unencrypted. Fine on your
+                  own machine or LAN, risky over the internet.
+                </span>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Your server’s OpenAI-compatible root — usually ends in <code>/v1</code>. Works with
+                LM Studio, vLLM, LiteLLM, Groq, Together, DeepSeek or a company gateway. Only
+                transcript text is ever sent.
+              </p>
+            </div>
+          )}
+
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between">
               <Label htmlFor="ai-model">Model</Label>
@@ -373,9 +441,13 @@ export function SettingsPanel({
                   <div className="p-3 text-xs text-muted-foreground">Loading models…</div>
                 ) : recommended.length === 0 && others.length === 0 ? (
                   <div className="p-3 text-xs text-muted-foreground">
-                    {models.length === 0
-                      ? `No models loaded — add your ${providerLabel(provider)} key, then press Load models.`
-                      : 'No models match your filter.'}
+                    {models.length > 0
+                      ? 'No models match your filter.'
+                      : providerNeedsBaseUrl(provider) && !normalizeBaseUrl(settings.baseUrl)
+                        ? 'Set a Base URL above, then press Load models.'
+                        : providerRequiresKey(provider) && !status?.hasKey
+                          ? `No models loaded — add your ${providerLabel(provider)} key, then press Load models.`
+                          : 'No models returned — the server may not list them. You can still type a model id above.'}
                   </div>
                 ) : (
                   <div className="flex flex-col py-1">
@@ -408,7 +480,8 @@ export function SettingsPanel({
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="api-key">
-              API key for {providerLabel(provider)} —{' '}
+              API key for {providerLabel(provider)}
+              {providerRequiresKey(provider) ? '' : ' (optional)'} —{' '}
               <span className="text-muted-foreground">{keyStatusLabel(status)}</span>
             </Label>
             <div className="flex gap-2">
@@ -426,6 +499,8 @@ export function SettingsPanel({
             <p className="text-xs text-muted-foreground">
               The key is encrypted with the OS keychain (safeStorage) and used only on this device
               for outbound AI calls. It is never sent to OpenClip.
+              {providerNeedsBaseUrl(provider) &&
+                ' Leave it blank for a local server that needs no key — a saved key is only ever sent to the endpoint it was entered for.'}
             </p>
           </div>
 
@@ -437,6 +512,8 @@ export function SettingsPanel({
               The model that suggests emoji when a caption’s emoji mode is “AI”. Defaults to your
               clip-detection provider &amp; model — set a separate one (e.g. a cheaper model, or a
               local Ollama) here.
+              {providerNeedsBaseUrl(emojiProvider) &&
+                ' The custom endpoint uses the same Base URL as above — OpenClip stores one at a time.'}
             </p>
             <Select
               value={settings.emojiProvider ?? SAME_AS_CLIP}

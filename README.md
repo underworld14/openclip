@@ -53,31 +53,26 @@ With **Ollama** as the provider, nothing leaves it at all.
 
 ## Quickstart
 
-> **No pre-built download exists yet.** There is no Releases page to grab a
-> `.dmg` from — the only way to run OpenClip today is to build it yourself
-> with the steps below (10-15 minutes, one-time). This is a real gap, not an
-> oversight: see [Distributing a built app](#distributing-a-built-app-gatekeeper)
-> for what a signed, downloadable build needs and why it isn't there yet.
+**1. Download.** Grab the latest `.dmg` from
+[Releases](https://github.com/underworld14/openclip/releases), open it, and
+drag **OpenClip** into **Applications**. No Node.js, no terminal, no build
+step.
 
-**Prerequisites**
+> The build is **not yet signed by an Apple Developer account** — macOS
+> Gatekeeper will warn you the first time you open it ("OpenClip is damaged
+> and can't be opened" or "the developer cannot be verified"). That is
+> expected, not a broken download: see
+> [Distributing a built app](#distributing-a-built-app-gatekeeper) below for
+> the two ways past it (right-click → Open is usually enough).
 
-- macOS on Apple Silicon (see [Platform support](#platform-support))
-- Node.js 20+ and npm
+- macOS on **Apple Silicon** only for now (see [Platform support](#platform-support))
 - An API key for one of: OpenAI, Anthropic, Google, OpenRouter — or a local
   [Ollama](https://ollama.com) install, which needs no key
 
-```bash
-git clone https://github.com/underworld14/openclip.git
-cd openclip
-npm install
-npm run dev
-```
-
-`npm run dev` runs OpenClip straight from source (electron-vite, hot reload) —
-nothing to install or trust beyond your own checkout. To instead produce a
-standalone `.app`/`.dmg` you can double-click or hand to someone else, see
-[Distributing a built app](#distributing-a-built-app-gatekeeper) below and
-[`docs/PACKAGING.md`](docs/PACKAGING.md) for the full walkthrough.
+**Prefer to build from source instead** (or need to, e.g. to make your own
+changes)? See [`CONTRIBUTING.md`](CONTRIBUTING.md) — `git clone`, `npm
+install`, `npm run dev` gets you a hot-reloading dev build in a few minutes,
+no packaging step required.
 
 **Then, in the app:**
 
@@ -141,14 +136,15 @@ has done the work, and claiming support without a green build would be a lie.
 
 ## Distributing a built app (Gatekeeper)
 
-`npm run build:mac:unsigned` (see [`docs/PACKAGING.md`](docs/PACKAGING.md))
-produces a real `.app`/`.dmg` with no Apple Developer account needed — but
-that build is **adhoc-signed only**. If you build it yourself, or someone
-hands you a `.dmg` built this way, opening it on a Mac that is not the one
-that built it shows Gatekeeper's **"OpenClip is damaged and can't be
-opened"** (or "cannot be opened because the developer cannot be verified") —
-that is macOS quarantining an app with no verified developer signature, not
-an actually broken build.
+The `.dmg` on the [Releases page](https://github.com/underworld14/openclip/releases)
+— and anything you produce yourself with `npm run build:mac:unsigned` (see
+[`docs/PACKAGING.md`](docs/PACKAGING.md)) — is **adhoc-signed only**: it needs
+no Apple Developer account to build, but macOS has no verified developer
+signature to check it against. Opening it on a Mac that did not build it
+shows Gatekeeper's **"OpenClip is damaged and can't be opened"** (or "cannot
+be opened because the developer cannot be verified") — that is macOS
+quarantining an app with no verified signature, not an actually broken
+download.
 
 **To open it anyway**, either:
 

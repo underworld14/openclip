@@ -128,8 +128,17 @@ mac:
 dmg:
   artifactName: ${name}-${version}-${arch}.${ext}
 npmRebuild: false
-# No `publish:` block (audit fix openclip-e5w): electron-updater is not a dependency,
-# so nothing reads an update feed yet, and the old `provider: generic` /
-# `https://example.com/auto-updates` placeholder only shipped a misleading
-# app-update.yml pointing at example.com. When auto-update is wired (electron-updater +
-# a real generic/GitHub feed), add the publish block back with the real URL.
+# `publish:` — GitHub Releases is the real feed (EPIC-k83ghw / FEAT-azvb5c):
+# electron-updater is wired (FEAT-x9femg) and the repo now has a public
+# Releases page to check against. This block's job is `app-update.yml` (which
+# electron-builder writes into the package at pack time REGARDLESS of whether
+# a publish is actually requested) so `checkForUpdate()` has a real feed to
+# read. It does NOT itself upload anything: a plain `npm run build:mac*`
+# never passes `--publish`, and no GH_TOKEN/GITHUB_TOKEN is set in this repo's
+# normal dev/build environment, so electron-builder has neither the intent
+# nor the credential to publish on its own — creating a GitHub Release stays
+# an explicit `gh release create` (or CI job) step, never a build side effect.
+publish:
+  provider: github
+  owner: underworld14
+  repo: openclip

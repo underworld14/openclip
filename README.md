@@ -18,12 +18,15 @@ That is the whole point, so it goes first.
 
 OpenClip transcribes **locally** with [whisper.cpp](https://github.com/ggml-org/whisper.cpp)
 (Metal-accelerated on Apple Silicon) and cuts, reframes and burns captions
-**locally** with FFmpeg. The only thing that is ever sent anywhere is the
-**transcript text** — segment-level text only — to whichever LLM provider you
-configure, so it can pick the interesting moments.
+**locally** with FFmpeg. What is ever sent anywhere is **text** — the
+**transcript** (segment-level text only) and the **project's title** — to
+whichever LLM provider you configure, so it can pick the interesting moments.
 
 - Your **video file** is never uploaded. Not to us, not to your LLM provider.
 - Word-level timestamps stay on disk; they drive karaoke captions and are never transmitted.
+- The **project's title** is sent as context (so the model knows what it's looking at) and
+  **defaults to the filename you imported** — rename the project in the Dashboard before
+  generating clips if that filename shouldn't leave this machine.
 - There is no OpenClip account, no server, and no telemetry. There is nothing to sign up for.
 - **You bring your own key.** It is stored with Electron's `safeStorage` (Keychain-backed)
   and the raw key never crosses the IPC boundary — the UI only ever sees `hasKey` and the last 4 characters.
@@ -39,7 +42,7 @@ that is the difference between "can use this" and "cannot".
                                     ▼
                        whisper.cpp  (LOCAL, word-level timestamps)
                                     │
-                          transcript TEXT only
+                     transcript TEXT + project title
                                     ▼
                        your LLM  (OpenAI · Anthropic · Google · OpenRouter · Ollama)
                                     │
@@ -172,6 +175,10 @@ newer version.
   allows no inline scripts and no `eval`.
 - API keys go through Electron `safeStorage` (Keychain). The raw key is never
   sent over IPC — the renderer can only ever learn `hasKey` and `last4`.
+- The LLM request carries the transcript's segment-level text and the
+  project's title (context for the model) — nothing else, and never the video
+  itself. The title defaults to the imported filename; rename the project
+  first if that name is sensitive.
 - Source video is streamed to the preview through a privileged `openclip-media:`
   scheme, scoped to files you actually imported.
 - App-owned media (URL downloads) lives under the app-data directory and is

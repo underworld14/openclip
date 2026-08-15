@@ -65,9 +65,19 @@ describe('SettingsPanel AI tab: explains what a key is and who charges (AC2)', (
     mount('openai')
     await waitFor(() => expect(screen.getByLabelText('AI Provider')).toBeTruthy())
     const text = document.body.textContent ?? ''
-    expect(text).toMatch(/only transcript text is ever sent/i)
+    expect(text).toMatch(/only that text is ever sent/i)
     expect(text).toMatch(/you pay them directly/i)
     expect(text).toMatch(/OpenClip never bills you/i)
+  })
+})
+
+describe("SettingsPanel AI tab: discloses the project's title is sent too (BUG-12bxbk)", () => {
+  it('names the title alongside the transcript and explains it defaults to the filename', async () => {
+    mount('openai')
+    await waitFor(() => expect(screen.getByLabelText('AI Provider')).toBeTruthy())
+    const text = document.body.textContent ?? ''
+    expect(text).toMatch(/transcript and the project’s title/i)
+    expect(text).toMatch(/title defaults to the file you imported/i)
   })
 })
 

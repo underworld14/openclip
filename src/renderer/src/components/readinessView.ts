@@ -101,7 +101,7 @@ export function readinessView(input: ReadinessInput): ReadinessView {
       detail: !endpointOk
         ? 'No endpoint URL set for your custom provider. Add it in Settings.'
         : !keyOk
-          ? `No API key saved for ${providerLabel(input.provider)}. Only transcript text is ever sent.`
+          ? `No API key saved for ${providerLabel(input.provider)}. Only text — never your video — is ever sent.`
           : !modelOk
             ? 'No model chosen yet.'
             : `${providerLabel(input.provider)} · ${input.model}`,

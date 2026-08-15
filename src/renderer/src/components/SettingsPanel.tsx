@@ -347,10 +347,13 @@ export function SettingsPanel({
               no context — a creator who had never used an LLM API was told WHAT
               was missing and never WHY or HOW. */}
           <p className="text-xs text-muted-foreground">
-            Clip detection reads your transcript with an AI model to find the best moments —{' '}
-            <span className="font-medium text-foreground">only transcript text is ever sent</span>,
-            never your video. You use your own account with the provider you pick below, so you pay
-            them directly — OpenClip never bills you or sees your key. Prefer not to pay anyone?{' '}
+            Clip detection reads your transcript and the project’s title with an AI model to find
+            the best moments —{' '}
+            <span className="font-medium text-foreground">only that text is ever sent</span>, never
+            your video. The title defaults to the file you imported, so rename the project first
+            (Dashboard) if its filename shouldn’t leave this machine. You use your own account with
+            the provider you pick below, so you pay them directly — OpenClip never bills you or sees
+            your key. Prefer not to pay anyone?{' '}
             <span className="font-medium text-foreground">Ollama (local)</span> runs free, on this
             Mac, with no key at all.
           </p>
@@ -426,8 +429,8 @@ export function SettingsPanel({
               )}
               <p className="text-xs text-muted-foreground">
                 Your server’s OpenAI-compatible root — usually ends in <code>/v1</code>. Works with
-                LM Studio, vLLM, LiteLLM, Groq, Together, DeepSeek or a company gateway. Only
-                transcript text is ever sent.
+                LM Studio, vLLM, LiteLLM, Groq, Together, DeepSeek or a company gateway. Only your
+                transcript and the project’s title are ever sent — never your video.
               </p>
             </div>
           )}

@@ -87,6 +87,19 @@ export function registerVideoHandlers(ctx: IpcContext): void {
   }
 
   /**
+   * ONE in-flight `planReframe` per project (BUG-44fgyv): this app previews a
+   * single clip at a time per open project, so a NEW request for the same
+   * project supersedes whatever the last one was still computing — selecting
+   * clip B while clip A's analysis is running must not leave A's ffmpeg
+   * passes burning CPU (and, previously, blocking B's own preview state
+   * update — see previewSlice.loadReframePlan) toward a result nobody will
+   * see. `planReframe`'s `signal` param already threads down to both ffmpeg
+   * passes (`runFfmpeg`/`defaultRunFfmpegCaptureStdout` both `SIGKILL` the
+   * child on abort) — it was simply never wired up to anything here.
+   */
+  const inFlightPlanReframe = new Map<string, AbortController>()
+
+  /**
    * Compute the auto-reframe plan for a clip, so the PREVIEW can show it
    * (FEAT-kzej8t).
    *
@@ -105,6 +118,15 @@ export function registerVideoHandlers(ctx: IpcContext): void {
       _e,
       req: ChannelReq<IPCChannels.PLAN_REFRAME>
     ): Promise<ChannelRes<IPCChannels.PLAN_REFRAME>> => {
+      inFlightPlanReframe.get(req.projectId)?.abort()
+      const controller = new AbortController()
+      inFlightPlanReframe.set(req.projectId, controller)
+      const done = (): void => {
+        if (inFlightPlanReframe.get(req.projectId) === controller) {
+          inFlightPlanReframe.delete(req.projectId)
+        }
+      }
+
       const key = reframeCacheKey({
         clipId: req.clipId,
         startTime: req.startTime,
@@ -116,7 +138,10 @@ export function registerVideoHandlers(ctx: IpcContext): void {
       })
       const dir = cacheDirFor(req.projectId)
       const hit = readReframePlan(dir, key)
-      if (hit) return { plan: hit.plan, reason: hit.plan ? undefined : 'no-face' }
+      if (hit) {
+        done()
+        return { plan: hit.plan, reason: hit.plan ? undefined : 'no-face' }
+      }
 
       try {
         const plan = await planReframe({
@@ -125,11 +150,23 @@ export function registerVideoHandlers(ctx: IpcContext): void {
           endTime: req.endTime,
           source: req.sourceResolution,
           aspect: req.aspectRatio,
-          mode: req.mode
+          mode: req.mode,
+          signal: controller.signal
         })
+        // A newer request for this project superseded this one (aborted the
+        // signal above). The motion pass swallows an abort into a face-only
+        // plan rather than throwing (planReframe's own fallback for a FAILED
+        // motion pass), so this can resolve normally even though it is stale
+        // — it must not be cached or reported as a real result.
+        if (controller.signal.aborted) {
+          return { plan: null, reason: 'detect-failed', message: 'superseded by a newer request' }
+        }
         writeReframePlan(dir, key, plan)
         return { plan, reason: plan ? undefined : 'no-face' }
       } catch (e) {
+        if (controller.signal.aborted) {
+          return { plan: null, reason: 'detect-failed', message: 'superseded by a newer request' }
+        }
         // NOT cached: a missing model or a crashed ffmpeg is not the answer
         // "there are no faces here", and caching it would poison every later
         // request for this clip.
@@ -138,6 +175,8 @@ export function registerVideoHandlers(ctx: IpcContext): void {
           reason: 'detect-failed',
           message: e instanceof Error ? e.message : String(e)
         }
+      } finally {
+        done()
       }
     }
   )

@@ -63,7 +63,7 @@ describe('frameSampleArgs', () => {
 // ---------------------------------------------------------------------------
 
 describe('motionArgs', () => {
-  it('builds a per-ROI crop+gray+tblend-difference+signalstats print to two null sinks', () => {
+  it('builds a per-ROI fps+crop+scale+gray+tblend-difference+signalstats print to two null sinks', () => {
     const args = motionArgs(
       '/src/in.mp4',
       10,
@@ -81,8 +81,8 @@ describe('motionArgs', () => {
       '-t',
       '20',
       '-filter_complex',
-      '[0:v]crop=100:200:0:0,format=gray,tblend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG[lm];' +
-        '[0:v]crop=100:200:540:0,format=gray,tblend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG[rm]',
+      '[0:v]fps=8,crop=100:200:0:0,scale=200:-2,format=gray,tblend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG[lm];' +
+        '[0:v]fps=8,crop=100:200:540:0,scale=200:-2,format=gray,tblend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG[rm]',
       '-map',
       '[lm]',
       '-f',
@@ -94,6 +94,50 @@ describe('motionArgs', () => {
       'null',
       '-'
     ])
+  })
+
+  it('BUG-44fgyv: decodes at a fraction of native rate/resolution, not full res/fps', () => {
+    // The bug this fixes: no fps= filter at all meant a 60fps 4K source paid to
+    // tblend/signalstats EVERY decoded frame at FULL resolution — "about 20x the
+    // cost of the face pass" (this file's own header), which samples 640x640 at
+    // 2fps. The motion pass does not need anywhere near that: active-speaker
+    // discrimination is a low-frequency signal (who is talking changes on the
+    // order of seconds), so a heavily reduced fps/resolution is still plenty.
+    const args = motionArgs(
+      '/src/in.mp4',
+      0,
+      90,
+      { x: 0, y: 0, w: 1000, h: 1000 },
+      { x: 1000, y: 0, w: 1000, h: 1000 }
+    )
+    const filter = args[args.indexOf('-filter_complex') + 1]
+    expect(filter).toContain('fps=8')
+    expect(filter).toContain('scale=200:-2')
+    // fps/scale come BEFORE the per-frame-cost filters (tblend/signalstats),
+    // so ffmpeg drops the frame count and pixel count before doing that work,
+    // not after.
+    const fpsIdx = filter.indexOf('fps=')
+    const scaleIdx = filter.indexOf('scale=')
+    const tblendIdx = filter.indexOf('tblend=')
+    const statsIdx = filter.indexOf('signalstats')
+    expect(fpsIdx).toBeLessThan(tblendIdx)
+    expect(scaleIdx).toBeLessThan(tblendIdx)
+    expect(tblendIdx).toBeLessThan(statsIdx)
+  })
+
+  it('accepts explicit fps/scale overrides', () => {
+    const args = motionArgs(
+      '/src/in.mp4',
+      0,
+      10,
+      { x: 0, y: 0, w: 100, h: 100 },
+      { x: 100, y: 0, w: 100, h: 100 },
+      4,
+      120
+    )
+    const filter = args[args.indexOf('-filter_complex') + 1]
+    expect(filter).toContain('fps=4')
+    expect(filter).toContain('scale=120:-2')
   })
 })
 

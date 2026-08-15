@@ -17,6 +17,12 @@ import type { AspectRatio } from '@shared/schema'
 import type { ReframeMode, ReframePlan } from '@shared/reframe-plan'
 import type { ProjectStore } from './index'
 
+/**
+ * Monotonic request counter for `loadReframePlan` (BUG-44fgyv). Pure internal
+ * bookkeeping, not reactive state — nothing reads it but the guard below.
+ */
+let reframeRequestSeq = 0
+
 export interface PreviewSlice {
   aspectOverride: AspectRatio | null
   reframeMode: ReframeMode
@@ -86,7 +92,18 @@ export const createPreviewSlice: StateCreator<ProjectStore, [], [], PreviewSlice
     // Keyed on everything that changes the plan, so a trim or a mode switch
     // refetches and a re-render does not.
     const key = [args.clipId, args.startTime, args.endTime, args.aspectRatio, mode].join('|')
-    if (get().reframePlanFor === key || get().reframePlanLoading) return
+    // Only a genuine cache hit (already have THIS exact plan) is a no-op
+    // (BUG-44fgyv). This used to ALSO gate on `reframePlanLoading`, which
+    // silently DROPPED a request for a newly-selected clip whenever the
+    // previous clip's request hadn't settled yet — the new clip's plan was
+    // simply never fetched, so the preview kept showing whichever crop last
+    // happened to resolve (often the PREVIOUS clip's, arriving after the
+    // switch). A later request now always starts and — via the sequence
+    // guard below — always wins the final state; main additionally aborts
+    // the superseded ffmpeg passes (ipc/video.ts) so they stop burning CPU
+    // toward a result nobody will see.
+    if (get().reframePlanFor === key) return
+    const requestId = ++reframeRequestSeq
     set({ reframePlanLoading: true })
     try {
       const res = await window.openclip.video.planReframe({
@@ -99,12 +116,17 @@ export const createPreviewSlice: StateCreator<ProjectStore, [], [], PreviewSlice
         aspectRatio: args.aspectRatio,
         mode
       })
+      // A NEWER call has since started (the user moved to another clip, or
+      // trimmed again, while this one was in flight) — that request owns the
+      // final state now; applying this stale one would show its crop instead.
+      if (requestId !== reframeRequestSeq) return
       set({
         reframePlan: res.plan,
         reframePlanFor: key,
         reframePlanError: res.reason ? { reason: res.reason, message: res.message } : null
       })
     } catch (e) {
+      if (requestId !== reframeRequestSeq) return
       // The IPC itself failed — still a detection failure from the user's side,
       // and still better said than swallowed.
       set({
@@ -116,7 +138,7 @@ export const createPreviewSlice: StateCreator<ProjectStore, [], [], PreviewSlice
         }
       })
     } finally {
-      set({ reframePlanLoading: false })
+      if (requestId === reframeRequestSeq) set({ reframePlanLoading: false })
     }
   },
   setCaptionsPreviewEnabled: (captionsPreviewEnabled) => set({ captionsPreviewEnabled })

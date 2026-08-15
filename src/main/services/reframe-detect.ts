@@ -247,6 +247,29 @@ export interface MotionSeries {
 }
 
 /**
+ * Motion-pass frame rate (BUG-44fgyv). The pass used to decode+filter at the
+ * SOURCE's native frame rate — no `fps=` filter at all, unlike the face pass's
+ * `frameSampleArgs`, which is exactly why it cost "about 20x" (this file's own
+ * header). Active-speaker discrimination is a low-frequency signal (who is
+ * talking changes on the order of seconds, not frames) — 8fps gives the
+ * `buildActiveSpeakerSegments` smoothing window (15 samples) a consistent
+ * ~1.9s regardless of the source's native rate (which otherwise varies the
+ * window from ~0.25s at 60fps to ~0.6s at 24fps), while cutting the number of
+ * `tblend`/`signalstats` invocations by 3-8x on typical 24-30fps sources.
+ */
+export const DEFAULT_MOTION_FPS = 8
+
+/**
+ * Motion-pass ROI downscale width (BUG-44fgyv), applied AFTER the crop (crop
+ * coordinates are SOURCE-pixel space; scaling before crop would need them
+ * rescaled too). `signalstats`' luma-difference energy does not need
+ * source-resolution detail — only enough pixels to average a meaningful
+ * per-frame delta. `-2` keeps the derived height even (the conventional ffmpeg
+ * idiom for `scale`'s auto dimension).
+ */
+export const DEFAULT_MOTION_SCALE_WIDTH = 200
+
+/**
  * Build the motion-energy argv (2-speaker active-speaker detection). For each ROI
  * we crop, drop to gray, `tblend=all_mode=difference` (frame-to-frame delta), run
  * `signalstats`, and `metadata=print` the per-frame average luma of that delta
@@ -257,10 +280,12 @@ export interface MotionSeries {
  * `parseMotionMetadata` separates them by that instance (first-seen N = left).
  *
  *   ffmpeg -i src -filter_complex
- *     "[0:v]crop=lw:lh:lx:ly,format=gray,tblend=all_mode=difference,
- *           signalstats,metadata=print:key=lavfi.signalstats.YAVG[lm];
- *      [0:v]crop=rw:rh:rx:ry,format=gray,tblend=all_mode=difference,
- *           signalstats,metadata=print:key=lavfi.signalstats.YAVG[rm]"
+ *     "[0:v]fps=8,crop=lw:lh:lx:ly,scale=200:-2,format=gray,
+ *           tblend=all_mode=difference,signalstats,
+ *           metadata=print:key=lavfi.signalstats.YAVG[lm];
+ *      [0:v]fps=8,crop=rw:rh:rx:ry,scale=200:-2,format=gray,
+ *           tblend=all_mode=difference,signalstats,
+ *           metadata=print:key=lavfi.signalstats.YAVG[rm]"
  *     -map [lm] -f null - -map [rm] -f null -
  *
  * Note: a single source decode feeds both chains; the planner correlates the two
@@ -271,11 +296,13 @@ export function motionArgs(
   start: number,
   end: number,
   leftROI: MotionRoi,
-  rightROI: MotionRoi
+  rightROI: MotionRoi,
+  motionFps = DEFAULT_MOTION_FPS,
+  scaleWidth = DEFAULT_MOTION_SCALE_WIDTH
 ): string[] {
   const dur = end - start
   const chain = (roi: MotionRoi, label: string): string =>
-    `[0:v]crop=${roi.w}:${roi.h}:${roi.x}:${roi.y},format=gray,tblend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG[${label}]`
+    `[0:v]fps=${motionFps},crop=${roi.w}:${roi.h}:${roi.x}:${roi.y},scale=${scaleWidth}:-2,format=gray,tblend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG[${label}]`
   const filter = `${chain(leftROI, 'lm')};${chain(rightROI, 'rm')}`
   return [
     '-hide_banner',

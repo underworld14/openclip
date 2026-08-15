@@ -310,6 +310,104 @@ describe('the plan is fetched, once, and refetched when it changes', () => {
   })
 })
 
+describe('BUG-44fgyv: switching clips mid-analysis never shows the previous clip crop', () => {
+  const PLAN_A: ReframePlan = { mode: 'static', cropW: 608, cropH: 1080, cropX: 111 }
+  const PLAN_B: ReframePlan = { mode: 'static', cropW: 608, cropH: 1080, cropX: 222 }
+
+  it('selecting clip B while clip A is still loading actually asks for B (not silently dropped)', async () => {
+    const seen: string[] = []
+    let resolveA!: (v: { plan: ReframePlan }) => void
+    const pendingA = new Promise<{ plan: ReframePlan }>((r) => {
+      resolveA = r
+    })
+    window.openclip.video.planReframe = (async (req: { clipId: string }) => {
+      seen.push(req.clipId)
+      return req.clipId === 'c1' ? pendingA : { plan: PLAN_B }
+    }) as never
+
+    useProjectStore.setState({
+      reframeMode: 'auto',
+      clips: [
+        {
+          ...clipFixture,
+          id: 'c1',
+          startTime: 0,
+          endTime: 20,
+          editedStart: undefined,
+          editedEnd: undefined
+        },
+        {
+          ...clipFixture,
+          id: 'c2',
+          startTime: 30,
+          endTime: 50,
+          editedStart: undefined,
+          editedEnd: undefined
+        }
+      ],
+      selectedClipId: 'c1'
+    })
+    render(<PreviewPlayer />)
+    await waitFor(() => expect(seen).toContain('c1'))
+
+    // Switch to clip B WHILE clip A's request is still unresolved — the old
+    // `reframePlanLoading` guard used to silently drop this and B's plan was
+    // never fetched at all.
+    act(() => {
+      useProjectStore.getState().selectClip('c2')
+    })
+    await waitFor(() => expect(seen).toContain('c2'))
+
+    resolveA({ plan: PLAN_A })
+    await waitFor(() => expect(useProjectStore.getState().reframePlan).toEqual(PLAN_B))
+  })
+
+  it('a late-arriving response for an ABANDONED clip never overwrites the current one', async () => {
+    let resolveA!: (v: { plan: ReframePlan }) => void
+    const pendingA = new Promise<{ plan: ReframePlan }>((r) => {
+      resolveA = r
+    })
+    window.openclip.video.planReframe = (async (req: { clipId: string }) =>
+      req.clipId === 'c1' ? pendingA : { plan: PLAN_B }) as never
+
+    useProjectStore.setState({
+      reframeMode: 'auto',
+      clips: [
+        {
+          ...clipFixture,
+          id: 'c1',
+          startTime: 0,
+          endTime: 20,
+          editedStart: undefined,
+          editedEnd: undefined
+        },
+        {
+          ...clipFixture,
+          id: 'c2',
+          startTime: 30,
+          endTime: 50,
+          editedStart: undefined,
+          editedEnd: undefined
+        }
+      ],
+      selectedClipId: 'c1'
+    })
+    render(<PreviewPlayer />)
+
+    act(() => {
+      useProjectStore.getState().selectClip('c2')
+    })
+    // B's plan (the currently-selected clip) lands first.
+    await waitFor(() => expect(useProjectStore.getState().reframePlan).toEqual(PLAN_B))
+
+    // A's abandoned request finally resolves — it must NOT clobber B's plan,
+    // which is the exact bug: "leaves the previous clip's crop on screen".
+    resolveA({ plan: PLAN_A })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(useProjectStore.getState().reframePlan).toEqual(PLAN_B)
+  })
+})
+
 describe('the crop is OVERRIDABLE — the ticket’s title complaint', () => {
   const shiftOf = (): string => (screen.getByTestId('preview-video') as HTMLElement).style.transform
 

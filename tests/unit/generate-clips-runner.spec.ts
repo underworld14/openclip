@@ -336,4 +336,34 @@ describe('generate-clips runner: progress trickles while waiting for a single (u
       vi.useRealTimers()
     }
   })
+
+  // Self-review regression guard: `makeTransport` (createTransport) rejecting
+  // used to skip the `finally` entirely — it sat OUTSIDE the try/finally that
+  // clears the trickle — leaking a live setInterval forever on every attempt
+  // against a provider `createTransport` refuses to build (an unsupported or
+  // misconfigured provider, a real and reachable path, not hypothetical).
+  it('clears the trickle even when createTransport itself rejects, before any request is made', async () => {
+    vi.useFakeTimers()
+    try {
+      const runner = createGenerateClipsRunner({
+        getKey: () => null,
+        createTransport: () => {
+          throw new Error('unsupported provider: google')
+        },
+        generateClips: (async () => ({ ok: true, value: clipSchemaFixture })) as never
+      })
+      const emit = emitter()
+
+      const failure = runner(PARAMS, emit, context()).catch((e) => e)
+      await vi.advanceTimersByTimeAsync(0)
+      await failure
+
+      const countAtFailure = emit.progressCalls.length
+      // If the interval leaked, this would keep incrementing forever.
+      await vi.advanceTimersByTimeAsync(600 * 10)
+      expect(emit.progressCalls.length).toBe(countAtFailure)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

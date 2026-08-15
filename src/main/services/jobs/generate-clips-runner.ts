@@ -99,35 +99,43 @@ export function createGenerateClipsRunner(
 
     const apiKey = deps.getKey(params.provider)
     const baseUrl = deps.getBaseUrl?.(params.provider)
-    const transport = await makeTransport({
-      provider: params.provider,
-      model: params.model,
-      apiKey,
-      baseUrl
-    })
 
-    // PER-REQUEST deadline (FEAT-bysdwg). This used to be ONE
-    // `AbortSignal.timeout` created here and threaded through every chunk, so the
-    // "hard deadline per provider request" this file's header promises was really
-    // a budget for the whole job: a long transcript that needed four chunks failed
-    // as a spurious TIMEOUT even though every individual call answered promptly.
-    // Self-hosted models are slower than cloud ones and the custom endpoint's
-    // downgrade ladder can add attempts, which turns that latent bug into the
-    // common case. `ctx.signal` remains the only run-level signal.
+    // `makeTransport` moved INSIDE the try/finally below (it used to sit
+    // between the trickle's setInterval and the try block): a rejection here
+    // — an unsupported/misconfigured provider, a real and reachable path —
+    // used to skip the `finally` entirely and leak the trickle timer forever
+    // (self-review fix, EPIC-k83ghw / BUG-hkmsng). Classifying it through the
+    // SAME catch below is also more accurate than letting it fall through to
+    // the sidecar's generic ffmpeg/whisper-oriented classifier.
     let timedOut = false
-    const guarded: RawTransport = async (prompt, opts) => {
-      const perRequest = AbortSignal.timeout(timeoutMs)
-      const signals = [perRequest, ...(opts?.signal ? [opts.signal] : [])]
-      try {
-        return await transport(prompt, { ...opts, signal: AbortSignal.any(signals) })
-      } catch (err) {
-        // Distinguish "this request ran out of time" from "the user cancelled".
-        if (perRequest.aborted && !ctx.signal.aborted) timedOut = true
-        throw err
-      }
-    }
-
     try {
+      const transport = await makeTransport({
+        provider: params.provider,
+        model: params.model,
+        apiKey,
+        baseUrl
+      })
+
+      // PER-REQUEST deadline (FEAT-bysdwg). This used to be ONE
+      // `AbortSignal.timeout` created here and threaded through every chunk, so the
+      // "hard deadline per provider request" this file's header promises was really
+      // a budget for the whole job: a long transcript that needed four chunks failed
+      // as a spurious TIMEOUT even though every individual call answered promptly.
+      // Self-hosted models are slower than cloud ones and the custom endpoint's
+      // downgrade ladder can add attempts, which turns that latent bug into the
+      // common case. `ctx.signal` remains the only run-level signal.
+      const guarded: RawTransport = async (prompt, opts) => {
+        const perRequest = AbortSignal.timeout(timeoutMs)
+        const signals = [perRequest, ...(opts?.signal ? [opts.signal] : [])]
+        try {
+          return await transport(prompt, { ...opts, signal: AbortSignal.any(signals) })
+        } catch (err) {
+          // Distinguish "this request ran out of time" from "the user cancelled".
+          if (perRequest.aborted && !ctx.signal.aborted) timedOut = true
+          throw err
+        }
+      }
+
       const result = await generate({
         transport: guarded,
         segments: params.segments,
